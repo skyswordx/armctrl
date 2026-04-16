@@ -24,6 +24,7 @@ cmake-build-*/
 # IDE
 .idea/
 .vscode/
+.worktrees/
 
 # OS
 .DS_Store

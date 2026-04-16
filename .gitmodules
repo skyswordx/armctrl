@@ -1,0 +1,3 @@
+[submodule "vendor/real_stanford_arx5_sdk"]
+	path = vendor/real_stanford_arx5_sdk
+	url = https://github.com/real-stanford/arx5-sdk.git
