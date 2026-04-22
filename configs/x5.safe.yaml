@@ -1,0 +1,20 @@
+robot:
+  model: X5
+  default_interface: can0
+
+safety:
+  workspace_min_m: [0.05, -0.45, 0.02]
+  workspace_max_m: [0.75, 0.45, 0.65]
+  max_translation_step_m: 0.005
+  max_rotation_step_rad: 0.05
+  min_gripper_pos_m: 0.0
+  max_gripper_pos_m: 0.12
+  max_gripper_step_m: 0.003
+
+xbox:
+  deadman_button: BTN_TR
+  damping_button: BTN_X
+  reset_home_button: BTN_Y
+  max_translation_step_m: 0.002
+  max_rotation_step_rad: 0.02
+  max_gripper_step_m: 0.0015
