@@ -118,7 +118,7 @@ SDK 已确认提供 `Arx5CartesianController.set_eef_cmd()`、`set_eef_traj()`�
 `armctrl` 不应自己实现 IK、动力学或轨迹插值控制器。
 它只应在 SDK 调用前做输入校验、profile 选择、日志记录和错误规整。
 
-需要注意：当前本地类型文件没有显示“直接按末端力闭环控制”的高级 API。
+当前本地类型文件没有显示“直接按末端力反馈控制”的高级 API。
 因此“用力控过去”不能写成已确认能力。
 第一阶段应实现为命名 `compliance profile`（柔顺参数配置）：限制速度、步长和增益，必要时调用阻尼态；真正的末端力控、扭矩控制或阻抗控制必须单独上机验证。
 
@@ -468,240 +468,167 @@ armctrl/
 
 ## 12. 执行计划
 
-### Phase 0：冻结当前文档和硬件基线
+### 12.0 Agent 实现守则
 
-目标：把当前可确认事实固定下来，避免实现阶段反复改边界。
+实现前先读取本文件、`README.md`、`vendor/real_stanford_arx5_sdk/python/arx5_interface.pyi` 和 SDK 示例。
+代码生成必须遵守以下约束：
 
-交付物：
+- SDK 是底层控制能力来源，`armctrl` 只实现协议、配置、安全、状态机、日志、输入设备适配和 OpenClaw 控制面。
+- 不重写 SDK 的 IK、FK、动力学、轨迹覆盖、CAN 通信、controller 创建、增益设置和固件交互。
+- SDK adapter 只能是薄边界：延迟导入 `arx5_interface`、转换数据结构、规整异常、记录调用结果。
+- `FakeAdapter` 只模拟协议、状态和生命周期，不模拟真实机械臂运动学、动力学、轨迹控制或力控。
+- CLI、OpenClaw 工具层、Xbox 输入层和 LeRobot 兼容层都不能创建 SDK controller，也不能直接调用 SDK。
+- 高级控制能力先作为 debug 或 maintenance profile，不进入 agent 默认动作集合。
+- 每个阶段必须先有无硬件测试，再做上机验证；没有验证的模式不能在文档或代码中宣称安全可用。
 
-- 更新本文件。
-- 更新 `docs/README.md` 对本文件的说明。
-- 记录本地 SDK commit：`vendor/real_stanford_arx5_sdk` 当前为 `8612790d6823916e7e394661e4e7abfe355ceb64`。
-- 保留当前 `.venv` 验证方式，不把 `.venv` 纳入 Git。
+### 12.1 工程基线
 
-验证：
+目标：先建立可维护的 Python 项目边界，避免后续代码散落成脚本集合。
 
-```bash
-git status --short
-git submodule status --recursive
-python - <<'PY'
-import sys
-import arx5_interface
-print(sys.executable)
-print(arx5_interface.__file__)
-PY
-```
+- 创建/修改文件：`pyproject.toml`、`src/armctrl/__init__.py`、`tests/`、`configs/x5.safe.yaml`、`docs/README.md`。
+- 必须复用的 SDK 能力：本阶段不调用 SDK，只记录 SDK commit 和导入验证命令。
+- 禁止 agent 自研的内容：不写临时 bringup 脚本代替包结构，不把 `.venv`、本机 CAN 配置或硬件日志纳入 Git。
+- 单元测试/无硬件验证：`uv run pytest`、`uv run ruff check`；若还未启用 ruff，先用 `python -m compileall src tests`。
+- 硬件验证：只做环境导入检查，不运动。
+- 退出条件：`armctrl` 可作为包安装，协议层测试不 import `arx5_interface`，`git submodule status --recursive` 记录清楚。
 
-### Phase 1：建立 Python 包骨架
+### 12.2 协议模型和错误模型
 
-目标：让 `armctrl` 从文档仓变成可测试 Python 包。
+目标：先固定 OpenClaw、CLI、daemon 和 teleop 共用的数据契约。
 
-文件：
+- 创建/修改文件：`src/armctrl/protocol/models.py`、`src/armctrl/protocol/errors.py`、`src/armctrl/protocol/enums.py`、`tests/unit/test_protocol_models.py`。
+- 必须复用的 SDK 能力：只引用 SDK 公开概念名，如 `EEFState`、`JointState`、`Gain`，不 import SDK。
+- 禁止 agent 自研的内容：不在协议层编码 IK 结果、轨迹插值结果或控制器内部状态。
+- 单元测试/无硬件验证：请求、响应、状态、错误码可 JSON 序列化；非法枚举和缺字段能被拒绝。
+- 硬件验证：不做。
+- 退出条件：`MoveEEFRequest`、`RunRecipeRequest`、`TeleopCommand`、`DebugProfileRequest`、`CommandResponse` 和 `RobotState` schema 稳定。
 
-- 创建 `pyproject.toml`
-- 创建 `src/armctrl/__init__.py`
-- 创建 `src/armctrl/protocol/models.py`
-- 创建 `tests/unit/test_protocol_models.py`
+### 12.3 SDK 适配层
 
-验收：
+目标：把真实 SDK 调用集中到唯一边界，其他层只能依赖 adapter 协议。
 
-- 能运行 `uv run pytest tests/unit/test_protocol_models.py`
-- 请求和响应模型能序列化为 JSON。
-- 不 import `arx5_interface` 时也能跑协议层测试。
+- 创建/修改文件：`src/armctrl/adapters/base.py`、`src/armctrl/adapters/arx5/sdk.py`、`src/armctrl/adapters/arx5/fake.py`、`tests/unit/test_arx5_adapter_fake.py`。
+- 必须复用的 SDK 能力：`Arx5CartesianController`、`Arx5JointController`、`Arx5Solver`、`set_eef_cmd()`、`set_eef_traj()`、`set_joint_cmd()`、`set_joint_traj()`、`set_to_damping()`、`reset_to_home()`、`set_gain()`、`get_gain()`、`ControllerConfig.gravity_compensation`。
+- 禁止 agent 自研的内容：不实现 IK、FK、逆动力学、插值器、轨迹覆盖、CAN 读写、controller 重连策略的隐式重试。
+- 单元测试/无硬件验证：fake adapter 覆盖状态读取、命令接受、命令失败、异常映射；SDK adapter import 必须延迟到运行时。
+- 硬件验证：只在维护环境中验证 `health`、`state`、`damping`，不做运动。
+- 退出条件：除了 `adapters/arx5/sdk.py` 和 `daemon/session.py`，全仓不直接 import `arx5_interface`。
 
-### Phase 2：实现 SDK 适配层
+### 12.4 安全层和 profile 配置
 
-目标：把 SDK 调用集中到一个边界内。
-这一阶段最重要的是“薄封装”，不是重写 SDK。
+目标：任何运动、维护和调试命令进入执行器前都经过可测试安全检查。
 
-文件：
+- 创建/修改文件：`src/armctrl/safety/limits.py`、`src/armctrl/safety/profiles.py`、`src/armctrl/safety/debug_profiles.py`、`src/armctrl/safety/guard.py`、`tests/unit/test_safety_guard.py`。
+- 必须复用的 SDK 能力：只把 SDK 的控制模式能力映射成权限和 profile，不复制 SDK 控制逻辑。
+- 禁止 agent 自研的内容：不在安全层生成轨迹，不用启发式绕过 SDK 限位，不给 agent 开放任意 `kp/kd/gravity_compensation` 参数。
+- 单元测试/无硬件验证：工作空间、关节范围、单步位移、速度、频率、deadman、模式权限、VLA 置信度、维护命令权限均有测试。
+- 硬件验证：用 plan-only 或 fake adapter 验证拒绝路径；真机只观察拒绝命令不会运动。
+- 退出条件：默认 profile 只允许 L0/L1；重力补偿、低增益、阻尼、被动拖动、柔顺实验必须有命名 debug profile 和维护权限。
 
-- 创建 `src/armctrl/adapters/arx5/sdk.py`
-- 创建 `src/armctrl/adapters/arx5/fake.py`
-- 创建 `tests/unit/test_arx5_adapter_fake.py`
+### 12.5 末端目标构造和 SDK 调用准备
 
-验收：
+目标：把 VLA、遥操作、CLI 或 recipe 的目标点转换成 SDK 可接收的命令请求。
 
-- fake adapter 可返回固定关节和末端状态。
-- SDK adapter 只在运行时导入 `arx5_interface`。
-- 单元测试不需要真机。
-- adapter 内不实现 IK、FK、动力学、插值器或 CAN 通信。
-- SDK 异常会被转换成 `armctrl.protocol.errors` 中的结构化错误。
+- 创建/修改文件：`src/armctrl/planning/eef_goal.py`、`src/armctrl/planning/trajectory_request.py`、`tests/unit/test_eef_goal.py`。
+- 必须复用的 SDK 能力：需要可达性预检查时调用 `Arx5Solver.multi_trial_ik()`；执行轨迹时调用 `set_eef_traj()` 或 `set_eef_cmd()`。
+- 禁止 agent 自研的内容：不写自研 IK，不复制 SDK 内部插值器，不写自研模型控制，不在 Python 层实现低级力控。
+- 单元测试/无硬件验证：单点目标、多点目标、timestamp、frame、profile、safety precheck 和 solver 失败路径均可测试。
+- 硬件验证：先跑 plan-only，再做毫米级小步长 `move-eef`，全程保留 `cancel` 和 `damping`。
+- 退出条件：构造层只输出 SDK 调用所需数据和结构化错误，不直接控制硬件。
 
-### Phase 3：实现安全层
+### 12.6 daemon、session 和命令执行器
 
-目标：任何运动命令进入执行前都能被纯函数检查。
+目标：用常驻进程独占 SDK controller，统一状态、模式、命令生命周期和错误处理。
 
-文件：
+- 创建/修改文件：`src/armctrl/daemon/session.py`、`src/armctrl/daemon/executor.py`、`src/armctrl/daemon/state_store.py`、`src/armctrl/daemon/app.py`、`tests/unit/test_command_lifecycle.py`。
+- 必须复用的 SDK 能力：controller 创建、damping、reset、状态读取和运动调用都经 adapter 进入 SDK。
+- 禁止 agent 自研的内容：不在 daemon 外创建 controller，不让多个进程同时持有硬件控制权，不用线程绕过命令状态机。
+- 单元测试/无硬件验证：`received -> accepted -> running -> completed/rejected/timeout/cancelled/faulted` 全路径可在 fake adapter 下测试。
+- 硬件验证：先验证 daemon 启动、状态读取、阻尼、取消，再验证最小运动。
+- 退出条件：所有入口都通过 executor；异常会进入 `faulted` 或结构化失败状态，硬件默认回到阻尼或安全停止。
 
-- 创建 `src/armctrl/safety/limits.py`
-- 创建 `src/armctrl/safety/profiles.py`
-- 创建 `src/armctrl/safety/guard.py`
-- 创建 `tests/unit/test_safety_guard.py`
+### 12.7 client、CLI 和 OpenClaw 接入
 
-验收：
+目标：给人、脚本、OpenClaw 和 agent 提供稳定控制面。
 
-- 超出工作空间的 EEF 目标被拒绝。
-- 单步位移过大的遥操作目标被裁剪或拒绝。
-- 维护命令在非维护模式下被拒绝。
-- `VLA` 低置信目标不能直接执行接触 recipe。
+- 创建/修改文件：`src/armctrl/client.py`、`src/armctrl/cli/arx5ctl.py`、`tests/unit/test_client_cli_contract.py`；Roboclaw 侧建议新增 `src/openclaw/communication/armctrl_client.py`、`src/openclaw/controller/arm_motion_controller.py`。
+- 必须复用的 SDK 能力：不直接复用 SDK；只复用 daemon 暴露的能力。
+- 禁止 agent 自研的内容：CLI、OpenClaw 工具层和 agent 工具不得 import SDK，不得绕过 daemon 发运动命令。
+- 单元测试/无硬件验证：`health --json`、`state --json`、`move-eef --plan-only`、`run-recipe`、`cancel`、`damping` 的 schema 固定。
+- 硬件验证：只验证 `health`、`state`、`damping`、`cancel` 和小步长 `move-eef`。
+- 退出条件：OpenClaw 只看见 `health/state/move_eef/run_recipe/gripper/cancel/damping`，VLA 输出必须先经任务层和坐标转换。
 
-### Phase 4：实现 EEF 目标构造层
+### 12.8 recipe 层
 
-目标：把目标末端点转换成 SDK 可接收的 `EEFState` 或短 `EEFState` 序列。
-这一层只负责目标规范化、timestamp、profile 和 safety precheck，不实现自研 IK 或自研轨迹控制器。
+目标：让 agent 优先调用受约束、可回退、可审计的动作。
 
-文件：
+- 创建/修改文件：`src/armctrl/recipes/registry.py`、`src/armctrl/recipes/builtin.py`、`tests/unit/test_recipe_registry.py`、`configs/x5.safe.yaml`。
+- 必须复用的 SDK 能力：recipe 展开后仍走 `move_eef`、`set_eef_traj()`、`damping`、`cancel` 等既有路径。
+- 禁止 agent 自研的内容：不把 recipe 写成自由 Python 脚本，不允许 recipe 修改底层 controller 参数。
+- 单元测试/无硬件验证：`go_observe`、`go_pregrasp`、`retreat_safe`、`open_gripper`、`close_gripper` 可查找、可校验、可超时、可失败回退。
+- 硬件验证：先验证只读和 plan-only，再验证低速安全位姿切换。
+- 退出条件：recipe 必须声明 profile、输入范围、超时、失败动作和日志字段。
 
-- 创建 `src/armctrl/planning/eef_goal.py`
-- 创建 `src/armctrl/planning/trajectory_request.py`
-- 创建 `tests/unit/test_eef_goal.py`
+### 12.9 Xbox 遥操作和调试 profile
 
-验收：
+目标：把 Xbox 手柄做成正式调试入口，用同一安全链路支持学习、调试和低速遥操作。
 
-- 输入单个末端点，输出带 timestamp 的 `EEFState` 请求数据。
-- 多点请求只生成 SDK `set_eef_traj()` 所需的数据结构，不复制 SDK 内部插值器。
-- 如需 IK 预检查，只调用 `Arx5Solver.multi_trial_ik()`，失败时返回结构化错误。
-- 每个请求点都满足 `SafetyGuard`。
+- 创建/修改文件：`src/armctrl/teleop/xbox.py`、`src/armctrl/teleop/mapping.py`、`src/armctrl/teleop/filters.py`、`tests/unit/test_xbox_mapping.py`、`tests/unit/test_teleop_rate_limit.py`、`tests/unit/test_debug_profiles.py`。
+- 必须复用的 SDK 能力：手柄层只生成 `TeleopCommand`；实际运动仍走 daemon、SafetyGuard、adapter 和 SDK。
+- 禁止 agent 自研的内容：手柄层不调用 SDK，不切换 `gravity_compensation`，不直接写 `Gain`，不创建“零重力”控制器。
+- 单元测试/无硬件验证：deadman、死区、低通滤波、轴映射、步长限制、输入超时、退出阻尼、profile 权限均可测试。
+- 硬件验证：按 `state -> damping -> deadman -> 低速 jog -> 超时阻尼 -> cancel` 顺序验证。
+- 退出条件：A/B/X/Y 等按键只能请求命名 debug profile；重力补偿和低增益实验必须进入维护流程并记录结果。
 
-### Phase 5：实现 daemon 和执行器
+### 12.10 LeRobot 兼容和数据采集
 
-目标：让所有命令通过同一常驻进程执行。
+目标：复用 `armctrl` 控制面支持 LeRobot action、teleoperator 和数据采集，不让策略绕过安全层。
 
-文件：
+- 创建/修改文件：`src/armctrl/lerobot_compat/robot.py`、`src/armctrl/lerobot_compat/teleoperator.py`、`tests/unit/test_lerobot_mapping.py`。
+- 必须复用的 SDK 能力：LeRobot action 只映射到 `move_eef`、`run_recipe` 或受限 teleop 命令。
+- 禁止 agent 自研的内容：不复制 LeRobot ARX5 插件已有的硬件驱动逻辑，不让 policy 直接操作 SDK controller。
+- 单元测试/无硬件验证：action shape、坐标系、单位、速率限制、失败回退和状态采样 schema 可测试。
+- 硬件验证：等 core control layer 稳定后再做低速策略回放。
+- 退出条件：LeRobot 兼容层可以替换输入来源，但不能替换 SafetyGuard、daemon 和 adapter。
 
-- 创建 `src/armctrl/daemon/session.py`
-- 创建 `src/armctrl/daemon/state_store.py`
-- 创建 `src/armctrl/daemon/executor.py`
-- 创建 `src/armctrl/daemon/app.py`
-- 创建 `tests/unit/test_command_lifecycle.py`
+### 12.11 硬件验证记录
 
-验收：
+目标：在 N100D 和实机上逐步验证最小安全链，所有结论都有命令和观察记录。
 
-- 命令状态按 `received -> accepted -> running -> completed` 转换。
-- 拒绝命令返回 `rejected`。
-- 超时命令返回 `timeout`。
-- fake adapter 下可跑完整生命周期测试。
+验证顺序：
 
-### Phase 6：实现 client 和 CLI
+1. `uv` 环境、`arx5_interface` 导入和 ROS2 环境共存。
+2. CAN 接口识别和只读状态查询。
+3. `arx5d` fake adapter 生命周期。
+4. `arx5d` 真 SDK adapter 的 `health/state/damping/cancel`。
+5. 默认不运动的 plan-only 验证。
+6. 毫米级 `move-eef` 小步长验证。
+7. recipe 的 plan-only 和低速安全位姿验证。
+8. Xbox deadman、输入超时、退出阻尼和低速 jog。
+9. `gravity_compensation`、低增益、阻尼、被动拖动、柔顺 profile 在维护模式下逐项验证。
 
-目标：提供给 OpenClaw、人工和 agent 的稳定入口。
+每次硬件验证记录：
 
-文件：
-
-- 创建 `src/armctrl/client.py`
-- 创建 `src/armctrl/cli/arx5ctl.py`
-- 创建 `tests/unit/test_client_cli_contract.py`
-
-验收：
-
-- `arx5ctl health --json` 返回固定 schema。
-- `arx5ctl state --json` 返回关节、末端、模式和错误字段。
-- CLI 不直接创建 SDK controller，只调用 client。
-
-### Phase 7：实现 recipe 层
-
-目标：让 agent 优先调用受约束动作。
-
-文件：
-
-- 创建 `src/armctrl/recipes/registry.py`
-- 创建 `src/armctrl/recipes/builtin.py`
-- 创建 `configs/x5.safe.yaml`
-- 创建 `tests/unit/test_recipe_registry.py`
-
-验收：
-
-- `go_observe`、`go_pregrasp`、`retreat_safe` 可查找。
-- 每个 recipe 有 profile、超时、失败回退。
-- recipe 展开后仍经过 SafetyGuard。
-
-### Phase 8：接入 Roboclaw
-
-目标：Roboclaw 只通过 client 或 CLI 调用 `armctrl`。
-
-Roboclaw 侧建议文件：
-
-- `src/openclaw/communication/armctrl_client.py`
-- `src/openclaw/controller/arm_motion_controller.py`
-- `tests/unit/test_armctrl_client_contract.py`
-
-验收：
-
-- OpenClaw 工具层不 import `arx5_interface`。
-- 工具只调用 `health`、`state`、`move_eef`、`run_recipe`、`gripper`、`cancel`、`damping`。
-- VLA 输出必须先经过 Roboclaw 的任务层和坐标转换，再进入 `armctrl`。
-
-### Phase 9：Xbox 遥操作、调试 profile 和 LeRobot 兼容层
-
-目标：复用同一安全入口支持 Xbox 手柄调试、采集、遥操作和策略评测。
-
-文件：
-
-- 创建 `src/armctrl/teleop/xbox.py`
-- 创建 `src/armctrl/teleop/mapping.py`
-- 创建 `src/armctrl/teleop/keyboard.py`
-- 创建 `src/armctrl/teleop/spacemouse.py`
-- 创建 `src/armctrl/safety/debug_profiles.py`
-- 创建 `src/armctrl/lerobot_compat/robot.py`
-- 创建 `src/armctrl/lerobot_compat/teleoperator.py`
-- 创建 `tests/unit/test_xbox_mapping.py`
-- 创建 `tests/unit/test_teleop_rate_limit.py`
-- 创建 `tests/unit/test_debug_profiles.py`
-
-验收：
-
-- Xbox 手柄输入只生成 `TeleopCommand`，不直接调用 SDK。
-- 遥操作输入有 deadman、死区、滤波、步长限制和输入超时。
-- 重力补偿、低增益、阻尼、被动拖动、柔顺/阻抗实验通过命名 debug profile 触发。
-- `gravity_compensation` 只在 controller 创建前配置，运行中切换必须走维护流程。
-- LeRobot action 映射到 `move_eef` 或 recipe，不绕过 SafetyGuard。
-- 退出遥操作后进入阻尼或安全停止状态。
-
-### Phase 10：硬件验证
-
-目标：在 N100D 和实机上验证最小安全链。
-
-顺序：
-
-1. 环境导入验证。
-2. CAN 接口验证。
-3. 状态读取验证。
-4. 默认不运动的 plan-only 验证。
-5. 最小安全动作验证。
-6. `arx5d` fake adapter 验证。
-7. `arx5d` 真 SDK adapter 验证。
-8. `arx5ctl state` 真机验证。
-9. `arx5ctl move-eef` 小步长验证。
-10. `damping` 和 `cancel` 验证。
-11. Xbox 手柄 deadman、超时阻尼、低速 jog 验证。
-12. `gravity_compensation` / 低增益 / 阻尼 profile 在维护模式下逐项验证。
-
-每次硬件验证都要记录：
-
-- commit
-- 配置文件
-- SDK 版本
-- 接口名
-- 命令
-- 输出 JSON
-- 人工观察结果
-- 是否触发安全拒绝或故障
+- commit、配置文件、SDK commit、系统环境、CAN 接口名。
+- 命令、输出 JSON、日志路径、人工观察结果。
+- 是否触发安全拒绝、故障、阻尼、取消或急停。
+- 是否允许进入下一阶段；不允许时记录阻塞原因。
 
 ## 13. 近期优先级
 
 短期不要先做完整 LeRobot 插件，也不要先做复杂力控。
 建议先做：
 
-1. `src/armctrl/protocol`：定请求、响应、状态、错误码。
-2. `src/armctrl/safety`：纯函数安全检查。
+1. 工程基线：`pyproject.toml`、`src/`、`tests/`、基础 lint/test 命令。
+2. `src/armctrl/protocol`：请求、响应、状态、错误码和 JSON schema。
 3. `src/armctrl/adapters/arx5/fake.py`：无硬件测试基座。
-4. `src/armctrl/daemon/executor.py`：命令生命周期。
-5. `src/armctrl/client.py` 和 `arx5ctl`：OpenClaw 调用入口。
-6. `src/armctrl/teleop/xbox.py`：手柄输入映射和 deadman 机制。
-7. 真机只验证 `health`、`state`、`damping`、小步长 `move_eef` 和 Xbox 低速 jog。
+4. `src/armctrl/safety`：纯函数安全检查、profile 权限和 debug profile。
+5. `src/armctrl/daemon/executor.py`：命令生命周期和错误状态。
+6. `src/armctrl/client.py` 与 `arx5ctl`：OpenClaw 调用入口。
+7. `src/armctrl/teleop/xbox.py`：手柄映射、deadman、超时和低速 jog。
+8. 真机只验证 `health`、`state`、`damping`、`cancel`、小步长 `move_eef` 和 Xbox 低速 jog。
 
-这样做能先把边界、测试和安全策略固定下来，再逐步引入真实硬件和高级控制。
+这个顺序先固定边界、测试和安全策略，再逐步引入真实硬件和高级控制。
 
 ## 14. 未确认事项
 
@@ -718,12 +645,14 @@ Roboclaw 侧建议文件：
 软件层最低验收：
 
 - 所有无硬件单元测试通过。
+- lint 或 `compileall` 验证通过。
 - fake adapter 覆盖命令生命周期。
 - 安全层可独立测试。
 - CLI 输出稳定 JSON。
 - OpenClaw 侧不直接 import SDK。
 - 适配层没有自研 IK、动力学、插值器或 CAN 通信。
 - Xbox 输入层没有 SDK 调用，只产生受限遥操作命令。
+- debug profile 只能通过维护权限启用，不能由 agent 默认调用。
 
 硬件层最低验收：
 
