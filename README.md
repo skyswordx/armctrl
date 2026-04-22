@@ -1,4 +1,3 @@
-
 # armctrl
 
 `armctrl` 是面向 ARX5 机械臂控制的独立仓库，定位为 `Roboclaw` 未来以 submodule 引入的控制侧代码仓。
@@ -24,6 +23,104 @@
 - `LeRobot compatibility layer`
 
 详细分支策略见 `docs/branching_strategy.md`。
+
+## 当前可用的 `armctrl` 包和 Xbox 调试入口
+
+当前仓库已经包含最小可用的 Python 包骨架、fake adapter、SDK adapter、命令执行器、安全检查、Xbox 输入映射和 `arx5ctl` 命令。
+默认命令使用 `fake` adapter，不会连接硬件。
+
+```bash
+sudo slcand -o -f -s8 /dev/ttyACM0 can0 && sudo ip link set up can0
+
+
+```
+
+无硬件验证：
+
+```bash
+cd ~/Roboclaw/references/projects/armctrl
+
+uv run --with pytest pytest tests/unit -v
+uv run python -m compileall src tests
+uv run arx5ctl health --adapter fake --json
+uv run arx5ctl teleop-xbox --adapter fake \
+  --event-jsonl tests/fixtures/xbox_sample.jsonl \
+  --max-events 20 \
+  --json
+```
+
+`teleop-xbox` 默认打开 `tkinter` GUI。
+其他命令可显式加 `--gui`，把单次 `CommandResponse` 显示到同一套调试窗口里。
+左侧面板显示遥控器输入字段，包括最近事件、摇杆、扳机和按钮状态。
+右侧面板显示 Python 控制输出字段，包括 deadman、末端 jog、`roll/pitch/yaw`、夹爪增量、响应状态、EEF 位姿、joint 状态和错误详情。
+底部会显示按键与通道说明。
+输入读取是事件驱动，不限频。
+控制发送默认 `100 Hz`，UI 刷新默认 `50 Hz`。
+显式加 `--json` 时进入无界面机器输出模式，便于测试和脚本验收。
+
+Xbox 手柄默认映射：
+
+| 输入                    | 行为                                                        |
+| ----------------------- | ----------------------------------------------------------- |
+| `RB / BTN_TR`         | deadman，按住才发送末端 jog                                 |
+| 左摇杆上下              | 末端 `x` 小步长 jog                                       |
+| 左摇杆左右              | 末端 `y` 小步长 jog                                       |
+| 右摇杆上下              | 末端 `z` 小步长 jog                                       |
+| 右摇杆左右              | 末端 yaw 小步长 jog                                         |
+| 方向键左右              | 末端 `roll` 小步长 jog                                    |
+| 方向键上下              | 末端 `pitch` 小步长 jog                                   |
+| 左右扳机                | 夹爪开合小步长                                              |
+| `X / BTN_X`           | 进入 SDK damping                                            |
+| `A / BTN_A`           | 请求 `low_gain_passive`，需要维护权限                     |
+| `B / BTN_B`           | 请求 `compliance_slow`，需要维护权限                      |
+| `Y / BTN_Y`           | 请求 `reset_home`，需要维护权限                           |
+| `SELECT / BTN_SELECT` | 请求 `gravity_compensation_startup`，仅用于启动前配置检查 |
+
+实机调试前先确认手柄事件设备：
+
+```bash
+ls -l /dev/input/by-id/
+cat /proc/bus/input/devices
+```
+
+实机只读检查：
+
+```bash
+uv run arx5ctl health --adapter sdk --model X5 --interface can0 --json
+uv run arx5ctl state --adapter sdk --model X5 --interface can0 --json
+```
+
+实机 Xbox 低速 jog 需要显式执行确认：
+
+```bash
+uv run arx5ctl teleop-xbox \
+  --adapter sdk \
+  --model X5 \
+  --interface can0 \
+  --device /dev/input/by-id/<xbox-event-device> \
+  --rate-hz 100 \
+  --ui-hz 50 \
+  --execute \
+  --confirm "I UNDERSTAND THIS WILL MOVE THE ARM"
+```
+
+如果要从手柄触发 `low_gain_passive`、`compliance_slow` 或 `reset_home`，还必须显式开启维护权限：
+
+```bash
+uv run arx5ctl teleop-xbox \
+  --adapter sdk \
+  --model X5 \
+  --interface can0 \
+  --device /dev/input/by-id/<xbox-event-device> \
+  --rate-hz 100 \
+  --ui-hz 50 \
+  --execute \
+  --maintenance \
+  --confirm "I UNDERSTAND THIS WILL MOVE THE ARM"
+```
+
+`gravity_compensation_startup` 不能在 controller 已创建后运行时切换。
+它只应通过启动配置或 plan-only 检查处理。
 
 ## 当前 Bringup 状态
 

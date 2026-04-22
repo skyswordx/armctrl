@@ -617,16 +617,25 @@ armctrl/
 ## 13. 近期优先级
 
 短期不要先做完整 LeRobot 插件，也不要先做复杂力控。
-建议先做：
+当前已完成第一条可测试主链：
 
-1. 工程基线：`pyproject.toml`、`src/`、`tests/`、基础 lint/test 命令。
-2. `src/armctrl/protocol`：请求、响应、状态、错误码和 JSON schema。
-3. `src/armctrl/adapters/arx5/fake.py`：无硬件测试基座。
-4. `src/armctrl/safety`：纯函数安全检查、profile 权限和 debug profile。
-5. `src/armctrl/daemon/executor.py`：命令生命周期和错误状态。
-6. `src/armctrl/client.py` 与 `arx5ctl`：OpenClaw 调用入口。
-7. `src/armctrl/teleop/xbox.py`：手柄映射、deadman、超时和低速 jog。
-8. 真机只验证 `health`、`state`、`damping`、`cancel`、小步长 `move_eef` 和 Xbox 低速 jog。
+- `src/armctrl/protocol`：请求、响应、状态、错误码和 JSON 序列化。
+- `src/armctrl/adapters/arx5/fake.py`：无硬件 fake adapter。
+- `src/armctrl/adapters/arx5/sdk.py`：延迟导入 `arx5_interface` 的 SDK adapter。
+- `src/armctrl/safety`：末端、遥操作和 debug profile 安全检查。
+- `src/armctrl/daemon/executor.py`：命令执行器和 deadman 松开进入阻尼。
+- `src/armctrl/cli/arx5ctl.py`：`health/state/damping/cancel/move-eef/debug-profile/teleop-xbox`。
+- `src/armctrl/teleop/xbox.py`：Linux input event 和 JSONL 回放。
+
+下一阶段建议按以下顺序推进：
+
+1. 在 N100D 上运行 fake adapter 和 JSONL 回放验证。
+2. 用 `arx5ctl health/state --adapter sdk` 做只读 SDK 验证。
+3. 用 `arx5ctl damping/cancel --adapter sdk` 验证安全态切换。
+4. 找到 Xbox 的 `/dev/input/by-id/` 事件设备，先用 fake adapter 读真实手柄事件。
+5. 进入实机低速 Xbox jog，只允许 `RB` deadman、毫米级末端 jog、松开后阻尼。
+6. 维护模式下逐项验证 `low_gain_passive`、`compliance_slow` 和 `reset_home`。
+7. 稳定后再补 `src/armctrl/client.py`、OpenClaw 接入和 daemon 服务化。
 
 这个顺序先固定边界、测试和安全策略，再逐步引入真实硬件和高级控制。
 
