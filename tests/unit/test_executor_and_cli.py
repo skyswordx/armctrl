@@ -89,6 +89,14 @@ def test_cli_teleop_defaults_to_100hz_control_and_50hz_ui():
     assert args.ui_hz == 50.0
 
 
+def test_cli_accepts_urdf_path_override():
+    # `--urdf-path` 是真实 SDK 的模型覆盖入口。
+    # fake adapter 也能解析这个参数，但不会使用它。
+    parser = build_parser()
+    args = parser.parse_args(["health", "--adapter", "sdk", "--urdf-path", "configs/models/X5_camera.urdf"])
+    assert args.urdf_path == "configs/models/X5_camera.urdf"
+
+
 def test_cli_teleop_json_stays_machine_readable(capsys):
     # teleop 即便经过完整事件回放，`--json` 仍然只输出最终统一响应。
     code = main(

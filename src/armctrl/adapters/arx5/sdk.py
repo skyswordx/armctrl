@@ -11,7 +11,9 @@ bringup 阶段已经证明，这类逻辑应该尽量直接复用 SDK，而不�
 from __future__ import annotations
 
 import importlib
-from collections.abc import Iterable
+import time
+from collections.abc import Callable, Iterable
+from pathlib import Path
 
 from armctrl.protocol.enums import ArmMode, CommandStatus, DebugProfileName, ErrorCode
 from armctrl.protocol.errors import ArmctrlError
@@ -34,13 +36,18 @@ class Arx5SDKAdapter:
     """
 
     name = "sdk"
+    _PROJECT_ROOT = Path(__file__).resolve().parents[4]
+    _DEFAULT_X5_CAMERA_URDF = _PROJECT_ROOT / "configs" / "models" / "X5_camera.urdf"
 
     def __init__(
         self,
         model: str = "X5",
         interface: str = "can0",
         gravity_compensation: bool | None = None,
+        urdf_path: str | None = None,
         log_level: str = "WARNING",
+        resume_gain_duration_s: float = 0.4,
+        sleep_fn: Callable[[float], None] = time.sleep,
     ) -> None:
         # 这些配置项全部保留为显式参数，原因是 bringup 时经常需要：
         # - 换模型；
@@ -50,7 +57,10 @@ class Arx5SDKAdapter:
         self.model = model
         self.interface = interface
         self.gravity_compensation = gravity_compensation
+        self.urdf_path = urdf_path
         self.log_level = log_level
+        self.resume_gain_duration_s = float(resume_gain_duration_s)
+        self._sleep_fn = sleep_fn
         # `_sdk` 保存动态导入的模块对象，`_controller` 保存真实控制器实例。
         self._sdk = None
         self._controller = None
@@ -63,6 +73,14 @@ class Arx5SDKAdapter:
             self._sdk = importlib.import_module("arx5_interface")
             # 配置对象仍然全部交给 SDK 工厂创建，避免本项目复制配置常量。
             robot_config = self._sdk.RobotConfigFactory.get_instance().get_config(self.model)
+            # URDF 仍然走 SDK 的 robot_config 通道，不在外层复制动力学逻辑。
+            # 优先级：
+            # 1. CLI / 调用方显式传入的 urdf_path；
+            # 2. X5 模型默认使用项目侧带 D435i payload 的 X5_camera.urdf；
+            # 3. 其他模型继续使用 SDK 自带配置。
+            resolved_urdf_path = self._resolve_urdf_path()
+            if resolved_urdf_path is not None:
+                robot_config.urdf_path = str(resolved_urdf_path)
             controller_config = self._sdk.ControllerConfigFactory.get_instance().get_config(
                 "cartesian_controller",
                 robot_config.joint_dof,
@@ -92,6 +110,16 @@ class Arx5SDKAdapter:
             self._last_error = ArmctrlError(ErrorCode.SDK_ERROR, str(exc))
             self._mode = ArmMode.FAULTED
             return CommandResponse(CommandStatus.FAULTED, "sdk connect failed", error=self._last_error)
+
+    def _resolve_urdf_path(self) -> Path | None:
+        if self.urdf_path:
+            explicit_path = Path(self.urdf_path).expanduser().resolve()
+            if not explicit_path.is_file():
+                raise FileNotFoundError(f"URDF file not found: {explicit_path}")
+            return explicit_path
+        if self.model == "X5" and self._DEFAULT_X5_CAMERA_URDF.is_file():
+            return self._DEFAULT_X5_CAMERA_URDF
+        return None
 
     def _require_controller(self):
         # 懒连接模式：首次真正使用控制器时才补做 connect。
@@ -156,9 +184,8 @@ class Arx5SDKAdapter:
         try:
             controller = self._require_controller()
             # SDK 在 connect 和 set_to_damping 之后默认可能处在 “kp=0 的阻尼态”。
-            # 这时仅调用 set_eef_cmd 只会更新插值目标，不会把关节重新拉回位置控制。
-            # 用户观察到“Y/reset_home 后能动、松 RB 进 damping 后再也动不了”，
-            # 本质上就是 reset_to_home 恢复了默认增益，而普通 teleop 没有恢复。
+            # 这里不再瞬间恢复默认增益，而是模仿 reset_to_home 的做法按控制周期渐变，
+            # 避免从零刚度 damping 切回高刚度 cartesian 控制时整机抖一下。
             self._ensure_motion_gain(controller)
             # SDK 仍然要求使用它自己的 `EEFState` 命令对象。
             # 这里不自己拼别的格式，避免出现字段顺序、单位或时间戳语义偏差。
@@ -198,7 +225,21 @@ class Arx5SDKAdapter:
             controller_config.default_gripper_kp,
             controller_config.default_gripper_kd,
         )
-        controller.set_gain(default_gain)
+        self._ramp_gain(controller, current_gain, default_gain, controller_config)
+
+    def _ramp_gain(self, controller, start_gain, target_gain, controller_config) -> None:
+        # SDK 的 reset_to_home 在 controller_dt 节拍下线性插值 gain。
+        # 这里采用同样思路：插值期间插值器仍固定在 damping 时的当前关节状态，
+        # 恢复刚度后才继续发送新的 EEF 命令。
+        controller_dt = float(getattr(controller_config, "controller_dt", 0.002))
+        if controller_dt <= 0:
+            controller_dt = 0.002
+        steps = max(1, int(round(self.resume_gain_duration_s / controller_dt)))
+        for step_index in range(1, steps + 1):
+            alpha = step_index / steps
+            controller.set_gain(start_gain * (1.0 - alpha) + target_gain * alpha)
+            if step_index < steps:
+                self._sleep_fn(controller_dt)
 
     def _is_zero_gain(self, gain) -> bool:
         # pybind 返回的 kp 可能是 numpy array，单测里也可能是 list。
