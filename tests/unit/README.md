@@ -6,6 +6,8 @@
 - `test_fake_adapter_and_safety.py`：fake adapter 与安全拒绝。
 - `test_executor_and_cli.py`：执行器和 CLI 行为。
 - `test_xbox_mapping.py`：手柄映射、控制拍和 GUI 快照。
+- `test_identification.py`：参数辨识轨迹、采集、数据集和 CLI。
+- `test_model_payload.py`：项目侧 URDF payload 是否合并进 SDK 逆动力学可读取的 link。
 
 ## 阅读建议
 

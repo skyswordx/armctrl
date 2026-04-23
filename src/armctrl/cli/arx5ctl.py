@@ -15,13 +15,26 @@ import json
 import sys
 import threading
 from collections.abc import Sequence
+from datetime import datetime
+from pathlib import Path
 
 from armctrl.adapters.arx5.fake import FakeArx5Adapter
 from armctrl.adapters.arx5.sdk import Arx5SDKAdapter
 from armctrl.daemon.executor import ArmCommandExecutor
+from armctrl.identification.backends import build_joint_backend
+from armctrl.identification.optimization import optimize_fourier_multisine
+from armctrl.identification.postprocess import postprocess_dataset
+from armctrl.identification.recorder import DatasetRecorder
+from armctrl.identification.runner import IdentificationRunner
+from armctrl.identification.safety import TrajectorySafetyLimits, validate_trajectory
+from armctrl.identification.trajectories import (
+    generate_fourier_multisine,
+    generate_friction_sweep,
+    generate_gravity_sweep,
+)
 from armctrl.protocol.enums import AdapterKind, CommandStatus, DebugProfileName, ErrorCode
 from armctrl.protocol.errors import ArmctrlError
-from armctrl.protocol.models import DebugProfileRequest, MoveEEFRequest
+from armctrl.protocol.models import CommandResponse, DebugProfileRequest, MoveEEFRequest
 from armctrl.safety.debug_profiles import DebugProfileRegistry
 from armctrl.teleop.mapping import XboxMapper
 from armctrl.teleop.xbox import XboxDebugRunner, create_tk_dashboard, load_events, show_response_dashboard
@@ -69,6 +82,29 @@ def build_parser() -> argparse.ArgumentParser:
     teleop.add_argument("--plan-only-debug-profiles", action="store_true")
     teleop.add_argument("--confirm", default="")
 
+    ident_plan = subparsers.add_parser("ident-plan")
+    add_common(ident_plan)
+    add_identification_profile_args(ident_plan)
+    ident_plan.add_argument("--output")
+
+    ident_run = subparsers.add_parser("ident-run")
+    add_common(ident_run)
+    add_identification_profile_args(ident_run)
+    ident_run.add_argument("--output")
+    ident_run.add_argument("--execute", action="store_true")
+    ident_run.add_argument("--confirm", default="")
+    ident_run.add_argument("--no-damping-after", action="store_true")
+
+    ident_postprocess = subparsers.add_parser("ident-postprocess")
+    ident_postprocess.add_argument("--dataset", required=True)
+    ident_postprocess.add_argument("--output")
+    ident_postprocess.add_argument("--tool", action="append", choices=["all", "pinocchio", "figaroh", "flobaroid", "urdfly"])
+    ident_postprocess.add_argument("--urdf-path")
+    ident_postprocess.add_argument("--smoothing-window", type=int, default=5)
+    ident_postprocess.add_argument("--json", action="store_true")
+    ident_postprocess.add_argument("--gui", action="store_true")
+    ident_postprocess.add_argument("--pretty", action="store_true")
+
     return parser
 
 
@@ -89,6 +125,20 @@ def add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--pretty", action="store_true")
 
 
+def add_identification_profile_args(parser: argparse.ArgumentParser) -> None:
+    # 参数辨识 profile 都走同一套轨迹参数。
+    # 不同 profile 会只读取自己需要的字段，避免 CLI 命令膨胀成三套重复入口。
+    parser.add_argument("--profile", choices=["gravity_sweep", "friction_sweep", "fourier_multisine"], required=True)
+    parser.add_argument("--dof", type=int, default=6)
+    parser.add_argument("--sample-hz", type=float, default=100.0)
+    parser.add_argument("--duration", type=float)
+    parser.add_argument("--amplitude", type=float)
+    parser.add_argument("--harmonics", type=int, default=5)
+    parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument("--optimize", action="store_true")
+    parser.add_argument("--candidate-count", type=int, default=12)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -101,8 +151,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
     try:
-        executor = build_executor(args)
-        response = dispatch(args, executor)
+        if args.command in {"ident-plan", "ident-run", "ident-postprocess"}:
+            response = dispatch_identification(args)
+        else:
+            executor = build_executor(args)
+            response = dispatch(args, executor)
     except ArmctrlError as exc:
         response = exc_to_response(exc)
     except Exception as exc:
@@ -234,6 +287,118 @@ def dispatch(args: argparse.Namespace, executor: ArmCommandExecutor):
             )
         return result["response"]
     raise ArmctrlError(code=ErrorCode.INVALID_REQUEST, message=f"unsupported command {args.command}")
+
+
+def dispatch_identification(args: argparse.Namespace) -> CommandResponse:
+    # 参数辨识命令使用关节空间后端，不复用 cartesian executor。
+    # 这样可以直接使用 SDK 的 Arx5JointController 和 set_joint_traj。
+    if args.command == "ident-plan":
+        profile = build_identification_profile(args)
+        validation = validate_trajectory(profile, TrajectorySafetyLimits.conservative(profile.dof))
+        detail = profile.summary()
+        if args.output:
+            path = DatasetRecorder(args.output).write_trajectory(profile)
+            detail["planned_trajectory_csv"] = str(path)
+        if not validation.allowed:
+            return CommandResponse(
+                CommandStatus.REJECTED,
+                validation.error.message if validation.error else "identification trajectory rejected",
+                error=validation.error,
+                detail=detail,
+            )
+        return CommandResponse(CommandStatus.COMPLETED, "identification trajectory planned", detail=detail)
+    if args.command == "ident-run":
+        if args.adapter == AdapterKind.SDK.value and (not args.execute or args.confirm != MOVE_CONFIRMATION):
+            raise ArmctrlError(
+                code=ErrorCode.CONFIRMATION_REQUIRED,
+                message=f"real SDK identification requires --execute --confirm '{MOVE_CONFIRMATION}'",
+            )
+        profile = build_identification_profile(args)
+        output_dir = args.output or default_identification_output_dir(profile.name)
+        backend = build_joint_backend(
+            adapter=args.adapter,
+            model=args.model,
+            interface=args.interface,
+            dof=profile.dof,
+            urdf_path=args.urdf_path,
+        )
+        runner = IdentificationRunner(
+            backend,
+            sample_hz=args.sample_hz,
+            safety_limits=TrajectorySafetyLimits.conservative(profile.dof),
+            damping_after=not args.no_damping_after,
+        )
+        # fake 后端默认执行，真实 SDK 必须显式 --execute。
+        execute = args.execute or args.adapter == AdapterKind.FAKE.value
+        return runner.run(
+            profile,
+            recorder=DatasetRecorder(output_dir),
+            execute=execute,
+            urdf_path=args.urdf_path,
+        )
+    if args.command == "ident-postprocess":
+        dataset = Path(args.dataset).expanduser().resolve()
+        output = Path(args.output).expanduser().resolve() if args.output else dataset / "processed"
+        tools = tuple(args.tool or ["all"])
+        return postprocess_dataset(
+            dataset_dir=dataset,
+            output_dir=output,
+            tools=tools,
+            urdf_path=args.urdf_path,
+            smoothing_window=args.smoothing_window,
+        )
+    raise ArmctrlError(ErrorCode.INVALID_REQUEST, f"unsupported identification command {args.command}")
+
+
+def build_identification_profile(args: argparse.Namespace):
+    # 三个 profile 的默认参数按风险递增设置。
+    # 用户可以用 --duration / --amplitude 覆盖，但仍会经过 safety 预检查。
+    if args.profile == "gravity_sweep":
+        return generate_gravity_sweep(
+            dof=args.dof,
+            sample_hz=args.sample_hz,
+            amplitude_rad=args.amplitude if args.amplitude is not None else 0.20,
+            segment_duration_s=args.duration if args.duration is not None else 4.0,
+        )
+    if args.profile == "friction_sweep":
+        return generate_friction_sweep(
+            dof=args.dof,
+            sample_hz=args.sample_hz,
+            amplitude_rad=args.amplitude if args.amplitude is not None else 0.15,
+            slow_speed_radps=max(0.02, (args.amplitude or 0.15) / max(args.duration or 2.5, 0.5)),
+        )
+    if args.profile == "fourier_multisine":
+        duration_s = args.duration if args.duration is not None else 12.0
+        # 傅里叶轨迹加速度大致随 amplitude / duration² 增大。
+        # 默认值随时长缩放，短测试不会因为默认参数直接越过安全限幅；
+        # 用户显式传 --amplitude 时仍按用户值生成并交给 safety 检查。
+        default_amplitude = min(0.12, 0.02 * duration_s * duration_s)
+        amplitude_rad = args.amplitude if args.amplitude is not None else default_amplitude
+        if args.optimize:
+            return optimize_fourier_multisine(
+                dof=args.dof,
+                sample_hz=args.sample_hz,
+                duration_s=duration_s,
+                harmonics=args.harmonics,
+                amplitude_rad=amplitude_rad,
+                seed=args.seed,
+                candidate_count=args.candidate_count,
+                safety_limits=TrajectorySafetyLimits.conservative(args.dof),
+            )
+        return generate_fourier_multisine(
+            dof=args.dof,
+            sample_hz=args.sample_hz,
+            duration_s=duration_s,
+            harmonics=args.harmonics,
+            amplitude_rad=amplitude_rad,
+            seed=args.seed,
+        )
+    raise ArmctrlError(ErrorCode.INVALID_REQUEST, f"unsupported identification profile {args.profile}")
+
+
+def default_identification_output_dir(profile_name: str) -> str:
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return str(Path("runs") / "identification" / f"{timestamp}-{profile_name}")
 
 
 def list_debug_profiles(args: argparse.Namespace) -> int:

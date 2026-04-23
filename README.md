@@ -172,6 +172,101 @@ uv run arx5ctl teleop-xbox \
 `gravity_compensation_startup` 不能在 controller 已创建后运行时切换。
 它只应通过启动配置或 plan-only 检查处理。
 
+## 参数辨识链路
+
+当前仓库已经增加参数辨识辅助模块，职责是：
+
+- 生成三层安全激励轨迹；
+- 通过关节空间后端执行轨迹并采集 `q / dq / tau`；
+- 写出 `planned_trajectory.csv`、`raw_samples.csv`、`manifest.json`；
+- 生成 `processed_samples.csv` 和面向 `URDFly`、`Pinocchio`、`FIGAROH`、`FloBaRoID` 的交接说明。
+
+三类激励轨迹：
+
+- `gravity_sweep`：静态/准静态单关节扫描，先看重力项和末端 payload。
+- `friction_sweep`：单关节正反向慢速/中速扫描，先估计摩擦。
+- `fourier_multisine`：多关节有限傅里叶轨迹，默认带五次包络，起止速度和加速度回零。
+- `fourier_multisine --optimize`：从多个傅里叶候选里选择代理观测矩阵条件数最低的一条。
+
+先只做轨迹预览：
+
+```bash
+uv run arx5ctl ident-plan \
+  --adapter fake \
+  --profile gravity_sweep \
+  --dof 6 \
+  --sample-hz 100 \
+  --output runs/ident-preview \
+  --json
+```
+
+预览第三层优化后的傅里叶轨迹：
+
+```bash
+uv run arx5ctl ident-plan \
+  --adapter fake \
+  --profile fourier_multisine \
+  --dof 6 \
+  --sample-hz 100 \
+  --duration 12 \
+  --harmonics 5 \
+  --optimize \
+  --candidate-count 24 \
+  --output runs/ident-fourier-preview \
+  --json
+```
+
+`--optimize` 当前使用代理特征矩阵条件数，不直接代表真实动力学回归矩阵条件数。
+它用于先筛掉明显差的傅里叶候选。
+最终论文级轨迹优化仍应接入 `Pinocchio computeJointTorqueRegressor` 或 `URDFly` 生成的真实回归矩阵。
+
+用 fake 后端走完整数据链路：
+
+```bash
+uv run arx5ctl ident-run \
+  --adapter fake \
+  --profile friction_sweep \
+  --dof 6 \
+  --sample-hz 100 \
+  --output runs/ident-fake \
+  --json
+```
+
+真实 ARX5 用 SDK 关节控制器采集：
+
+```bash
+uv run arx5ctl ident-run \
+  --adapter sdk \
+  --model X5 \
+  --interface can0 \
+  --profile gravity_sweep \
+  --sample-hz 100 \
+  --output runs/ident-sdk \
+  --execute \
+  --confirm "I UNDERSTAND THIS WILL MOVE THE ARM" \
+  --json
+```
+
+对采集结果做后处理并生成外部工具交接文件：
+
+```bash
+uv run arx5ctl ident-postprocess \
+  --dataset runs/ident-fake \
+  --tool pinocchio \
+  --tool figaroh \
+  --tool flobaroid \
+  --tool urdfly \
+  --json
+```
+
+输出目录约定：
+
+- `planned_trajectory.csv`：准备执行的关节轨迹。
+- `raw_samples.csv`：原始采样数据。
+- `manifest.json`：数据集元信息、列名、URDF 路径和工具提示。
+- `processed/processed_samples.csv`：平滑和差分后的离线分析数据。
+- `processed/tool_handoff.md`：离线辨识工具交接说明。
+
 ## 当前 Bringup 状态
 
 当前硬件 bringup 工作分支为 `feature/hardware-bringup`。N100D 已作为第一台正式 bringup 主机，当前状态如下：

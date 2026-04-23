@@ -6,6 +6,13 @@
 
 这里刻意不重复实现动力学、重力补偿、控制律等底层逻辑。
 bringup 阶段已经证明，这类逻辑应该尽量直接复用 SDK，而不是在外层再造一个弱化版本。
+
+这一轮和 URDF / 重力补偿有关的实机排障，最后确认了 3 个事实：
+1. `robot_config.urdf_path` 必须在创建控制器前覆盖，否则 SDK 继续读取 wheel 内自带模型。
+2. SDK 运行时会打印 `Using eef_link for kinematics and link6 for inverse dynamics`，
+   也就是运动学末端是 `eef_link`，逆动力学最后一节却是 `link6`。
+3. 因此如果把 D435i payload 只写在 fixed joint 后面的 `eef_link`，
+   重力补偿完全读不到；必须把等效质量、质心、惯量并入 `link6 <inertial>`。
 """
 
 from __future__ import annotations
@@ -37,6 +44,10 @@ class Arx5SDKAdapter:
 
     name = "sdk"
     _PROJECT_ROOT = Path(__file__).resolve().parents[4]
+    # X5 是当前项目的主 bringup 机型。
+    # 这轮排障后默认改成项目侧 `X5_camera.urdf`，
+    # 原因不是“想覆盖 SDK”，而是 SDK 默认 `X5.urdf` 没有带相机 payload。
+    # 如果这里不切过去，实机虽然能连通，但重力补偿一直按空载模型算。
     _DEFAULT_X5_CAMERA_URDF = _PROJECT_ROOT / "configs" / "models" / "X5_camera.urdf"
 
     def __init__(
@@ -78,6 +89,10 @@ class Arx5SDKAdapter:
             # 1. CLI / 调用方显式传入的 urdf_path；
             # 2. X5 模型默认使用项目侧带 D435i payload 的 X5_camera.urdf；
             # 3. 其他模型继续使用 SDK 自带配置。
+            # 这里有一个这轮排障确认过的细节：
+            # 只要 controller 还没构造，就可以安全替换 `robot_config.urdf_path`；
+            # 一旦 `Arx5CartesianController(...)` 已经创建完成，求解器链路也已经定死，
+            # 后面再改路径不会影响当前控制器里的动力学模型。
             resolved_urdf_path = self._resolve_urdf_path()
             if resolved_urdf_path is not None:
                 robot_config.urdf_path = str(resolved_urdf_path)
@@ -117,6 +132,10 @@ class Arx5SDKAdapter:
             if not explicit_path.is_file():
                 raise FileNotFoundError(f"URDF file not found: {explicit_path}")
             return explicit_path
+        # 这里保留“显式路径优先、X5 默认项目模型、其他模型保持 SDK 原样”。
+        # 这样做是为了兼顾两件事：
+        # 1. 实机默认能直接吃到带 D435i payload 的配置；
+        # 2. bringup / A-B 对比时仍能随时切回 SDK 原始 URDF。
         if self.model == "X5" and self._DEFAULT_X5_CAMERA_URDF.is_file():
             return self._DEFAULT_X5_CAMERA_URDF
         return None
@@ -186,6 +205,9 @@ class Arx5SDKAdapter:
             # SDK 在 connect 和 set_to_damping 之后默认可能处在 “kp=0 的阻尼态”。
             # 这里不再瞬间恢复默认增益，而是模仿 reset_to_home 的做法按控制周期渐变，
             # 避免从零刚度 damping 切回高刚度 cartesian 控制时整机抖一下。
+            # 这也是这轮手柄排障里确认过的问题：
+            # 如果从 damping 态直接 `set_eef_cmd`，终端看起来命令发出去了，
+            # 但真实效果常常只是内部目标刷新，末端没有明显受控运动。
             self._ensure_motion_gain(controller)
             # SDK 仍然要求使用它自己的 `EEFState` 命令对象。
             # 这里不自己拼别的格式，避免出现字段顺序、单位或时间戳语义偏差。
@@ -300,6 +322,9 @@ class Arx5SDKAdapter:
         try:
             controller = self._require_controller()
             # damping 是最关键的安全落态，单独暴露成清晰接口。
+            # 它的工程语义更接近“阻尼 / 被动 / 放手”，不是“零重力保持”。
+            # 因此末端加了相机后，joint4 在 damping 下缓慢下垂是可以出现的，
+            # 这不等于 payload 没写进去，而是因为这里本来就不是主动重力补偿保持态。
             controller.set_to_damping()
             self._mode = ArmMode.DAMPING
             return CommandResponse(CommandStatus.COMPLETED, "sdk damping enabled", state=self.get_state())
