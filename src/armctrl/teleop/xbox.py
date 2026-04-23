@@ -1,3 +1,14 @@
+"""Xbox 遥操作输入、采样和 GUI 调试面板。
+
+这层专门解决三个频率域的问题：
+1. 输入读取：事件驱动，不限频；
+2. 控制发送：固定 `rate_hz`；
+3. UI 刷新：固定 `ui_hz`。
+
+三者分离之后，手柄驱动抖动不会直接拖慢控制发送，
+控制发送节拍也不会把 GUI 刷屏行为带进终端或日志。
+"""
+
 from __future__ import annotations
 
 import json
@@ -24,6 +35,10 @@ from armctrl.teleop.mapping import (
 
 LINUX_INPUT_EVENT = struct.Struct("llHHi")
 
+# 这里规定 GUI 中轴与按钮的展示顺序。
+# 顺序固定有两个好处：
+# 1. 人眼容易形成肌肉记忆；
+# 2. fake / sdk / event-jsonl 三种输入源可以共享同一面板布局。
 AXIS_ORDER = (
     "ABS_X",
     "ABS_Y",
@@ -94,13 +109,28 @@ CONTROL_FIELDS = (
     ("response_command_id", "命令 ID"),
     ("command_deadman", "deadman"),
     ("command_debug_profile", "调试配置"),
-    ("command_translation_x", "命令 x"),
-    ("command_translation_y", "命令 y"),
-    ("command_translation_z", "命令 z"),
-    ("command_roll", "命令 roll"),
-    ("command_pitch", "命令 pitch"),
-    ("command_yaw", "命令 yaw"),
-    ("command_gripper_delta", "命令夹爪增量"),
+    ("command_dt_s", "控制 dt"),
+    ("command_velocity_x", "速度 x m/s"),
+    ("command_velocity_y", "速度 y m/s"),
+    ("command_velocity_z", "速度 z m/s"),
+    ("command_angular_velocity_roll", "角速度 roll rad/s"),
+    ("command_angular_velocity_pitch", "角速度 pitch rad/s"),
+    ("command_angular_velocity_yaw", "角速度 yaw rad/s"),
+    ("command_gripper_velocity", "夹爪速度 m/s"),
+    ("command_translation_x", "本拍 dx m"),
+    ("command_translation_y", "本拍 dy m"),
+    ("command_translation_z", "本拍 dz m"),
+    ("command_roll", "本拍 droll rad"),
+    ("command_pitch", "本拍 dpitch rad"),
+    ("command_yaw", "本拍 dyaw rad"),
+    ("command_gripper_delta", "本拍夹爪增量 m"),
+    ("target_eef_x", "目标 EEF x"),
+    ("target_eef_y", "目标 EEF y"),
+    ("target_eef_z", "目标 EEF z"),
+    ("target_eef_roll", "目标 EEF roll"),
+    ("target_eef_pitch", "目标 EEF pitch"),
+    ("target_eef_yaw", "目标 EEF yaw"),
+    ("target_gripper_pos", "目标夹爪位置"),
     ("response_status", "响应状态"),
     ("response_message", "响应消息"),
     ("response_error_code", "错误码"),
@@ -139,6 +169,10 @@ CONTROL_FIELDS = (
 
 
 def iter_linux_input_events(device: str | Path) -> Iterator[XboxInputEvent]:
+    """从 Linux `/dev/input/event*` 设备持续读取原始事件。"""
+
+    # `struct input_event` 的格式由内核 ABI 决定。
+    # 这里直接按固定结构拆包，避免额外依赖第三方 joystick 库。
     with Path(device).open("rb") as handle:
         while True:
             chunk = handle.read(LINUX_INPUT_EVENT.size)
@@ -149,6 +183,11 @@ def iter_linux_input_events(device: str | Path) -> Iterator[XboxInputEvent]:
 
 
 def iter_jsonl_events(path: str | Path) -> Iterator[XboxInputEvent]:
+    """从录制的 JSONL 回放手柄事件。
+
+    这个入口主要服务测试、离线调参与问题复现。
+    """
+
     import json
 
     with Path(path).open("r", encoding="utf-8") as handle:
@@ -165,6 +204,12 @@ def iter_jsonl_events(path: str | Path) -> Iterator[XboxInputEvent]:
 
 
 class TeleopDashboardSink(Protocol):
+    """调试输出面板协议。
+
+    这里故意只要求 `push` 和 `close` 两个最小方法，
+    这样终端、Tk、未来 WebSocket 面板都可以无痛替换。
+    """
+
     def push(self, controller_snapshot: dict[str, object], control_snapshot: dict[str, object]) -> None: ...
 
     def close(self) -> None: ...
@@ -182,10 +227,15 @@ class XboxDebugRunner:
     stop_event: threading.Event | None = None
 
     def run(self) -> CommandResponse:
+        # `state` 保存当前完整手柄状态，
+        # `last_response` 保存最近一次控制侧返回，
+        # `last_command` 则保存最近一次由 mapper 生成的控制命令。
         state = XboxState()
         last_response = self.executor.state()
         last_event: XboxInputEvent | None = None
         last_command: TeleopCommand | None = None
+        # 控制发送节拍严格由 `rate_hz` 推导：
+        #   period_s = 1 / rate_hz
         period_s = 1.0 / self.rate_hz
         processed = 0
         event_queue: queue.Queue[XboxInputEvent] = queue.Queue()
@@ -193,6 +243,8 @@ class XboxDebugRunner:
         reader_errors: list[BaseException] = []
 
         def read_events() -> None:
+            # 输入线程只负责“收事件并入队”，不做控制计算。
+            # 这样可以保持输入读取为事件驱动，不被固定控制周期卡住。
             try:
                 for event in self.events:
                     event_queue.put(event)
@@ -226,9 +278,12 @@ class XboxDebugRunner:
 
                 if reader_errors:
                     raise reader_errors[0]
+                # 一次控制拍内可能收到多个输入事件。
+                # 这里采用“事件合并后只发送一次控制命令”的策略，
+                # 可以避免 burst 输入把控制链打成高频抖动。
                 if had_event or state.buttons.get("BTN_TR", False):
                     now = tick_timestamp or time.monotonic()
-                    command = self.mapper.to_command(state, now)
+                    command = self.mapper.to_command(state, now, dt_s=period_s)
                     last_command = command
                     last_response = self.executor.handle_teleop(command)
                     self._push_snapshot(last_event, state, last_command, last_response, "event" if had_event else "tick")
@@ -243,8 +298,11 @@ class XboxDebugRunner:
                 if sleep_s > 0:
                     time.sleep(sleep_s)
                 else:
+                    # 如果处理耗时已经吃掉一个周期，就重新对齐到当前时间，
+                    # 防止累计误差导致控制循环越跑越慢。
                     next_tick = time.monotonic()
         finally:
+            # 不论 teleop 是正常结束、报错还是用户关闭窗口，都强制落到 damping。
             final_response = self.executor.damping()
             self._push_snapshot(last_event, state, last_command, final_response, "shutdown")
             if self.dashboard is not None:
@@ -261,6 +319,8 @@ class XboxDebugRunner:
     ) -> None:
         if self.dashboard is None:
             return
+        # GUI 层永远只接收已经整理好的快照，不直接读取业务对象。
+        # 这样界面层无需理解 executor / adapter / mapper 内部实现。
         self.dashboard.push(
             build_controller_snapshot(self.source, event, state),
             build_control_snapshot(command, response, phase),
@@ -272,6 +332,8 @@ def build_controller_snapshot(
     event: XboxInputEvent | None,
     state: XboxState,
 ) -> dict[str, object]:
+    """提取手柄输入快照，供 GUI 或日志面板直接显示。"""
+
     snapshot: dict[str, object] = {
         "source": source,
         "last_event_name": event_label(event) if event is not None else None,
@@ -284,6 +346,8 @@ def build_controller_snapshot(
         axis_name = event_label(event)
         if axis_name in state.axes:
             snapshot["last_event_normalized"] = rounded(state.axes[axis_name])
+    # 这里用固定字段全集输出，而不是只输出“当前出现过的字段”。
+    # 好处是 GUI 面板不抖动，测试也能稳定断言字段存在性。
     for axis_name in AXIS_ORDER:
         snapshot[f"axis_{axis_name}"] = rounded(state.axes.get(axis_name, 0.0))
     for button_name in BUTTON_ORDER:
@@ -296,11 +360,21 @@ def build_control_snapshot(
     response: CommandResponse,
     phase: str,
 ) -> dict[str, object]:
+    """把命令层和响应层合并成一张控制面板快照。"""
+
     snapshot = build_response_snapshot(response, phase)
     snapshot.update(
         {
             "command_deadman": command.deadman if command is not None else False,
             "command_debug_profile": command.debug_profile if command is not None else None,
+            "command_dt_s": rounded(command.dt_s) if command is not None else 0.0,
+            "command_velocity_x": rounded(command.translation_velocity_mps[0]) if command is not None else 0.0,
+            "command_velocity_y": rounded(command.translation_velocity_mps[1]) if command is not None else 0.0,
+            "command_velocity_z": rounded(command.translation_velocity_mps[2]) if command is not None else 0.0,
+            "command_angular_velocity_roll": rounded(command.rotation_velocity_radps[0]) if command is not None else 0.0,
+            "command_angular_velocity_pitch": rounded(command.rotation_velocity_radps[1]) if command is not None else 0.0,
+            "command_angular_velocity_yaw": rounded(command.rotation_velocity_radps[2]) if command is not None else 0.0,
+            "command_gripper_velocity": rounded(command.gripper_velocity_mps) if command is not None else 0.0,
             "command_translation_x": rounded(command.translation_m[0]) if command is not None else 0.0,
             "command_translation_y": rounded(command.translation_m[1]) if command is not None else 0.0,
             "command_translation_z": rounded(command.translation_m[2]) if command is not None else 0.0,
@@ -317,15 +391,29 @@ def build_response_snapshot(
     response: CommandResponse,
     phase: str,
 ) -> dict[str, object]:
+    """从统一响应对象里展开 GUI 所需字段。
+
+    这里的设计重点不是“最省代码”，而是“字段固定、界面稳定、脚本好取值”。
+    """
+
     pose_6d = response.state.eef.pose_6d if response.state is not None else (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
     joint_pos = response.state.joint.pos if response.state is not None else (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
     joint_vel = response.state.joint.vel if response.state is not None else (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
     joint_torque = response.state.joint.torque if response.state is not None else (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    target_pose_6d = response.detail.get("target_pose_6d", (None, None, None, None, None, None))
     snapshot: dict[str, object] = {
         "phase": phase,
         "response_command_id": response.command_id,
         "command_deadman": False,
         "command_debug_profile": None,
+        "command_dt_s": 0.0,
+        "command_velocity_x": 0.0,
+        "command_velocity_y": 0.0,
+        "command_velocity_z": 0.0,
+        "command_angular_velocity_roll": 0.0,
+        "command_angular_velocity_pitch": 0.0,
+        "command_angular_velocity_yaw": 0.0,
+        "command_gripper_velocity": 0.0,
         "command_translation_x": 0.0,
         "command_translation_y": 0.0,
         "command_translation_z": 0.0,
@@ -349,8 +437,18 @@ def build_response_snapshot(
         "state_eef_pitch": rounded(pose_6d[4]),
         "state_eef_yaw": rounded(pose_6d[5]),
         "state_gripper_pos": rounded(response.state.eef.gripper_pos) if response.state is not None else 0.0,
+        "target_eef_x": rounded(target_pose_6d[0]) if target_pose_6d[0] is not None else None,
+        "target_eef_y": rounded(target_pose_6d[1]) if target_pose_6d[1] is not None else None,
+        "target_eef_z": rounded(target_pose_6d[2]) if target_pose_6d[2] is not None else None,
+        "target_eef_roll": rounded(target_pose_6d[3]) if target_pose_6d[3] is not None else None,
+        "target_eef_pitch": rounded(target_pose_6d[4]) if target_pose_6d[4] is not None else None,
+        "target_eef_yaw": rounded(target_pose_6d[5]) if target_pose_6d[5] is not None else None,
+        "target_gripper_pos": rounded(response.detail["target_gripper_pos"])
+        if "target_gripper_pos" in response.detail
+        else None,
     }
     for index in range(6):
+        # 关节数组在 UI 上拆成显式字段，避免前端再写一次索引逻辑。
         snapshot[f"joint_pos_{index + 1}"] = rounded(joint_pos[index]) if index < len(joint_pos) else 0.0
         snapshot[f"joint_vel_{index + 1}"] = rounded(joint_vel[index]) if index < len(joint_vel) else 0.0
         snapshot[f"joint_torque_{index + 1}"] = rounded(joint_torque[index]) if index < len(joint_torque) else 0.0
@@ -358,6 +456,14 @@ def build_response_snapshot(
 
 
 class TkTeleopDashboard:
+    """Tk 调试面板。
+
+    这里仍然采用最朴素的 Tk 方案，原因很现实：
+    - Python 标准库自带；
+    - 在 bringup 机器上依赖最少；
+    - 对“固定位置刷新数值面板”这类需求足够稳定。
+    """
+
     def __init__(self, source: str, rate_hz: float) -> None:
         try:
             import tkinter as tk
@@ -388,6 +494,10 @@ class TkTeleopDashboard:
         self.root.after(self.refresh_ms, self._pump)
 
     def _build_layout(self) -> None:
+        # 布局刻意分成三块：
+        # - 左侧：手柄输入；
+        # - 右侧：控制输出；
+        # - 底部：按键说明。
         outer = self.ttk.Frame(self.root, padding=12)
         outer.grid(row=0, column=0, sticky="nsew")
         outer.columnconfigure(0, weight=1)
@@ -429,6 +539,7 @@ class TkTeleopDashboard:
         *,
         pairs_per_row: int,
     ) -> None:
+        # 双列 label/value 栅格能在字段较多时维持较高信息密度。
         for column in range(pairs_per_row * 2):
             parent.columnconfigure(column, weight=1)
         for index, (key, label) in enumerate(fields):
@@ -459,6 +570,8 @@ class TkTeleopDashboard:
     def push(self, controller_snapshot: dict[str, object], control_snapshot: dict[str, object]) -> None:
         if self.closed:
             return
+        # 业务线程只入队，不直接碰 Tk 控件。
+        # 这是 Tk 线程模型的关键约束：控件更新必须在主线程完成。
         self.queue.put((controller_snapshot, control_snapshot))
 
     def close(self) -> None:
@@ -481,6 +594,7 @@ class TkTeleopDashboard:
             controller_snapshot, control_snapshot = item
             self._apply_snapshot(self.controller_vars, controller_snapshot)
             self._apply_snapshot(self.control_vars, control_snapshot)
+        # UI 刷新频率由 `ui_hz` 决定，和控制发送频率解耦。
         self.root.after(self.refresh_ms, self._pump)
 
     def _apply_snapshot(self, vars_map, snapshot: dict[str, object]) -> None:
@@ -505,10 +619,12 @@ class TkTeleopDashboard:
 
 
 def create_tk_dashboard(source: str, rate_hz: float) -> TkTeleopDashboard:
+    """工厂函数，方便 CLI 侧和测试替换面板实现。"""
     return TkTeleopDashboard(source=source, rate_hz=rate_hz)
 
 
 def show_response_dashboard(response: CommandResponse, source: str) -> None:
+    # 非 teleop 命令也复用同一张 GUI，只是输入面板保持空状态。
     dashboard = create_tk_dashboard(source=source, rate_hz=0.0)
     dashboard.push(
         build_controller_snapshot(source, None, XboxState()),
@@ -518,6 +634,8 @@ def show_response_dashboard(response: CommandResponse, source: str) -> None:
 
 
 def format_ui_value(value: object) -> str:
+    """把不同类型的值规整成适合面板显示的字符串。"""
+
     if value is None:
         return "-"
     if isinstance(value, bool):
@@ -530,16 +648,21 @@ def format_ui_value(value: object) -> str:
 
 
 def rounded(value: float) -> float:
+    # UI 和日志都统一保留 6 位，便于对齐阅读，也足够覆盖当前调试精度。
     return round(float(value), 6)
 
 
 def hz_to_period_ms(rate_hz: float) -> int:
+    # `after()` 需要毫秒整数。
+    # 当频率非法或为 0 时，退回到保守的 40ms 轮询。
     if rate_hz <= 0:
         return 40
     return max(1, int(round(1000.0 / rate_hz)))
 
 
 def event_label(event: XboxInputEvent | None) -> str | None:
+    """把原始事件码翻译成 UI 和日志可读的名称。"""
+
     if event is None:
         return None
     if event.event_type == 3:
@@ -550,6 +673,14 @@ def event_label(event: XboxInputEvent | None) -> str | None:
 
 
 def load_events(device: str | None, event_jsonl: str | None) -> Iterable[XboxInputEvent]:
+    """选择事件来源。
+
+    优先级：
+    1. JSONL 回放；
+    2. 显式设备；
+    3. 默认 `/dev/input/event0`。
+    """
+
     if event_jsonl:
         return iter_jsonl_events(event_jsonl)
     if device:

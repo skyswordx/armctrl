@@ -1,1 +1,7 @@
-"""Hardware adapter boundary for armctrl."""
+"""adapters 子包：定义硬件适配边界。
+
+这里体现的是典型的 `ports and adapters`（端口-适配器）思路：
+- 上层执行器只依赖抽象协议，不依赖具体 SDK。
+- 真实硬件和 fake 模拟都通过统一接口接入。
+- 这样测试、bringup 和实机执行可以共享一套业务主链路。
+"""
