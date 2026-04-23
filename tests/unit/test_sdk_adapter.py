@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import armctrl.adapters.arx5.sdk as sdk_module
 from armctrl.adapters.arx5.sdk import Arx5SDKAdapter
 from armctrl.protocol.enums import ArmMode
 from armctrl.protocol.models import MoveEEFRequest
@@ -34,6 +35,14 @@ class _FakeGain:
             [value * scalar for value in self._kd],
             self.gripper_kp * scalar,
             self.gripper_kd * scalar,
+        )
+
+    def __add__(self, other):
+        return _FakeGain(
+            [left + right for left, right in zip(self._kp, other._kp)],
+            [left + right for left, right in zip(self._kd, other._kd)],
+            self.gripper_kp + other.gripper_kp,
+            self.gripper_kd + other.gripper_kd,
         )
 
 
@@ -78,6 +87,7 @@ class _FakeController:
             default_kd=[5.0, 5.0, 5.0, 1.0, 1.0, 1.0],
             default_gripper_kp=5.0,
             default_gripper_kd=0.2,
+            controller_dt=0.002,
         )
         self.gain = _FakeGain(6)
         self.calls: list[str] = []
@@ -118,11 +128,48 @@ class _FakeSDK:
     EEFState = _FakeEEFState
 
 
-def test_sdk_move_eef_restores_default_motion_gain_after_damping():
+class _FakeRobotConfigFactory:
+    @classmethod
+    def get_instance(cls):
+        return cls()
+
+    def get_config(self, model):
+        return SimpleNamespace(model=model, joint_dof=6, urdf_path="/sdk/models/X5.urdf")
+
+
+class _FakeControllerConfigFactory:
+    @classmethod
+    def get_instance(cls):
+        return cls()
+
+    def get_config(self, name, joint_dof):
+        return SimpleNamespace(name=name, joint_dof=joint_dof, gravity_compensation=False)
+
+
+class _FakeConnectController(_FakeController):
+    def __init__(self, robot_config, controller_config, interface) -> None:
+        super().__init__()
+        self.robot_config = robot_config
+        self.controller_config = controller_config
+        self.interface = interface
+
+
+class _FakeConnectSDK(_FakeSDK):
+    RobotConfigFactory = _FakeRobotConfigFactory
+    ControllerConfigFactory = _FakeControllerConfigFactory
+    last_controller: _FakeConnectController | None = None
+
+    @classmethod
+    def Arx5CartesianController(cls, robot_config, controller_config, interface):
+        cls.last_controller = _FakeConnectController(robot_config, controller_config, interface)
+        return cls.last_controller
+
+
+def test_sdk_move_eef_ramps_default_motion_gain_after_damping():
     # SDK 的 set_to_damping 会把 kp 置零。
     # adapter 再次发送 EEF 命令前必须恢复 cartesian 默认增益，
     # 否则 set_eef_cmd 只改插值目标，真实电机仍停留在阻尼控制。
-    adapter = Arx5SDKAdapter()
+    adapter = Arx5SDKAdapter(resume_gain_duration_s=0.006, sleep_fn=lambda _: None)
     controller = _FakeController()
     adapter._sdk = _FakeSDK()
     adapter._controller = controller
@@ -141,7 +188,55 @@ def test_sdk_move_eef_restores_default_motion_gain_after_damping():
     )
 
     assert response.status.value == "completed"
-    assert controller.calls.count("set_gain") == set_gain_calls_before + 1
+    assert controller.calls.count("set_gain") == set_gain_calls_before + 3
     assert controller.calls[-1] == "set_eef_cmd"
     assert controller.gain.kp() == pytest.approx(controller.config.default_kp)
     assert controller.gain.gripper_kp == pytest.approx(controller.config.default_gripper_kp)
+
+
+def test_sdk_connect_prefers_project_x5_camera_urdf_by_default(monkeypatch, tmp_path):
+    # X5 是当前项目的带相机主模型。
+    # 调用方没有显式传 URDF 时，adapter 自动优先使用项目侧模型，避免继续读 SDK wheel 内的零 payload 版本。
+    project_urdf = tmp_path / "X5_camera.urdf"
+    project_urdf.write_text("<robot name='x5_camera'/>", encoding="utf-8")
+    monkeypatch.setattr(Arx5SDKAdapter, "_DEFAULT_X5_CAMERA_URDF", project_urdf)
+    monkeypatch.setattr(sdk_module.importlib, "import_module", lambda name: _FakeConnectSDK)
+
+    adapter = Arx5SDKAdapter(model="X5")
+    response = adapter.connect()
+
+    assert response.status.value == "completed"
+    assert _FakeConnectSDK.last_controller is not None
+    assert _FakeConnectSDK.last_controller.robot_config.urdf_path == str(project_urdf)
+
+
+def test_sdk_connect_keeps_sdk_urdf_for_non_x5_without_explicit_path(monkeypatch, tmp_path):
+    # 只有 X5 自动使用项目相机模型，其他模型继续保持 SDK 配置。
+    project_urdf = tmp_path / "X5_camera.urdf"
+    project_urdf.write_text("<robot name='x5_camera'/>", encoding="utf-8")
+    monkeypatch.setattr(Arx5SDKAdapter, "_DEFAULT_X5_CAMERA_URDF", project_urdf)
+    monkeypatch.setattr(sdk_module.importlib, "import_module", lambda name: _FakeConnectSDK)
+
+    adapter = Arx5SDKAdapter(model="L5")
+    response = adapter.connect()
+
+    assert response.status.value == "completed"
+    assert _FakeConnectSDK.last_controller is not None
+    assert _FakeConnectSDK.last_controller.robot_config.urdf_path == "/sdk/models/X5.urdf"
+
+
+def test_sdk_connect_explicit_urdf_path_overrides_project_default(monkeypatch, tmp_path):
+    # 显式路径优先级最高，方便 bringup 时 A/B 比较原模型、相机模型和临时模型。
+    project_urdf = tmp_path / "X5_camera.urdf"
+    explicit_urdf = tmp_path / "custom.urdf"
+    project_urdf.write_text("<robot name='x5_camera'/>", encoding="utf-8")
+    explicit_urdf.write_text("<robot name='custom'/>", encoding="utf-8")
+    monkeypatch.setattr(Arx5SDKAdapter, "_DEFAULT_X5_CAMERA_URDF", project_urdf)
+    monkeypatch.setattr(sdk_module.importlib, "import_module", lambda name: _FakeConnectSDK)
+
+    adapter = Arx5SDKAdapter(model="X5", urdf_path=str(explicit_urdf))
+    response = adapter.connect()
+
+    assert response.status.value == "completed"
+    assert _FakeConnectSDK.last_controller is not None
+    assert _FakeConnectSDK.last_controller.robot_config.urdf_path == str(explicit_urdf.resolve())

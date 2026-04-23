@@ -77,10 +77,12 @@ def add_common(parser: argparse.ArgumentParser) -> None:
     # - 选 fake 还是 sdk；
     # - 选哪台模型；
     # - 走哪张 CAN 接口；
+    # - 是否覆盖 SDK 默认 URDF；
     # - 结果是给脚本看还是给人看。
     parser.add_argument("--adapter", choices=[kind.value for kind in AdapterKind], default=AdapterKind.FAKE.value)
     parser.add_argument("--model", default="X5")
     parser.add_argument("--interface", default="can0")
+    parser.add_argument("--urdf-path")
     parser.add_argument("--gravity-compensation", action="store_true")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--gui", action="store_true")
@@ -127,6 +129,7 @@ def build_executor(args: argparse.Namespace) -> ArmCommandExecutor:
         adapter = Arx5SDKAdapter(
             model=args.model,
             interface=args.interface,
+            urdf_path=args.urdf_path,
             gravity_compensation=True if args.gravity_compensation else None,
         )
     else:
