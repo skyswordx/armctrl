@@ -83,6 +83,56 @@ ls -l /dev/input/by-id/
 cat /proc/bus/input/devices
 ```
 
+如果插拔手柄后再次出现 `Permission denied`，通常是因为 `/dev/input/event*` 是内核重新创建的设备节点，之前对旧 `event10` 做过的临时 ACL 不会跟着新节点迁移。
+先重新定位当前事件设备：
+
+```bash
+ls -l /dev/input/by-id/
+grep -B4 -A8 -i "gamepad\|xbox\|zikway\|gamesir" /proc/bus/input/devices
+```
+
+临时修复当前这一次插入的设备：
+
+```bash
+sudo setfacl -m u:$USER:rw /dev/input/event10
+```
+
+把 `/dev/input/event10` 换成当前实际设备。
+这个命令只对当前节点有效，拔插或重启后需要重做。
+
+长期方案一：把当前用户加入 `input` 组。
+这适合本地 bringup 主机，但该组可以读取所有输入设备事件，包括键盘和鼠标。
+
+```bash
+sudo usermod -aG input "$USER"
+newgrp input
+id -nG | tr ' ' '\n' | grep '^input$'
+```
+
+如果 `newgrp input` 后仍然打不开设备，退出当前登录会话后重新登录。
+
+长期方案二：为这只手柄写 udev 规则。
+你当前 `evtest` 看到的设备是 `Zikway HID gamepad`，`vendor=3537`、`product=1041`，可先用这条规则：
+
+```bash
+cat <<'EOF' | sudo tee /etc/udev/rules.d/99-armctrl-gamepad.rules
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{idVendor}=="3537", ATTRS{idProduct}=="1041", TAG+="uaccess", GROUP="input", MODE="0660"
+EOF
+
+sudo udevadm control --reload-rules
+sudo udevadm trigger
+```
+
+重新插拔手柄后验证：
+
+```bash
+ls -l /dev/input/by-id/
+getfacl /dev/input/event10
+uv run arx5ctl teleop-xbox --adapter fake --device /dev/input/event10 --gui
+```
+
+同样把 `event10` 换成重新定位到的实际设备。
+
 实机只读检查：
 
 ```bash

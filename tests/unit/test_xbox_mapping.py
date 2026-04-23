@@ -1,5 +1,12 @@
+"""Xbox 映射、调试快照和运行循环测试。
+
+这组测试重点不是“手柄能不能连上”，
+而是输入语义、控制语义和 UI 快照语义在代码层是否稳定。
+"""
+
 import time
 
+import pytest
 from armctrl.adapters.arx5.fake import FakeArx5Adapter
 from armctrl.daemon.executor import ArmCommandExecutor
 from armctrl.teleop.mapping import XboxInputEvent, XboxMapper, XboxState
@@ -16,6 +23,7 @@ from armctrl.teleop.xbox import (
 
 class RecordingDashboard:
     def __init__(self) -> None:
+        # 用最小的假面板记录 runner 推送过来的快照，方便断言 UI 数据内容。
         self.frames: list[tuple[dict, dict]] = []
         self.closed = False
 
@@ -27,6 +35,7 @@ class RecordingDashboard:
 
 
 def test_deadman_required_for_motion():
+    # RB 没按住时，摇杆输入不应转成任何位移命令。
     mapper = XboxMapper()
     state = XboxState(axes={"ABS_Y": -1.0}, buttons={"BTN_TR": False})
     command = mapper.to_command(state, now=1.0)
@@ -35,14 +44,29 @@ def test_deadman_required_for_motion():
 
 
 def test_right_bumper_enables_slow_x_jog():
+    # 左摇杆前推 + RB 按住，应当产生 x 正方向的小步 jog。
     mapper = XboxMapper(max_translation_step_m=0.002)
     state = XboxState(axes={"ABS_Y": -1.0}, buttons={"BTN_TR": True})
     command = mapper.to_command(state, now=1.0)
     assert command.deadman
     assert command.translation_m[0] > 0.0
+    assert command.translation_velocity_mps[0] == pytest.approx(0.2)
+    assert command.translation_m[0] == pytest.approx(0.002)
+
+
+def test_mapper_uses_dt_to_compute_per_tick_delta():
+    # 速度和 dt 分离后，50Hz 控制周期下每拍位移应为 0.2m/s * 0.02s。
+    mapper = XboxMapper(max_translation_speed_mps=0.2)
+    state = XboxState(axes={"ABS_Y": -1.0}, buttons={"BTN_TR": True})
+    command = mapper.to_command(state, now=1.0, dt_s=0.02)
+    assert command.translation_velocity_mps[0] == pytest.approx(0.2)
+    assert command.translation_m[0] == pytest.approx(0.004)
+    assert command.dt_s == pytest.approx(0.02)
 
 
 def test_zikway_layout_uses_abs_z_rz_for_right_stick_and_gas_brake_for_triggers():
+    # 当前设备布局下，右摇杆和扳机字段与传统 Xbox 兼容布局不同。
+    # 这个测试把项目当前认定的“候选主字段”锁定下来。
     mapper = XboxMapper()
     state = XboxState(
         axes={
@@ -63,6 +87,7 @@ def test_zikway_layout_uses_abs_z_rz_for_right_stick_and_gas_brake_for_triggers(
 
 
 def test_hat_axes_drive_roll_and_pitch_for_full_6d_pose():
+    # 方向键补足 roll / pitch，形成完整 6D 增量控制。
     mapper = XboxMapper()
     state = XboxState(
         axes={
@@ -78,6 +103,7 @@ def test_hat_axes_drive_roll_and_pitch_for_full_6d_pose():
 
 
 def test_x_button_requests_damping_profile():
+    # X 键是快速回到 damping 的直接入口。
     mapper = XboxMapper()
     state = XboxState(buttons={"BTN_X": True})
     command = mapper.to_command(state, now=1.0)
@@ -85,6 +111,7 @@ def test_x_button_requests_damping_profile():
 
 
 def test_a_button_requests_low_gain_profile():
+    # A 键触发低增益被动模式请求。
     mapper = XboxMapper()
     state = XboxState(buttons={"BTN_A": True})
     command = mapper.to_command(state, now=1.0)
@@ -92,6 +119,7 @@ def test_a_button_requests_low_gain_profile():
 
 
 def test_event_runner_moves_fake_adapter_and_damps_at_exit():
+    # runner 正常跑完后，无论中间怎么动，退出都应回到 damping。
     adapter = FakeArx5Adapter()
     executor = ArmCommandExecutor(adapter)
     events = [
@@ -105,6 +133,7 @@ def test_event_runner_moves_fake_adapter_and_damps_at_exit():
 
 
 def test_deadman_release_enters_damping():
+    # deadman 松开相当于人工释放使能，必须马上进入 damping。
     adapter = FakeArx5Adapter()
     executor = ArmCommandExecutor(adapter)
     events = [
@@ -119,6 +148,7 @@ def test_deadman_release_enters_damping():
 
 
 def test_xbox_maintenance_profile_can_apply_with_confirmation():
+    # 维护态 + 明确确认后，按钮触发的 debug profile 才允许真正执行。
     adapter = FakeArx5Adapter()
     executor = ArmCommandExecutor(
         adapter,
@@ -132,6 +162,7 @@ def test_xbox_maintenance_profile_can_apply_with_confirmation():
 
 
 def test_snapshot_extracts_controller_and_control_fields():
+    # 这里验证 GUI/调试面板看到的字段是否已经从业务对象中正确展开。
     state = XboxState(
         axes={"ABS_Y": -1.0, "ABS_X": 0.25},
         buttons={"BTN_TR": True, "BTN_X": False},
@@ -154,12 +185,16 @@ def test_snapshot_extracts_controller_and_control_fields():
     assert controller["button_BTN_TR"] is True
     assert control["phase"] == "event"
     assert control["command_deadman"] is True
+    assert control["command_dt_s"] == 0.01
+    assert control["command_velocity_x"] > 0.0
     assert control["command_translation_x"] > 0.0
+    assert control["target_eef_x"] > 0.3
     assert control["response_status"] == "completed"
     assert control["state_mode"] == "teleop"
 
 
 def test_response_snapshot_extracts_eef_joint_and_error_fields():
+    # 响应快照需要把 EEF、joint 和错误信息拆成稳定字段。
     adapter = FakeArx5Adapter()
     executor = ArmCommandExecutor(adapter)
     response = executor.health()
@@ -175,6 +210,7 @@ def test_response_snapshot_extracts_eef_joint_and_error_fields():
 
 
 def test_control_hints_cover_buttons_and_motion_mapping():
+    # UI 里的帮助文案本身也是交互契约的一部分。
     joined = "\n".join(CONTROL_HINTS)
     assert "RB / BTN_TR" in joined
     assert "左摇杆上下" in joined
@@ -185,6 +221,7 @@ def test_control_hints_cover_buttons_and_motion_mapping():
 
 
 def test_controller_fields_use_candidate_right_stick_only():
+    # 当前 UI 只展示确认过的右摇杆候选字段，不再展示历史遗留字段。
     keys = {key for key, _ in CONTROLLER_FIELDS}
     assert "axis_ABS_Z" in keys
     assert "axis_ABS_RZ" in keys
@@ -199,12 +236,14 @@ def test_runner_coalesces_burst_events_into_single_control_tick():
             self.command_count = 0
 
         def state(self):
+            # 这个轻量 executor 只保留 runner 需要的最小接口。
             from armctrl.protocol.enums import CommandStatus
             from armctrl.protocol.models import CommandResponse
 
             return CommandResponse(CommandStatus.COMPLETED, "state", state=self.adapter.get_state())
 
         def handle_teleop(self, command):
+            # 这里不关心命令内容，只验证一次控制拍只发一次命令。
             from armctrl.protocol.enums import CommandStatus
             from armctrl.protocol.models import CommandResponse
 
@@ -228,10 +267,12 @@ def test_runner_coalesces_burst_events_into_single_control_tick():
 
 
 def test_ui_refresh_50hz_maps_to_20ms():
+    # Tk `after()` 使用毫秒，因此 50Hz 应映射到 20ms。
     assert hz_to_period_ms(50.0) == 20
 
 
 def test_event_runner_pushes_extracted_snapshots_to_dashboard():
+    # runner 应当把提取后的快照推给 UI，而不是把原始对象泄漏给面板层。
     adapter = FakeArx5Adapter()
     executor = ArmCommandExecutor(adapter)
     dashboard = RecordingDashboard()
@@ -258,6 +299,8 @@ def test_event_runner_pushes_extracted_snapshots_to_dashboard():
 
 
 def test_event_runner_keeps_jogging_while_deadman_is_held():
+    # 这个测试验证“无新事件时也继续按固定频率发送控制”。
+    # 只要 RB 仍按住，runner 就应持续输出 jog。
     adapter = FakeArx5Adapter()
     executor = ArmCommandExecutor(adapter)
 
