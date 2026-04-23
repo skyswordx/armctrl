@@ -206,9 +206,33 @@
     </joint>
     <link name="link6">
         <inertial>
-            <origin xyz="0.05435277 0 0" rpy="0 0 0"/>
-            <mass value="0.581000"/>
-            <inertia ixx="0.00029" ixy="0.00000" ixz="0.00000" iyy="0.00028" iyz="-0.00001" izz="0.00045"/>
+            <!--
+                这轮调试确认：D435i payload 必须合并进 link6，而不是写在 eef_link。
+                直接证据有两条：
+                1. SDK / solver 运行时会打印：
+                   "Using eef_link for kinematics and link6 for inverse dynamics"
+                2. 用 Arx5Solver.inverse_dynamics 做 A/B 对比时，项目模型和 SDK 原始模型输出已经不同，
+                   说明这里的惯性参数确实进入了逆动力学，而不是只改了一个摆设文件。
+
+                工程结论：
+                - eef_link 仍然保留，用于运动学末端定义；
+                - gravity compensation 真正读取的是最后一个主动 link，也就是 link6；
+                - 所以 fixed joint 后面的 eef_link 惯性不会进入 gravity compensation。
+
+                当前等效值假设：
+                - 原 link6: m=0.581 kg, com=[0.05435277, 0, 0] m
+                - D435i: m=0.072 kg, com=[0.145, 0, 0.040] m, 相对 link6 坐标
+                - 惯量按平行轴定理合并
+            -->
+            <origin xyz="0.06434756 0 0.00441041" rpy="0 0 0"/>
+            <mass value="0.653"/>
+            <inertia
+                ixx="0.000444848009"
+                ixy="0.0"
+                ixz="-0.000232279015"
+                iyy="0.000916399242"
+                iyz="-0.00001"
+                izz="0.001028756233"/>
         </inertial>
         <visual>
             <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -235,24 +259,11 @@
     </joint>
 
     <link name="eef_link">
-    <inertial>
         <!--
-            起步用 payload 近似模型：
-            1. 只等效 D435i 本体，不含支架、螺丝、线缆；
-            2. 约定相机安装在末端正上方，光轴沿 eef_link 的 +x；
-            3. 相机长边沿 eef_link 的 y 方向，质心位于 eef_link 原点上方 40 mm。
-            这组参数用于先把重力补偿和动力学模型跑起来，后续应由实测质量、质心和惯量替换。
+            这里故意保持为空。
+            eef_link 的职责是表达末端运动学参考点，不再承载 payload 惯性。
+            如果把相机质量继续写在这里，SDK 逆动力学不会读到，之前已经实机验证过。
         -->
-        <mass value="0.072"/>
-        <origin xyz="0.0 0.0 0.040"  rpy="0 0 0"/>
-        <inertia
-            ixx="5.235e-5"
-            ixy="0.0"
-            ixz="0.0"
-            iyy="7.515e-6"
-            iyz="0.0"
-            izz="5.237e-5"/>
-    </inertial>
     </link>
 
     <joint name="gripper_fixed_joint" type="fixed">
