@@ -97,6 +97,25 @@ def test_cli_accepts_urdf_path_override():
     assert args.urdf_path == "configs/models/X5_camera.urdf"
 
 
+def test_cli_rejects_runtime_gripper_override_flags():
+    # 旧的运行时覆盖参数已经删除。
+    # 现在必须通过项目侧标定命令写入配置文件，而不是每次启动临时传值。
+    parser = build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["health", "--adapter", "sdk", "--gripper-open-readout", "-3.4"])
+
+
+def test_cli_accepts_gripper_calibration_set_command():
+    parser = build_parser()
+    args = parser.parse_args(
+        ["gripper-calibration-set", "--model", "X5", "--open-readout", "-3.4", "--width", "0.082", "--notes", "test"]
+    )
+    assert args.command == "gripper-calibration-set"
+    assert args.open_readout == pytest.approx(-3.4)
+    assert args.width == pytest.approx(0.082)
+    assert args.notes == "test"
+
+
 def test_cli_teleop_json_stays_machine_readable(capsys):
     # teleop 即便经过完整事件回放，`--json` 仍然只输出最终统一响应。
     code = main(
@@ -201,17 +220,23 @@ def test_executor_teleop_centered_stick_holds_accumulated_target():
     assert hold_response.detail["target_pose_6d"][0] == pytest.approx(0.302)
 
 
-def test_executor_deadman_release_enters_damping_only_once():
-    # deadman 松开时需要切一次 damping，
-    # 但空闲控制拍不应反复重进 damping，避免真实 SDK 被重复打回阻尼态。
+def test_executor_deadman_release_enters_zero_gravity_drag_only_once():
+    # deadman 松开时，默认切到 zero_gravity_drag。
+    # 空闲控制拍不应反复重进该 profile，避免真实 SDK 重复改增益。
     class CountingAdapter(FakeArx5Adapter):
         def __init__(self) -> None:
             super().__init__()
             self.damping_calls = 0
+            self.zero_gravity_drag_calls = 0
 
         def damping(self):
             self.damping_calls += 1
             return super().damping()
+
+        def apply_debug_profile(self, request):
+            if request.name.value == "zero_gravity_drag":
+                self.zero_gravity_drag_calls += 1
+            return super().apply_debug_profile(request)
 
     adapter = CountingAdapter()
     executor = ArmCommandExecutor(adapter)
@@ -228,4 +253,9 @@ def test_executor_deadman_release_enters_damping_only_once():
     assert active_response.status.value == "completed"
     assert release_response.status.value == "completed"
     assert idle_response.status.value == "completed"
-    assert adapter.damping_calls == 1
+    assert release_response.state is not None
+    assert release_response.state.mode.value == "zero_gravity_drag"
+    assert idle_response.state is not None
+    assert idle_response.state.mode.value == "zero_gravity_drag"
+    assert adapter.zero_gravity_drag_calls == 1
+    assert adapter.damping_calls == 0

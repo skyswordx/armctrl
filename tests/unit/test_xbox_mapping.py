@@ -119,7 +119,7 @@ def test_a_button_requests_low_gain_profile():
 
 
 def test_event_runner_moves_fake_adapter_and_damps_at_exit():
-    # runner 正常跑完后，无论中间怎么动，退出都应回到 damping。
+    # runner 正常跑完后，无论中间经历过什么 profile，退出都应回到真正的 damping。
     adapter = FakeArx5Adapter()
     executor = ArmCommandExecutor(adapter)
     events = [
@@ -133,7 +133,8 @@ def test_event_runner_moves_fake_adapter_and_damps_at_exit():
 
 
 def test_deadman_release_enters_damping():
-    # deadman 松开相当于人工释放使能，必须马上进入 damping。
+    # runner 收到 deadman 松开后，期间会先切到 zero_gravity_drag，
+    # 但 run() finally 仍会在退出前打回真正的 damping。
     adapter = FakeArx5Adapter()
     executor = ArmCommandExecutor(adapter)
     events = [
@@ -213,6 +214,7 @@ def test_control_hints_cover_buttons_and_motion_mapping():
     # UI 里的帮助文案本身也是交互契约的一部分。
     joined = "\n".join(CONTROL_HINTS)
     assert "RB / BTN_TR" in joined
+    assert "zero_gravity_drag" in joined
     assert "左摇杆上下" in joined
     assert "右摇杆左右" in joined
     assert "方向键" in joined

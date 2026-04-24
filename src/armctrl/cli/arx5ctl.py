@@ -20,6 +20,7 @@ from pathlib import Path
 
 from armctrl.adapters.arx5.fake import FakeArx5Adapter
 from armctrl.adapters.arx5.sdk import Arx5SDKAdapter
+from armctrl.calibration.gripper import GripperCalibrationService
 from armctrl.daemon.executor import ArmCommandExecutor
 from armctrl.identification.backends import build_joint_backend
 from armctrl.identification.optimization import optimize_fourier_multisine
@@ -40,6 +41,12 @@ from armctrl.teleop.mapping import XboxMapper
 from armctrl.teleop.xbox import XboxDebugRunner, create_tk_dashboard, load_events, show_response_dashboard
 
 MOVE_CONFIRMATION = "I UNDERSTAND THIS WILL MOVE THE ARM"
+GRIPPER_CALIBRATION_COMMANDS = {
+    "gripper-calibration-show",
+    "gripper-calibration-set",
+    "gripper-calibration-clear",
+    "gripper-calibration-wizard",
+}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -105,6 +112,22 @@ def build_parser() -> argparse.ArgumentParser:
     ident_postprocess.add_argument("--gui", action="store_true")
     ident_postprocess.add_argument("--pretty", action="store_true")
 
+    gripper_show = subparsers.add_parser("gripper-calibration-show")
+    add_calibration_common(gripper_show)
+
+    gripper_set = subparsers.add_parser("gripper-calibration-set")
+    add_calibration_common(gripper_set)
+    gripper_set.add_argument("--open-readout", type=float, required=True)
+    gripper_set.add_argument("--width", type=float, required=True)
+    gripper_set.add_argument("--notes", default="")
+
+    gripper_clear = subparsers.add_parser("gripper-calibration-clear")
+    add_calibration_common(gripper_clear)
+
+    gripper_wizard = subparsers.add_parser("gripper-calibration-wizard")
+    add_calibration_common(gripper_wizard)
+    gripper_wizard.add_argument("--interface", default="can0")
+
     return parser
 
 
@@ -120,6 +143,15 @@ def add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--interface", default="can0")
     parser.add_argument("--urdf-path")
     parser.add_argument("--gravity-compensation", action="store_true")
+    parser.add_argument("--json", action="store_true")
+    parser.add_argument("--gui", action="store_true")
+    parser.add_argument("--pretty", action="store_true")
+
+
+def add_calibration_common(parser: argparse.ArgumentParser) -> None:
+    # 标定命令不需要 fake/sdk adapter 选择，
+    # 它们处理的是项目侧配置文件，以及可选的 SDK 标定流程。
+    parser.add_argument("--model", default="X5")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--gui", action="store_true")
     parser.add_argument("--pretty", action="store_true")
@@ -153,6 +185,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command in {"ident-plan", "ident-run", "ident-postprocess"}:
             response = dispatch_identification(args)
+        elif args.command in GRIPPER_CALIBRATION_COMMANDS:
+            response = dispatch_gripper_calibration(args)
         else:
             executor = build_executor(args)
             response = dispatch(args, executor)
@@ -287,6 +321,32 @@ def dispatch(args: argparse.Namespace, executor: ArmCommandExecutor):
             )
         return result["response"]
     raise ArmctrlError(code=ErrorCode.INVALID_REQUEST, message=f"unsupported command {args.command}")
+
+
+def dispatch_gripper_calibration(args: argparse.Namespace) -> CommandResponse:
+    # 夹爪标定命令统一走项目侧 service。
+    # 这样普通控制命令和标定维护命令就不会在 CLI 层重复各自的文件读写逻辑。
+    service = GripperCalibrationService()
+    if args.command == "gripper-calibration-show":
+        return service.show(args.model)
+    if args.command == "gripper-calibration-set":
+        return service.set(
+            model=args.model,
+            gripper_open_readout=args.open_readout,
+            gripper_width=args.width,
+            interface=getattr(args, "interface", None),
+            notes=args.notes,
+        )
+    if args.command == "gripper-calibration-clear":
+        return service.clear(args.model)
+    if args.command == "gripper-calibration-wizard":
+        if getattr(args, "json", False):
+            raise ArmctrlError(
+                ErrorCode.INVALID_REQUEST,
+                "gripper-calibration-wizard is interactive and does not support --json",
+            )
+        return service.run_wizard(model=args.model, interface=args.interface)
+    raise ArmctrlError(ErrorCode.INVALID_REQUEST, f"unsupported gripper calibration command {args.command}")
 
 
 def dispatch_identification(args: argparse.Namespace) -> CommandResponse:

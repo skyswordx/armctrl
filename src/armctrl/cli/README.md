@@ -21,3 +21,15 @@ CLI 不直接实现控制逻辑。
 
 这样可以保证控制逻辑仍集中在 `daemon`、`safety` 和 `teleop`，
 CLI 只是一个薄壳。
+
+## 当前额外职责
+
+除了普通控制命令，CLI 现在还承担项目侧夹爪标定入口：
+
+- `gripper-calibration-show`
+- `gripper-calibration-set`
+- `gripper-calibration-clear`
+- `gripper-calibration-wizard`
+
+这些命令不直接改 vendor SDK 文件，
+而是维护项目里的标定配置，再由 adapter / backend 在连接 SDK 前自动应用。

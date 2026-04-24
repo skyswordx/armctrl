@@ -31,6 +31,7 @@ class DebugProfileRegistry:
         # 默认表只保留当前项目明确支持的 profile。
         return cls(
             [
+                DebugProfile(DebugProfileName.ZERO_GRAVITY_DRAG, "Gravity compensation + low-gain hand guiding", False),
                 DebugProfile(DebugProfileName.DAMPING, "SDK damping mode", False),
                 DebugProfile(DebugProfileName.RESET_HOME, "SDK reset to home", True),
                 DebugProfile(DebugProfileName.LOW_GAIN_PASSIVE, "Low-gain passive check", True),

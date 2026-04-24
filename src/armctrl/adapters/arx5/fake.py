@@ -83,6 +83,15 @@ class FakeArx5Adapter:
         # fake adapter 只保留对软件主链路有意义的最小行为。
         # 例如 damping / reset_home 对上层状态机有影响，需要模拟；
         # 其他 profile 则只返回“已接受”，不再硬造复杂物理效果。
+        if request.name == DebugProfileName.ZERO_GRAVITY_DRAG and not request.plan_only:
+            self._mode = ArmMode.ZERO_GRAVITY_DRAG
+            return CommandResponse(
+                CommandStatus.COMPLETED,
+                "fake zero-gravity drag enabled",
+                command_id=request.command_id,
+                state=self.get_state(),
+                detail={"gravity_compensation_enabled": True},
+            )
         if request.name == DebugProfileName.DAMPING:
             return self.damping()
         if request.name == DebugProfileName.RESET_HOME and not request.plan_only:

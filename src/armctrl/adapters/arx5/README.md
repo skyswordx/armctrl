@@ -34,3 +34,13 @@
 - `set_to_damping()` 之后控制器会落到零刚度阻尼态。
   如果此时直接恢复 teleop 命令，机械臂容易出现“命令发了但不明显动”或恢复瞬间抖动，
   所以 `sdk.py` 里专门加了按 `controller_dt` 渐变恢复增益的逻辑。
+- 项目现在额外定义了 `zero_gravity_drag` profile。
+  它不会关闭已有的重力补偿，而是先把目标同步到当前实测姿态，再把增益降到很低，
+  用来替代 deadman 松手后的默认落态。
+- 真正的 `damping` 仍然保留，给显式安全停机、`X` 键和 teleop 退出使用。
+- 某些近期批次的 X5 夹爪读数方向和 SDK 默认值相反。
+  现在不再通过临时 CLI 参数覆盖。
+  项目会在 connect 前自动读取 `configs/calibration/gripper/<model>.json`，
+  把保存好的 `gripper_open_readout` 和 `gripper_width` 写回 SDK `robot_config`。
+  如果还没有标定文件，可以先用 `arx5ctl gripper-calibration-set` 写 bootstrap 值，
+  再用 `arx5ctl gripper-calibration-wizard` 走完整校准流程。

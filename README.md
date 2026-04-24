@@ -62,7 +62,7 @@ Xbox 手柄默认映射：
 
 | 输入                    | 行为                                                        |
 | ----------------------- | ----------------------------------------------------------- |
-| `RB / BTN_TR`         | deadman，按住才发送末端 jog                                 |
+| `RB / BTN_TR`         | deadman，按住才发送末端 jog，松开默认进入 `zero_gravity_drag` |
 | 左摇杆上下              | 末端 `x` 小步长 jog                                       |
 | 左摇杆左右              | 末端 `y` 小步长 jog                                       |
 | 右摇杆上下              | 末端 `z` 小步长 jog                                       |
@@ -70,11 +70,18 @@ Xbox 手柄默认映射：
 | 方向键左右              | 末端 `roll` 小步长 jog                                    |
 | 方向键上下              | 末端 `pitch` 小步长 jog                                   |
 | 左右扳机                | 夹爪开合小步长                                              |
-| `X / BTN_X`           | 进入 SDK damping                                            |
+| `X / BTN_X`           | 进入 SDK `damping` 真安全阻尼态                              |
 | `A / BTN_A`           | 请求 `low_gain_passive`，需要维护权限                     |
 | `B / BTN_B`           | 请求 `compliance_slow`，需要维护权限                      |
 | `Y / BTN_Y`           | 请求 `reset_home`，需要维护权限                           |
 | `SELECT / BTN_SELECT` | 请求 `gravity_compensation_startup`，仅用于启动前配置检查 |
+
+说明：
+
+- `zero_gravity_drag` 是当前默认“松手后保持可继续手推”的调试态。
+  它会保留启动时已有的重力补偿，并把 `kp/kd` 降到很低。
+- `damping` 仍然保留，作为显式的真安全阻尼态。
+  `X` 键和 teleop 退出 `finally` 仍会进入它。
 
 实机调试前先确认手柄事件设备：
 
@@ -152,6 +159,56 @@ uv run arx5ctl teleop-xbox \
   --ui-hz 50 \
   --execute \
   --confirm "I UNDERSTAND THIS WILL MOVE THE ARM"
+```
+
+如果启动时出现：
+
+```text
+Gripper position error: got -0.xxx but should be in 0~0.088 (m)
+```
+
+这通常不是 URDF 问题，而是夹爪 `gripper_open_readout` 的方向或零点和当前实机不一致。
+现在不要再通过临时运行参数去覆盖 SDK 配置。
+请先查看项目侧已保存的标定：
+
+```bash
+uv run arx5ctl gripper-calibration-show --model X5 --json
+```
+
+如果当前还没有标定文件，或者方向符号已经错到连 controller 都起不来，
+先手动写入一份 bootstrap 标定：
+
+```bash
+uv run arx5ctl gripper-calibration-set \
+  --model X5 \
+  --open-readout -3.4 \
+  --width 0.082
+```
+
+然后再运行交互式校准流程：
+
+```bash
+uv run arx5ctl gripper-calibration-wizard \
+  --model X5 \
+  --interface can0
+```
+
+这个向导会直接复用 SDK 原生 `calibrate_gripper()`：
+
+- 终端提示你先把夹爪完全闭合并回车；
+- SDK 在闭合位置做零点设置；
+- 终端再提示你把夹爪完全张开并回车；
+- 项目侧根据 SDK 状态反推出 fully-open 的电机读数；
+- 最后把结果保存到 `configs/calibration/gripper/X5.json`。
+
+如果只是想修正保存结果，也可以继续使用：
+
+```bash
+uv run arx5ctl gripper-calibration-set \
+  --model X5 \
+  --open-readout -3.40 \
+  --width 0.082 \
+  --notes "manual correction"
 ```
 
 如果要从手柄触发 `low_gain_passive`、`compliance_slow` 或 `reset_home`，还必须显式开启维护权限：

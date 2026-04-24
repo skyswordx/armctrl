@@ -22,6 +22,8 @@ import time
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
+from armctrl.calibration.models import apply_gripper_calibration
+from armctrl.calibration.store import GripperCalibrationStore
 from armctrl.protocol.enums import ArmMode, CommandStatus, DebugProfileName, ErrorCode
 from armctrl.protocol.errors import ArmctrlError
 from armctrl.protocol.models import (
@@ -49,6 +51,15 @@ class Arx5SDKAdapter:
     # 原因不是“想覆盖 SDK”，而是 SDK 默认 `X5.urdf` 没有带相机 payload。
     # 如果这里不切过去，实机虽然能连通，但重力补偿一直按空载模型算。
     _DEFAULT_X5_CAMERA_URDF = _PROJECT_ROOT / "configs" / "models" / "X5_camera.urdf"
+    # 这组比例不是 SDK 官方值，而是 armctrl 为“手推调试”额外定义的工程 profile。
+    # 目标不是精准控制，而是：
+    # 1. 保留重力补偿；
+    # 2. 比 set_to_damping() 更轻；
+    # 3. 又不至于完全失去姿态记忆。
+    _ZERO_GRAVITY_KP_SCALE = 0.0
+    _ZERO_GRAVITY_KD_SCALE = 0.1
+    _ZERO_GRAVITY_GRIPPER_KP_SCALE = 0.0
+    _ZERO_GRAVITY_GRIPPER_KD_SCALE = 0.0
 
     def __init__(
         self,
@@ -59,6 +70,7 @@ class Arx5SDKAdapter:
         log_level: str = "WARNING",
         resume_gain_duration_s: float = 0.4,
         sleep_fn: Callable[[float], None] = time.sleep,
+        calibration_store: GripperCalibrationStore | None = None,
     ) -> None:
         # 这些配置项全部保留为显式参数，原因是 bringup 时经常需要：
         # - 换模型；
@@ -72,6 +84,9 @@ class Arx5SDKAdapter:
         self.log_level = log_level
         self.resume_gain_duration_s = float(resume_gain_duration_s)
         self._sleep_fn = sleep_fn
+        # 夹爪标定值不再从临时命令行参数进入。
+        # 这里统一读取项目侧标定文件，让 health / teleop / ident 使用同一份配置。
+        self._calibration_store = calibration_store or GripperCalibrationStore()
         # `_sdk` 保存动态导入的模块对象，`_controller` 保存真实控制器实例。
         self._sdk = None
         self._controller = None
@@ -96,6 +111,10 @@ class Arx5SDKAdapter:
             resolved_urdf_path = self._resolve_urdf_path()
             if resolved_urdf_path is not None:
                 robot_config.urdf_path = str(resolved_urdf_path)
+            # 这里把项目侧标定文件应用到 SDK 配置。
+            # 如果这台机器的夹爪方向和 SDK 默认值相反，
+            # 就靠这一步在 controller 构造前完成 bootstrap。
+            apply_gripper_calibration(robot_config, self._calibration_store.load(self.model))
             controller_config = self._sdk.ControllerConfigFactory.get_instance().get_config(
                 "cartesian_controller",
                 robot_config.joint_dof,
@@ -263,6 +282,56 @@ class Arx5SDKAdapter:
             if step_index < steps:
                 self._sleep_fn(controller_dt)
 
+    def _sync_eef_target_to_current_state(self, controller) -> None:
+        # 低增益 / 零重力拖动在进入前必须先把插值目标同步到当前实测状态。
+        # 否则如果上一段 teleop 还留着一个旧目标，再把 kp 从 0 拉回非零，
+        # SDK 会认为“当前命令位置”和“当前实测位置”差太远，导致跳动甚至直接报错。
+        if self._sdk is None:
+            return
+        current_eef = controller.get_eef_state()
+        eef_cmd = self._sdk.EEFState()
+        eef_cmd.pose_6d()[:] = tuple(float(value) for value in current_eef.pose_6d())
+        eef_cmd.gripper_pos = float(current_eef.gripper_pos)
+        eef_cmd.gripper_vel = 0.0
+        eef_cmd.gripper_torque = 0.0
+        controller_dt = float(getattr(controller.get_controller_config(), "controller_dt", 0.002))
+        eef_cmd.timestamp = controller.get_timestamp() + max(controller_dt, 0.002)
+        controller.set_eef_cmd(eef_cmd)
+        self._sleep_fn(max(controller_dt, 0.002))
+
+    def _build_zero_gravity_drag_gain(self, controller_config):
+        return self._sdk.Gain(
+            [float(value) * self._ZERO_GRAVITY_KP_SCALE for value in controller_config.default_kp],
+            [float(value) * self._ZERO_GRAVITY_KD_SCALE for value in controller_config.default_kd],
+            float(controller_config.default_gripper_kp) * self._ZERO_GRAVITY_GRIPPER_KP_SCALE,
+            float(controller_config.default_gripper_kd) * self._ZERO_GRAVITY_GRIPPER_KD_SCALE,
+        )
+
+    def zero_gravity_drag(self) -> CommandResponse:
+        try:
+            controller = self._require_controller()
+            controller_config = controller.get_controller_config()
+            self._sync_eef_target_to_current_state(controller)
+            current_gain = controller.get_gain()
+            target_gain = self._build_zero_gravity_drag_gain(controller_config)
+            self._ramp_gain(controller, current_gain, target_gain, controller_config)
+            self._mode = ArmMode.ZERO_GRAVITY_DRAG
+            detail = {
+                "gravity_compensation_enabled": bool(getattr(controller_config, "gravity_compensation", False)),
+                "profile_kp_scale": self._ZERO_GRAVITY_KP_SCALE,
+                "profile_kd_scale": self._ZERO_GRAVITY_KD_SCALE,
+            }
+            return CommandResponse(
+                CommandStatus.COMPLETED,
+                "sdk zero-gravity drag enabled",
+                state=self.get_state(),
+                detail=detail,
+            )
+        except Exception as exc:
+            self._last_error = ArmctrlError(ErrorCode.SDK_ERROR, str(exc))
+            self._mode = ArmMode.FAULTED
+            return CommandResponse(CommandStatus.FAULTED, "sdk zero-gravity drag failed", error=self._last_error)
+
     def _is_zero_gain(self, gain) -> bool:
         # pybind 返回的 kp 可能是 numpy array，单测里也可能是 list。
         # 这里统一按可迭代数值处理，只要任一 kp 非零，就认为已经不是 damping 增益。
@@ -283,6 +352,8 @@ class Arx5SDKAdapter:
             controller = self._require_controller()
             # 这里显式写成 if/elif，而不是字典分派。
             # 原因是不同 profile 的副作用很不一样，展开写更利于新手阅读和之后加保护逻辑。
+            if request.name == DebugProfileName.ZERO_GRAVITY_DRAG:
+                return self.zero_gravity_drag()
             if request.name == DebugProfileName.DAMPING:
                 return self.damping()
             if request.name == DebugProfileName.RESET_HOME:

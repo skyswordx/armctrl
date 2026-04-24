@@ -63,7 +63,7 @@ BUTTON_ORDER = (
     "BTN_THUMBR",
 )
 CONTROL_HINTS = (
-    "RB / BTN_TR：按住后才发送末端 jog，松开进入 damping。",
+    "RB / BTN_TR：按住后才发送末端 jog，松开进入 zero_gravity_drag。",
     "左摇杆上下：末端 x 方向小步移动。",
     "左摇杆左右：末端 y 方向小步移动。",
     "右摇杆上下：末端 z 方向小步移动。",

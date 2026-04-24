@@ -6,6 +6,8 @@ import pytest
 
 import armctrl.adapters.arx5.sdk as sdk_module
 from armctrl.adapters.arx5.sdk import Arx5SDKAdapter
+from armctrl.calibration.models import GripperCalibration
+from armctrl.calibration.store import GripperCalibrationStore
 from armctrl.protocol.enums import ArmMode
 from armctrl.protocol.models import MoveEEFRequest
 
@@ -88,6 +90,7 @@ class _FakeController:
             default_gripper_kp=5.0,
             default_gripper_kd=0.2,
             controller_dt=0.002,
+            gravity_compensation=True,
         )
         self.gain = _FakeGain(6)
         self.calls: list[str] = []
@@ -194,6 +197,26 @@ def test_sdk_move_eef_ramps_default_motion_gain_after_damping():
     assert controller.gain.gripper_kp == pytest.approx(controller.config.default_gripper_kp)
 
 
+def test_sdk_zero_gravity_drag_syncs_current_pose_and_sets_low_gain():
+    # 进入 zero_gravity_drag 前要先把目标同步到当前姿态，
+    # 再把 gain 拉到很低的 profile，而不是直接掉回纯 damping。
+    adapter = Arx5SDKAdapter(resume_gain_duration_s=0.006, sleep_fn=lambda _: None)
+    controller = _FakeController()
+    adapter._sdk = _FakeSDK()
+    adapter._controller = controller
+    adapter._mode = ArmMode.IDLE
+
+    response = adapter.zero_gravity_drag()
+
+    assert response.status.value == "completed"
+    assert response.state is not None
+    assert response.state.mode.value == "zero_gravity_drag"
+    assert controller.calls[0] == "set_eef_cmd"
+    assert controller.gain.kp() == pytest.approx([10.0, 10.0, 10.0, 6.0, 4.0, 3.0])
+    assert controller.gain.kd() == pytest.approx([0.75, 0.75, 0.75, 0.15, 0.15, 0.15])
+    assert response.detail["gravity_compensation_enabled"] is True
+
+
 def test_sdk_connect_prefers_project_x5_camera_urdf_by_default(monkeypatch, tmp_path):
     # X5 是当前项目的带相机主模型。
     # 调用方没有显式传 URDF 时，adapter 自动优先使用项目侧模型，避免继续读 SDK wheel 内的零 payload 版本。
@@ -240,3 +263,29 @@ def test_sdk_connect_explicit_urdf_path_overrides_project_default(monkeypatch, t
     assert response.status.value == "completed"
     assert _FakeConnectSDK.last_controller is not None
     assert _FakeConnectSDK.last_controller.robot_config.urdf_path == str(explicit_urdf.resolve())
+
+
+def test_sdk_connect_applies_saved_gripper_calibration(monkeypatch, tmp_path):
+    # 旧的临时 CLI 覆盖参数已经删除。
+    # 现在应当由项目侧标定文件在 connect 阶段自动写入 SDK robot_config。
+    project_urdf = tmp_path / "X5_camera.urdf"
+    project_urdf.write_text("<robot name='x5_camera'/>", encoding="utf-8")
+    monkeypatch.setattr(Arx5SDKAdapter, "_DEFAULT_X5_CAMERA_URDF", project_urdf)
+    monkeypatch.setattr(sdk_module.importlib, "import_module", lambda name: _FakeConnectSDK)
+    store = GripperCalibrationStore(tmp_path / "calibration")
+    store.save(
+        GripperCalibration(
+            model="X5",
+            gripper_open_readout=-3.4,
+            gripper_width=0.082,
+            source="test",
+        )
+    )
+
+    adapter = Arx5SDKAdapter(model="X5", calibration_store=store)
+    response = adapter.connect()
+
+    assert response.status.value == "completed"
+    assert _FakeConnectSDK.last_controller is not None
+    assert _FakeConnectSDK.last_controller.robot_config.gripper_open_readout == pytest.approx(-3.4)
+    assert _FakeConnectSDK.last_controller.robot_config.gripper_width == pytest.approx(0.082)

@@ -82,7 +82,16 @@ class ArmCommandExecutor:
             if self._deadman_was_active:
                 self._reset_teleop_target()
                 self._deadman_was_active = False
-                return self.damping()
+                # 默认放手后不再直接掉到纯 damping。
+                # 新默认是“零重力拖动”：
+                # - 保留 SDK 启动时已有的 gravity compensation；
+                # - 把增益降到很低，便于继续手推；
+                # - 但 X 键和 teleop 退出时仍保留真正的 damping 作为硬安全落态。
+                return self.apply_debug_profile(
+                    DebugProfileRequest(
+                        name=DebugProfileName.ZERO_GRAVITY_DRAG,
+                    )
+                )
             return self.state()
         # 第三类命令：正常 teleop 增量控制。
         validation = self.guard.validate_teleop(command)

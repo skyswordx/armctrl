@@ -12,6 +12,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Protocol
 
+from armctrl.calibration.models import apply_gripper_calibration
+from armctrl.calibration.store import GripperCalibrationStore
 from armctrl.identification.models import JointSample, TrajectoryPoint
 from armctrl.protocol.enums import CommandStatus, ErrorCode
 from armctrl.protocol.errors import ArmctrlError
@@ -121,12 +123,14 @@ class Arx5JointRobotIO:
         urdf_path: str | None = None,
         log_level: str = "WARNING",
         start_delay_s: float = 0.20,
+        calibration_store: GripperCalibrationStore | None = None,
     ) -> None:
         self.model = model
         self.interface = interface
         self.urdf_path = urdf_path
         self.log_level = log_level
         self.start_delay_s = float(start_delay_s)
+        self._calibration_store = calibration_store or GripperCalibrationStore()
         self.dof = 6
         self._sdk = None
         self._controller = None
@@ -138,6 +142,9 @@ class Arx5JointRobotIO:
             resolved_urdf = self._resolve_urdf_path()
             if resolved_urdf is not None:
                 robot_config.urdf_path = str(resolved_urdf)
+            # 采集链路也必须读项目侧标定文件。
+            # 否则 teleop 和 identification 看到的 gripper 宽度、方向会不一致。
+            apply_gripper_calibration(robot_config, self._calibration_store.load(self.model))
             self.dof = int(robot_config.joint_dof)
             controller_config = self._sdk.ControllerConfigFactory.get_instance().get_config(
                 "joint_controller",
@@ -253,5 +260,9 @@ def build_joint_backend(
     if adapter == "fake":
         return FakeJointRobotIO(dof=dof, model=model)
     if adapter == "sdk":
-        return Arx5JointRobotIO(model=model, interface=interface, urdf_path=urdf_path)
+        return Arx5JointRobotIO(
+            model=model,
+            interface=interface,
+            urdf_path=urdf_path,
+        )
     raise ArmctrlError(ErrorCode.INVALID_REQUEST, f"unsupported identification adapter {adapter}")
