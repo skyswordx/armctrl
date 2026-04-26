@@ -43,7 +43,7 @@ def test_debug_profile_requires_maintenance():
     registry = DebugProfileRegistry.default()
     guard = SafetyGuard(MotionLimits(), registry)
     request = DebugProfileRequest(
-        name=DebugProfileName.LOW_GAIN_PASSIVE,
+        name=DebugProfileName.RESET_HOME,
         maintenance=False,
         confirm=False,
     )

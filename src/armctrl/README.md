@@ -46,7 +46,7 @@
 - 当前 deadman 松手后的默认落态已经改成 `zero_gravity_drag`。
   它会保留启动时已有的重力补偿，并把增益降到很低，手感比纯 `damping` 更轻。
   真正的退出安全态仍然保留为 `damping`。
-- `zero_gravity_drag`、`low_gain_passive`、`compliance_slow` 这些 ARX5 专属增益 profile
+- `teleop` 和 `zero_gravity_drag` 这两套 ARX5 专属增益 profile
   已经从 `sdk.py` 的流程代码中抽到 `adapters/arx5/control_profiles.py`。
   `sdk.py` 现在只负责状态切换、目标同步和 ramp，不再同时承担参数仓库职责。
 - 目前项目里凡是涉及 X5 动力学模型的路径，都尽量走同一份项目侧 URDF，

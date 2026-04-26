@@ -142,9 +142,9 @@ class XboxMapper:
         dt = self.default_dt_s if dt_s is None else float(dt_s)
         # 先处理“模式类按键”，它们优先级高于普通运动控制。
         if state.buttons.get("BTN_A", False):
-            return TeleopCommand(timestamp=now, dt_s=dt, debug_profile=DebugProfileName.LOW_GAIN_PASSIVE.value)
-        if state.buttons.get("BTN_B", False):
-            return TeleopCommand(timestamp=now, dt_s=dt, debug_profile=DebugProfileName.COMPLIANCE_SLOW.value)
+            # A 键现在不再切维护态 profile。
+            # 它的语义改成“显式恢复标准 teleop 增益”，便于从低增益拖动状态手动切回正常操控手感。
+            return TeleopCommand(timestamp=now, dt_s=dt, debug_profile=DebugProfileName.TELEOP.value)
         if state.buttons.get("BTN_X", False):
             return TeleopCommand(timestamp=now, dt_s=dt, debug_profile=DebugProfileName.DAMPING.value)
         if state.buttons.get("BTN_Y", False):

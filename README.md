@@ -238,8 +238,7 @@ uv run arx5ctl teleop-xbox \
 - 方向键：末端 `roll / pitch`
 - 左右扳机：夹爪开合
 - `X / BTN_X`：进入 `damping`
-- `A / BTN_A`：请求 `low_gain_passive`，需要 `--maintenance`
-- `B / BTN_B`：请求 `compliance_slow`，需要 `--maintenance`
+- `A / BTN_A`：恢复 `teleop` 默认增益
 - `Y / BTN_Y`：请求 `reset_home`，需要 `--maintenance`
 
 ## 模式说明

@@ -5,12 +5,12 @@ from types import SimpleNamespace
 import pytest
 
 import armctrl.adapters.arx5.sdk as sdk_module
-from armctrl.adapters.arx5.control_profiles import Arx5GainProfile, Arx5GainProfileRegistry
+from armctrl.adapters.arx5.control_profiles import Arx5GainProfile, Arx5GainProfileRegistry, JointScaleProfile
 from armctrl.adapters.arx5.sdk import Arx5SDKAdapter
 from armctrl.calibration.models import GripperCalibration
 from armctrl.calibration.store import GripperCalibrationStore
 from armctrl.protocol.enums import ArmMode, DebugProfileName
-from armctrl.protocol.models import MoveEEFRequest
+from armctrl.protocol.models import DebugProfileRequest, MoveEEFRequest
 
 
 class _FakeGain:
@@ -220,10 +220,36 @@ def test_sdk_zero_gravity_drag_syncs_current_pose_and_sets_low_gain():
     assert response.state.mode.value == "zero_gravity_drag"
     assert controller.calls[0] == "set_eef_cmd"
     assert controller.gain.kp() == pytest.approx([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-    # 当前项目里的 zero_gravity_drag 保持极低阻尼，只锁这个已落地的配置结果。
-    assert controller.gain.kd() == pytest.approx([0.00005, 0.00005, 0.00005, 0.00001, 0.00001, 0.00001])
+    # 当前项目里的 zero_gravity_drag 使用“统一缩放 + joint2/3 逐关节乘子”。
+    # X5 默认 kd=[5,5,5,1,1,1]，因此这里应得到：
+    # [5e-5, 1.5e-5, 1.5e-5, 1e-5, 1e-5, 1e-5]。
+    assert controller.gain.kd() == pytest.approx([0.00005, 0.000015, 0.000015, 0.00001, 0.00001, 0.00001])
     assert response.detail["gravity_compensation_enabled"] is True
     assert response.detail["profile_name"] == "zero_gravity_drag"
+    assert response.detail["profile_kd_scale"] == pytest.approx(0.00001)
+    assert response.detail["profile_kd_scale_per_joint"] == pytest.approx([1.0, 0.3, 0.3, 1.0, 1.0, 1.0])
+
+
+def test_sdk_teleop_profile_restores_default_gain_explicitly():
+    # `teleop` profile 现在是显式的一等入口。
+    # 它的职责不是生成新调参，而是把 SDK 默认 MIT 增益恢复到控制器里。
+    adapter = Arx5SDKAdapter(resume_gain_duration_s=0.006, sleep_fn=lambda _: None)
+    controller = _FakeController()
+    adapter._sdk = _FakeSDK()
+    adapter._controller = controller
+    adapter._mode = ArmMode.ZERO_GRAVITY_DRAG
+    controller.gain = _FakeGain([0.0] * 6, [0.00005, 0.000015, 0.000015, 0.00001, 0.00001, 0.00001], 0.0, 0.0)
+
+    response = adapter.apply_debug_profile(DebugProfileRequest(name=DebugProfileName.TELEOP))
+
+    assert response.status.value == "completed"
+    assert response.state is not None
+    assert response.state.mode.value == "teleop"
+    assert response.detail["profile_name"] == "teleop"
+    assert controller.gain.kp() == pytest.approx(controller.config.default_kp)
+    assert controller.gain.kd() == pytest.approx(controller.config.default_kd)
+    assert controller.gain.gripper_kp == pytest.approx(controller.config.default_gripper_kp)
+    assert controller.gain.gripper_kd == pytest.approx(controller.config.default_gripper_kd)
 
 
 def test_sdk_connect_prefers_project_x5_camera_urdf_by_default(monkeypatch, tmp_path):
@@ -348,3 +374,25 @@ def test_sdk_move_eef_restores_default_gain_after_nonzero_zero_gravity_profile()
     assert controller.gain.kp() == pytest.approx(controller.config.default_kp)
     assert move_response.state is not None
     assert move_response.state.mode.value == "teleop"
+
+
+def test_profile_registry_supports_uniform_plus_per_joint_kd_scaling():
+    # 这个测试锁住新的 profile 表达能力：
+    # 既保留统一缩放，又允许只对某几个关节做二次乘子修正。
+    registry = Arx5GainProfileRegistry(
+        [
+            Arx5GainProfile(
+                name=DebugProfileName.ZERO_GRAVITY_DRAG,
+                label="per-joint kd tuning",
+                target_mode=ArmMode.ZERO_GRAVITY_DRAG,
+                kp_scale=0.0,
+                kd_scale=JointScaleProfile(uniform=0.1, per_joint=(1.0, 0.5, 0.25, 1.0, 1.0, 1.0)),
+                gripper_kp_scale=0.0,
+                gripper_kd_scale=0.0,
+            )
+        ]
+    )
+    gain = registry.build_gain(_FakeSDK, _FakeController().config, DebugProfileName.ZERO_GRAVITY_DRAG)
+
+    assert gain.kp() == pytest.approx([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+    assert gain.kd() == pytest.approx([0.5, 0.25, 0.125, 0.1, 0.1, 0.1])

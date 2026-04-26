@@ -72,8 +72,7 @@ CONTROL_HINTS = (
     "方向键上下：末端 pitch 小步旋转。",
     "左右扳机：夹爪开合小步控制。",
     "X / BTN_X：切到 damping。",
-    "A / BTN_A：请求 low_gain_passive，需要维护权限。",
-    "B / BTN_B：请求 compliance_slow，需要维护权限。",
+    "A / BTN_A：恢复 teleop 默认增益。",
     "Y / BTN_Y：请求 reset_home，需要维护权限。",
     "SELECT / BTN_SELECT：请求 gravity_compensation_startup，仅用于启动前检查。",
 )

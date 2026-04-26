@@ -633,7 +633,7 @@ armctrl/
 3. 用 `arx5ctl damping/cancel --adapter sdk` 验证安全态切换。
 4. 找到 Xbox 的 `/dev/input/by-id/` 事件设备，先用 fake adapter 读真实手柄事件。
 5. 进入实机低速 Xbox jog，只允许 `RB` deadman、毫米级末端 jog、松开后阻尼。
-6. 维护模式下逐项验证 `low_gain_passive`、`compliance_slow` 和 `reset_home`。
+6. 维护模式下逐项验证 `reset_home`，并验证 `teleop <-> zero_gravity_drag <-> damping` 切换。
 7. 稳定后再补 `src/armctrl/client.py`、OpenClaw 接入和 daemon 服务化。
 
 这个顺序先固定边界、测试和安全策略，再逐步引入真实硬件和高级控制。

@@ -47,9 +47,8 @@ class ErrorCode(StrEnum):
 
 class DebugProfileName(StrEnum):
     # profile 名称既用于 CLI 参数，也用于手柄快捷键映射。
+    TELEOP = "teleop"
     ZERO_GRAVITY_DRAG = "zero_gravity_drag"
     DAMPING = "damping"
     RESET_HOME = "reset_home"
-    LOW_GAIN_PASSIVE = "low_gain_passive"
-    COMPLIANCE_SLOW = "compliance_slow"
     GRAVITY_COMPENSATION_STARTUP = "gravity_compensation_startup"

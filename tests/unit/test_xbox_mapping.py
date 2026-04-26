@@ -110,12 +110,12 @@ def test_x_button_requests_damping_profile():
     assert command.debug_profile == "damping"
 
 
-def test_a_button_requests_low_gain_profile():
-    # A 键触发低增益被动模式请求。
+def test_a_button_requests_teleop_profile():
+    # A 键显式恢复标准 teleop 增益。
     mapper = XboxMapper()
     state = XboxState(buttons={"BTN_A": True})
     command = mapper.to_command(state, now=1.0)
-    assert command.debug_profile == "low_gain_passive"
+    assert command.debug_profile == "teleop"
 
 
 def test_event_runner_moves_fake_adapter_and_damps_at_exit():
@@ -220,6 +220,7 @@ def test_control_hints_cover_buttons_and_motion_mapping():
     assert "右摇杆左右" in joined
     assert "方向键" in joined
     assert "A / BTN_A" in joined
+    assert "low_gain_passive" not in joined
     assert "SELECT / BTN_SELECT" in joined
 
 

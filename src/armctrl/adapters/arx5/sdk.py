@@ -215,13 +215,13 @@ class Arx5SDKAdapter:
             )
         try:
             controller = self._require_controller()
-            # 从 damping / zero_gravity_drag / maintenance 恢复到 teleop 之前，
+            # 从 damping / zero_gravity_drag 等非 teleop 状态恢复到 teleop 之前，
             # 先把 SDK 控制器内部的 EEF 插值目标对齐到当前实测状态。
             # 只在 executor 侧重置积分目标还不够：
             # 如果 SDK 内部还留着上一段模式的旧目标，单纯恢复 gain 就可能先朝旧目标抖一下。
             self._prepare_teleop_takeover(controller)
             # SDK 在 connect 和 set_to_damping 之后默认可能处在 “kp=0 的阻尼态”。
-            # 这里不再瞬间恢复默认增益，而是模仿 reset_to_home 的做法按控制周期渐变，
+            # 这里不再瞬间恢复 teleop profile，而是模仿 reset_to_home 的做法按控制周期渐变，
             # 避免从零刚度 damping 切回高刚度 cartesian 控制时整机抖一下。
             # 这也是这轮手柄排障里确认过的问题：
             # 如果从 damping 态直接 `set_eef_cmd`，终端看起来命令发出去了，
@@ -270,12 +270,17 @@ class Arx5SDKAdapter:
         if self._mode == ArmMode.TELEOP:
             return
         current_gain = controller.get_gain()
-        default_gain = self._build_default_gain(controller.get_controller_config())
-        if self._gain_matches(current_gain, default_gain):
+        teleop_gain = self._build_teleop_gain(controller.get_controller_config())
+        if self._gain_matches(current_gain, teleop_gain):
             return
-        self._ramp_gain(controller, current_gain, default_gain, controller.get_controller_config())
+        self._ramp_gain(controller, current_gain, teleop_gain, controller.get_controller_config())
 
-    def _build_default_gain(self, controller_config):
+    def _build_teleop_gain(self, controller_config):
+        # 这里优先走显式的 `TELEOP` profile，让“恢复标准操控增益”本身成为可配置入口。
+        # 同时保留一个兼容兜底：如果调用方构造了只含局部 profile 的自定义 registry，
+        # 例如单测里只覆盖 zero_gravity_drag，teleop 仍然回到 SDK 原始默认增益。
+        if self._gain_profiles.has(DebugProfileName.TELEOP):
+            return self._gain_profiles.build_gain(self._sdk, controller_config, DebugProfileName.TELEOP)
         return self._sdk.Gain(
             controller_config.default_kp,
             controller_config.default_kd,
@@ -330,8 +335,12 @@ class Arx5SDKAdapter:
                 "gravity_compensation_enabled": bool(getattr(controller_config, "gravity_compensation", False)),
                 "profile_name": profile.name.value,
                 "profile_label": profile.label,
-                "profile_kp_scale": profile.kp_scale,
-                "profile_kd_scale": profile.kd_scale,
+                # 这里继续保留统一缩放字段，方便旧脚本和 GUI 直接读一个数字。
+                # 如果 profile 还带逐关节修正，再额外暴露 `*_per_joint`。
+                "profile_kp_scale": profile.kp_scale.uniform,
+                "profile_kd_scale": profile.kd_scale.uniform,
+                "profile_kp_scale_per_joint": list(profile.kp_scale.per_joint) if profile.kp_scale.per_joint is not None else None,
+                "profile_kd_scale_per_joint": list(profile.kd_scale.per_joint) if profile.kd_scale.per_joint is not None else None,
                 "profile_gripper_kp_scale": profile.gripper_kp_scale,
                 "profile_gripper_kd_scale": profile.gripper_kd_scale,
             }
@@ -375,6 +384,8 @@ class Arx5SDKAdapter:
             controller = self._require_controller()
             # 这里显式写成 if/elif，而不是字典分派。
             # 原因是不同 profile 的副作用很不一样，展开写更利于新手阅读和之后加保护逻辑。
+            if request.name == DebugProfileName.TELEOP:
+                return self._apply_gain_profile(DebugProfileName.TELEOP)
             if request.name == DebugProfileName.ZERO_GRAVITY_DRAG:
                 return self.zero_gravity_drag()
             if request.name == DebugProfileName.DAMPING:
@@ -382,10 +393,6 @@ class Arx5SDKAdapter:
             if request.name == DebugProfileName.RESET_HOME:
                 controller.reset_to_home()
                 self._mode = ArmMode.IDLE
-            elif request.name == DebugProfileName.LOW_GAIN_PASSIVE:
-                return self._apply_gain_profile(DebugProfileName.LOW_GAIN_PASSIVE)
-            elif request.name == DebugProfileName.COMPLIANCE_SLOW:
-                return self._apply_gain_profile(DebugProfileName.COMPLIANCE_SLOW)
             elif request.name == DebugProfileName.GRAVITY_COMPENSATION_STARTUP:
                 # 这个 profile 不是运行期热切换项。
                 # 用户如果要切到重补，应当在控制器构造前通过参数决定。

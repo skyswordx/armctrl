@@ -27,4 +27,4 @@
 2. 第二拍开始才把摇杆增量累加到这条基线上。
 
 这样做是为了让手柄层、executor 积分状态和 SDK 内部控制目标先重新对齐，
-避免从 `damping`、`zero_gravity_drag` 或其他 maintenance profile 切回时出现跳变。
+避免从 `damping`、`zero_gravity_drag` 或其他非 `teleop` 状态切回时出现跳变。
