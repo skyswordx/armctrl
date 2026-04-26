@@ -5,8 +5,7 @@ from math import fabs
 from armctrl.protocol.enums import ErrorCode
 from armctrl.protocol.errors import ValidationResult
 from armctrl.protocol.models import DebugProfileRequest, MoveEEFRequest, TeleopCommand
-from armctrl.safety.debug_profiles import DebugProfileRegistry
-from armctrl.safety.profiles import MotionLimits
+from armctrl.safety.profiles import DebugProfileRegistry, MotionLimits
 
 
 class SafetyGuard:

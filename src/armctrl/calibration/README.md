@@ -15,7 +15,7 @@
   - 负责 `configs/calibration/gripper/<model>.json` 的读写。
 - `gripper.py`
   - 复用 SDK `calibrate_gripper()`；
-  - 在终端补充开口宽度输入；
+  - 在终端补充 SDK 打印值和开口宽度输入；
   - 保存最终标定结果。
 
 ## 实现思路
@@ -30,7 +30,13 @@
 ## 当前约束
 
 - Python 绑定没有直接暴露底层 CAN 原始电机消息；
-- 但 SDK 暴露了 `JointState` 和 `RobotConfig`；
-- 因此可以用 SDK 源码里的换算公式反推出 fully-open 的原始电机读数。
+- 可以用 SDK 源码里的换算公式从 `JointState` 反推出电机读数；
+- 但 wizard 流程里不再拿这个反推值做最终保存。
+
+这轮排障确认过两个关键细节：
+
+1. `Fully-open joint position readout` 以 SDK 终端打印值为准；
+2. wizard 构造 joint controller 时要关闭 `background_send_recv`，
+   否则旧夹爪配置可能在校准刚结束时触发一次 SDK 合法性检查，导致还没保存新值就先进入 emergency。
 
 这样可以不改 vendor SDK，也能把项目侧标定闭环做完整。

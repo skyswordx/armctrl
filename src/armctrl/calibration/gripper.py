@@ -31,10 +31,10 @@ def derive_gripper_motor_readout(joint_state, robot_config) -> float:
     因此反推有：
     `angle_actual_rad = gripper_pos / gripper_width * gripper_open_readout`
 
-    这个反推很关键。
-    Python 绑定没有直接暴露底层 CAN 原始电机消息，
-    但只要控制器已经成功构造，就能从 `JointState` 和 `RobotConfig`
-    还原当前的原始角度读数。
+    这个反推只适合做离线分析或诊断。
+    夹爪标定 wizard 结束后不能再依赖这个值做最终保存，
+    因为 SDK 可能会在恢复后台线程后立刻按旧配置做一次位置合法性检查，
+    这时 `JointState` 已经不再代表“刚刚 fully-open 时 SDK 打印出来的权威原始读数”。
     """
 
     width = float(robot_config.gripper_width)
@@ -53,6 +53,20 @@ def _parse_width_text(text: str, default_width_m: float) -> float:
     if value > 1.0:
         return value / 1000.0
     return value
+
+
+def _parse_required_float(text: str, *, field_name: str) -> float:
+    """解析必须输入的浮点数。
+
+    这里专门给 wizard 里“抄 SDK 终端打印值”的场景使用。
+    标定结果如果允许空值继续保存，后续自动启动仍然会读到错误配置，
+    所以这里宁可直接报错，也不悄悄沿用旧值。
+    """
+
+    raw = text.strip()
+    if not raw:
+        raise ArmctrlError(ErrorCode.INVALID_REQUEST, f"{field_name} is required")
+    return float(raw)
 
 
 class GripperCalibrationService:
@@ -144,6 +158,12 @@ class GripperCalibrationService:
 
             controller_config = sdk.ControllerConfigFactory.get_instance().get_config("joint_controller", robot_config.joint_dof)
             controller_config.gravity_compensation = False
+            # 这里显式关掉后台收发线程。
+            # 这轮排障已经确认，若 SDK 在 calibrate_gripper() 返回后立刻恢复后台线程，
+            # 旧的夹爪配置可能马上触发一次 position sanity check，
+            # 导致我们还没来得及把新标定值持久化，控制器就先进 emergency。
+            if hasattr(controller_config, "background_send_recv"):
+                controller_config.background_send_recv = False
             controller = sdk.Arx5JointController(robot_config, controller_config, interface)
         except Exception as exc:
             error = ArmctrlError(
@@ -161,15 +181,19 @@ class GripperCalibrationService:
         # 并在闭合位置调用 reset_zero_readout。
         controller.calibrate_gripper()
 
-        joint_state = controller.get_joint_state()
         runtime_robot_config = controller.get_robot_config()
-        open_readout = derive_gripper_motor_readout(joint_state, runtime_robot_config)
-
         default_width_m = float(runtime_robot_config.gripper_width)
         self._output_fn(
             "SDK 已完成零点校准。"
-            f" 当前推导的 fully-open motor readout = {open_readout:.6f} rad，"
-            f"当前 gripper_width = {default_width_m:.6f} m。"
+            " 请把 SDK 刚才打印的 `Fully-open joint position readout: ...` 数值输入下面这个提示。"
+            " 这里不再从 JointState 反推，避免旧配置恢复后把标定值算错。"
+        )
+        open_readout_text = self._input_fn(
+            "请输入 SDK 终端打印的 fully-open joint position readout："
+        )
+        open_readout = _parse_required_float(
+            open_readout_text,
+            field_name="fully-open joint position readout",
         )
         width_text = self._input_fn(
             "请输入完全张开时的真实开口宽度，单位米；如果直接回车则沿用当前值。"
@@ -197,7 +221,7 @@ class GripperCalibrationService:
                 "calibration": calibration.to_dict(),
                 "wizard": {
                     "sdk_default_gripper_width": default_width_m,
-                    "derived_open_motor_readout": open_readout,
+                    "sdk_reported_open_motor_readout": open_readout,
                     "closed_motor_readout_after_zero": 0.0,
                 },
             },

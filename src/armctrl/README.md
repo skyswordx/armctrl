@@ -23,10 +23,11 @@
 1. `protocol` 定义数据契约；
 2. `calibration` 保存项目经验参数，并在连接 SDK 前统一应用；
 3. `adapters` 连接外部世界；
-4. `daemon/executor.py` 作为统一入口调度；
-5. `safety` 在执行前做拒绝和约束；
-6. `cli` 和 `teleop` 负责与人交互。
-7. `identification` 负责关节空间辨识数据链路，与实时 teleop 分开。
+4. `adapters/arx5/control_profiles.py` 负责 ARX5 专属的 gain profile 定义；
+5. `daemon/executor.py` 作为统一入口调度；
+6. `safety/profiles.py` 统一保存运动限值和 debug profile 元信息；
+7. `cli` 和 `teleop` 负责与人交互。
+8. `identification` 负责关节空间辨识数据链路，与实时 teleop 分开。
 
 这样做的好处是 bringup 阶段即便硬件、输入设备或 UI 形态变化，
 中间的数据契约和执行骨架仍然稳定。
@@ -39,9 +40,15 @@
   所以 payload 只能并入 `link6 <inertial>`，写在 `eef_link` 上不会进入重力补偿。
 - `damping` 是安全阻尼态，不是保持姿态的重力补偿态。
   从 `damping` 恢复 teleop 时需要先渐变恢复增益，再发送新的末端命令。
+- 当前 teleop 接管新增了一条更严格的安全语义：
+  从任意非 `teleop` 状态恢复时，第一拍先把当前实测末端/夹爪状态同步成新的 teleop 基线，
+  并下发一条“保持当前位置”的命令；第二拍起才开始累加摇杆增量。
 - 当前 deadman 松手后的默认落态已经改成 `zero_gravity_drag`。
   它会保留启动时已有的重力补偿，并把增益降到很低，手感比纯 `damping` 更轻。
   真正的退出安全态仍然保留为 `damping`。
+- `zero_gravity_drag`、`low_gain_passive`、`compliance_slow` 这些 ARX5 专属增益 profile
+  已经从 `sdk.py` 的流程代码中抽到 `adapters/arx5/control_profiles.py`。
+  `sdk.py` 现在只负责状态切换、目标同步和 ramp，不再同时承担参数仓库职责。
 - 目前项目里凡是涉及 X5 动力学模型的路径，都尽量走同一份项目侧 URDF，
   避免 teleop、辨识采集、离线分析各自读到不同模型。
 - 夹爪方向和开口宽度的修正，也已经从“启动时临时传参”改成项目侧标定文件。

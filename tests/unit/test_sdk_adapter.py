@@ -5,10 +5,11 @@ from types import SimpleNamespace
 import pytest
 
 import armctrl.adapters.arx5.sdk as sdk_module
+from armctrl.adapters.arx5.control_profiles import Arx5GainProfile, Arx5GainProfileRegistry
 from armctrl.adapters.arx5.sdk import Arx5SDKAdapter
 from armctrl.calibration.models import GripperCalibration
 from armctrl.calibration.store import GripperCalibrationStore
-from armctrl.protocol.enums import ArmMode
+from armctrl.protocol.enums import ArmMode, DebugProfileName
 from armctrl.protocol.models import MoveEEFRequest
 
 
@@ -182,6 +183,7 @@ def test_sdk_move_eef_ramps_default_motion_gain_after_damping():
     assert damping_response.status.value == "completed"
     assert controller.gain.kp() == [0.0] * 6
     set_gain_calls_before = controller.calls.count("set_gain")
+    calls_before = len(controller.calls)
 
     response = adapter.move_eef(
         MoveEEFRequest(
@@ -191,8 +193,13 @@ def test_sdk_move_eef_ramps_default_motion_gain_after_damping():
     )
 
     assert response.status.value == "completed"
+    new_calls = controller.calls[calls_before:]
+    # 从 damping 接回 teleop 时，第一步必须先把 SDK 内部目标同步到当前实测姿态。
+    # 这样后面的 gain ramp 才不会先去追历史残留目标。
+    assert new_calls[0] == "set_eef_cmd"
     assert controller.calls.count("set_gain") == set_gain_calls_before + 3
-    assert controller.calls[-1] == "set_eef_cmd"
+    assert new_calls[-1] == "set_eef_cmd"
+    assert new_calls.count("set_eef_cmd") == 2
     assert controller.gain.kp() == pytest.approx(controller.config.default_kp)
     assert controller.gain.gripper_kp == pytest.approx(controller.config.default_gripper_kp)
 
@@ -212,9 +219,11 @@ def test_sdk_zero_gravity_drag_syncs_current_pose_and_sets_low_gain():
     assert response.state is not None
     assert response.state.mode.value == "zero_gravity_drag"
     assert controller.calls[0] == "set_eef_cmd"
-    assert controller.gain.kp() == pytest.approx([10.0, 10.0, 10.0, 6.0, 4.0, 3.0])
-    assert controller.gain.kd() == pytest.approx([0.75, 0.75, 0.75, 0.15, 0.15, 0.15])
+    assert controller.gain.kp() == pytest.approx([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+    # 当前项目里的 zero_gravity_drag 保持极低阻尼，只锁这个已落地的配置结果。
+    assert controller.gain.kd() == pytest.approx([0.00005, 0.00005, 0.00005, 0.00001, 0.00001, 0.00001])
     assert response.detail["gravity_compensation_enabled"] is True
+    assert response.detail["profile_name"] == "zero_gravity_drag"
 
 
 def test_sdk_connect_prefers_project_x5_camera_urdf_by_default(monkeypatch, tmp_path):
@@ -289,3 +298,53 @@ def test_sdk_connect_applies_saved_gripper_calibration(monkeypatch, tmp_path):
     assert _FakeConnectSDK.last_controller is not None
     assert _FakeConnectSDK.last_controller.robot_config.gripper_open_readout == pytest.approx(-3.4)
     assert _FakeConnectSDK.last_controller.robot_config.gripper_width == pytest.approx(0.082)
+
+
+def test_sdk_move_eef_restores_default_gain_after_nonzero_zero_gravity_profile():
+    # 这个回归测试对应实机上的第二次 RB 按下/松开问题。
+    # 旧逻辑只在“kp 全零”时才恢复 teleop 默认增益，
+    # 如果 zero_gravity_drag 本身是非零低增益 profile，就会把模式切换判断错。
+    custom_profiles = Arx5GainProfileRegistry(
+        [
+            Arx5GainProfile(
+                name=DebugProfileName.ZERO_GRAVITY_DRAG,
+                label="test nonzero zero-gravity",
+                target_mode=ArmMode.ZERO_GRAVITY_DRAG,
+                kp_scale=0.05,
+                kd_scale=0.15,
+                gripper_kp_scale=0.2,
+                gripper_kd_scale=0.2,
+            )
+        ]
+    )
+    adapter = Arx5SDKAdapter(
+        resume_gain_duration_s=0.006,
+        sleep_fn=lambda _: None,
+        gain_profiles=custom_profiles,
+    )
+    controller = _FakeController()
+    adapter._sdk = _FakeSDK()
+    adapter._controller = controller
+    adapter._mode = ArmMode.IDLE
+
+    drag_response = adapter.zero_gravity_drag()
+    assert drag_response.status.value == "completed"
+    assert controller.gain.kp() == pytest.approx([10.0, 10.0, 10.0, 6.0, 4.0, 3.0])
+    calls_before = len(controller.calls)
+
+    move_response = adapter.move_eef(
+        MoveEEFRequest(
+            pose_6d=(0.31, 0.0, 0.2, 0.0, 0.0, 0.0),
+            gripper_pos=0.01,
+        )
+    )
+
+    assert move_response.status.value == "completed"
+    new_calls = controller.calls[calls_before:]
+    # 从非 teleop 低增益态恢复时，也要先同步一次当前实测目标，再恢复默认 gain。
+    assert new_calls[0] == "set_eef_cmd"
+    assert new_calls[-1] == "set_eef_cmd"
+    assert new_calls.count("set_eef_cmd") == 2
+    assert controller.gain.kp() == pytest.approx(controller.config.default_kp)
+    assert move_response.state is not None
+    assert move_response.state.mode.value == "teleop"

@@ -6,6 +6,7 @@
 
 - `fake.py`：离线仿真适配器；
 - `sdk.py`：真实方舟 SDK 适配器。
+- `control_profiles.py`：ARX5 专属 gain profile 定义。
 
 ## 组件说明
 
@@ -17,6 +18,9 @@
   - 动态导入 `arx5_interface`；
   - 复用 SDK 的控制器、状态对象和调试接口；
   - 把 SDK 结果转换成 armctrl 的统一响应。
+- `control_profiles.py`
+  - 保存 `zero_gravity_drag`、`low_gain_passive`、`compliance_slow` 的 gain 缩放定义；
+  - 让 `sdk.py` 只负责模式切换流程，不再同时硬编码 profile 参数。
 
 ## 实现思路
 
@@ -37,6 +41,10 @@
 - 项目现在额外定义了 `zero_gravity_drag` profile。
   它不会关闭已有的重力补偿，而是先把目标同步到当前实测姿态，再把增益降到很低，
   用来替代 deadman 松手后的默认落态。
+- `sdk.py` 里 teleop 恢复默认增益的判断，现在按“当前模式是否已经是 `teleop`”处理，
+  不再用“kp 是否为零”猜测当前是不是 damping。
+  这是为了兼容非零低增益的 `zero_gravity_drag` profile，
+  也就是修掉“第一次 RB 松开有效，第二次状态切换不对”的问题。
 - 真正的 `damping` 仍然保留，给显式安全停机、`X` 键和 teleop 退出使用。
 - 某些近期批次的 X5 夹爪读数方向和 SDK 默认值相反。
   现在不再通过临时 CLI 参数覆盖。

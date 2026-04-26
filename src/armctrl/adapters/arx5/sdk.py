@@ -19,9 +19,10 @@ from __future__ import annotations
 
 import importlib
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from pathlib import Path
 
+from armctrl.adapters.arx5.control_profiles import Arx5GainProfileRegistry
 from armctrl.calibration.models import apply_gripper_calibration
 from armctrl.calibration.store import GripperCalibrationStore
 from armctrl.protocol.enums import ArmMode, CommandStatus, DebugProfileName, ErrorCode
@@ -51,16 +52,6 @@ class Arx5SDKAdapter:
     # 原因不是“想覆盖 SDK”，而是 SDK 默认 `X5.urdf` 没有带相机 payload。
     # 如果这里不切过去，实机虽然能连通，但重力补偿一直按空载模型算。
     _DEFAULT_X5_CAMERA_URDF = _PROJECT_ROOT / "configs" / "models" / "X5_camera.urdf"
-    # 这组比例不是 SDK 官方值，而是 armctrl 为“手推调试”额外定义的工程 profile。
-    # 目标不是精准控制，而是：
-    # 1. 保留重力补偿；
-    # 2. 比 set_to_damping() 更轻；
-    # 3. 又不至于完全失去姿态记忆。
-    _ZERO_GRAVITY_KP_SCALE = 0.0
-    _ZERO_GRAVITY_KD_SCALE = 0.1
-    _ZERO_GRAVITY_GRIPPER_KP_SCALE = 0.0
-    _ZERO_GRAVITY_GRIPPER_KD_SCALE = 0.0
-
     def __init__(
         self,
         model: str = "X5",
@@ -71,6 +62,7 @@ class Arx5SDKAdapter:
         resume_gain_duration_s: float = 0.4,
         sleep_fn: Callable[[float], None] = time.sleep,
         calibration_store: GripperCalibrationStore | None = None,
+        gain_profiles: Arx5GainProfileRegistry | None = None,
     ) -> None:
         # 这些配置项全部保留为显式参数，原因是 bringup 时经常需要：
         # - 换模型；
@@ -87,6 +79,8 @@ class Arx5SDKAdapter:
         # 夹爪标定值不再从临时命令行参数进入。
         # 这里统一读取项目侧标定文件，让 health / teleop / ident 使用同一份配置。
         self._calibration_store = calibration_store or GripperCalibrationStore()
+        # ARX5 的 gain profile 单独抽到 registry，避免模式参数散在流程代码里。
+        self._gain_profiles = gain_profiles or Arx5GainProfileRegistry.default()
         # `_sdk` 保存动态导入的模块对象，`_controller` 保存真实控制器实例。
         self._sdk = None
         self._controller = None
@@ -221,6 +215,11 @@ class Arx5SDKAdapter:
             )
         try:
             controller = self._require_controller()
+            # 从 damping / zero_gravity_drag / maintenance 恢复到 teleop 之前，
+            # 先把 SDK 控制器内部的 EEF 插值目标对齐到当前实测状态。
+            # 只在 executor 侧重置积分目标还不够：
+            # 如果 SDK 内部还留着上一段模式的旧目标，单纯恢复 gain 就可能先朝旧目标抖一下。
+            self._prepare_teleop_takeover(controller)
             # SDK 在 connect 和 set_to_damping 之后默认可能处在 “kp=0 的阻尼态”。
             # 这里不再瞬间恢复默认增益，而是模仿 reset_to_home 的做法按控制周期渐变，
             # 避免从零刚度 damping 切回高刚度 cartesian 控制时整机抖一下。
@@ -250,23 +249,39 @@ class Arx5SDKAdapter:
             self._mode = ArmMode.FAULTED
             return CommandResponse(CommandStatus.FAULTED, "sdk eef command failed", error=self._last_error)
 
+    def _prepare_teleop_takeover(self, controller) -> None:
+        # `teleop` 的接管分两步：
+        # 1. 先把 SDK 内部当前位置目标覆盖成当前实测值；
+        # 2. 再把 gain 从当前模式平滑恢复到 cartesian 默认值。
+        #
+        # 这样无论前一态是 damping、zero_gravity_drag 还是其他低增益 profile，
+        # 恢复刚度期间控制器看到的参考点都已经是“此刻机械臂真实所在的位置”，
+        # 不会先去追一条历史残留目标。
+        if self._mode != ArmMode.TELEOP:
+            self._sync_eef_target_to_current_state(controller)
+        self._ensure_motion_gain(controller)
+
     def _ensure_motion_gain(self, controller) -> None:
-        # 只在当前位置控制增益确实为零时恢复默认增益。
-        # 这样不会覆盖 low_gain / compliance 这类非零增益 profile，
-        # 但能把 connect 后初始阻尼态、deadman 释放后的 damping 态重新切回 cartesian 控制。
+        # 这里不再用“kp 是否为零”猜测当前是不是 damping。
+        # 真实使用里，zero_gravity_drag 也可能是非零 kp 的低增益 profile。
+        # 所以 teleop 恢复必须按“当前模式是否已经是 TELEOP”判断。
         if not hasattr(controller, "get_gain") or not hasattr(controller, "set_gain"):
             return
-        current_gain = controller.get_gain()
-        if not self._is_zero_gain(current_gain):
+        if self._mode == ArmMode.TELEOP:
             return
-        controller_config = controller.get_controller_config()
-        default_gain = self._sdk.Gain(
+        current_gain = controller.get_gain()
+        default_gain = self._build_default_gain(controller.get_controller_config())
+        if self._gain_matches(current_gain, default_gain):
+            return
+        self._ramp_gain(controller, current_gain, default_gain, controller.get_controller_config())
+
+    def _build_default_gain(self, controller_config):
+        return self._sdk.Gain(
             controller_config.default_kp,
             controller_config.default_kd,
             controller_config.default_gripper_kp,
             controller_config.default_gripper_kd,
         )
-        self._ramp_gain(controller, current_gain, default_gain, controller_config)
 
     def _ramp_gain(self, controller, start_gain, target_gain, controller_config) -> None:
         # SDK 的 reset_to_home 在 controller_dt 节拍下线性插值 gain。
@@ -299,46 +314,54 @@ class Arx5SDKAdapter:
         controller.set_eef_cmd(eef_cmd)
         self._sleep_fn(max(controller_dt, 0.002))
 
-    def _build_zero_gravity_drag_gain(self, controller_config):
-        return self._sdk.Gain(
-            [float(value) * self._ZERO_GRAVITY_KP_SCALE for value in controller_config.default_kp],
-            [float(value) * self._ZERO_GRAVITY_KD_SCALE for value in controller_config.default_kd],
-            float(controller_config.default_gripper_kp) * self._ZERO_GRAVITY_GRIPPER_KP_SCALE,
-            float(controller_config.default_gripper_kd) * self._ZERO_GRAVITY_GRIPPER_KD_SCALE,
-        )
-
-    def zero_gravity_drag(self) -> CommandResponse:
+    def _apply_gain_profile(self, profile_name: DebugProfileName) -> CommandResponse:
         try:
             controller = self._require_controller()
             controller_config = controller.get_controller_config()
-            self._sync_eef_target_to_current_state(controller)
             current_gain = controller.get_gain()
-            target_gain = self._build_zero_gravity_drag_gain(controller_config)
-            self._ramp_gain(controller, current_gain, target_gain, controller_config)
-            self._mode = ArmMode.ZERO_GRAVITY_DRAG
+            profile = self._gain_profiles.get(profile_name)
+            if profile.sync_eef_target:
+                self._sync_eef_target_to_current_state(controller)
+            target_gain = self._gain_profiles.build_gain(self._sdk, controller_config, profile_name)
+            if not self._gain_matches(current_gain, target_gain):
+                self._ramp_gain(controller, current_gain, target_gain, controller_config)
+            self._mode = profile.target_mode
             detail = {
                 "gravity_compensation_enabled": bool(getattr(controller_config, "gravity_compensation", False)),
-                "profile_kp_scale": self._ZERO_GRAVITY_KP_SCALE,
-                "profile_kd_scale": self._ZERO_GRAVITY_KD_SCALE,
+                "profile_name": profile.name.value,
+                "profile_label": profile.label,
+                "profile_kp_scale": profile.kp_scale,
+                "profile_kd_scale": profile.kd_scale,
+                "profile_gripper_kp_scale": profile.gripper_kp_scale,
+                "profile_gripper_kd_scale": profile.gripper_kd_scale,
             }
             return CommandResponse(
                 CommandStatus.COMPLETED,
-                "sdk zero-gravity drag enabled",
+                f"sdk {profile.name.value} enabled",
                 state=self.get_state(),
                 detail=detail,
             )
         except Exception as exc:
             self._last_error = ArmctrlError(ErrorCode.SDK_ERROR, str(exc))
             self._mode = ArmMode.FAULTED
-            return CommandResponse(CommandStatus.FAULTED, "sdk zero-gravity drag failed", error=self._last_error)
+            return CommandResponse(CommandStatus.FAULTED, f"sdk {profile_name.value} failed", error=self._last_error)
 
-    def _is_zero_gain(self, gain) -> bool:
-        # pybind 返回的 kp 可能是 numpy array，单测里也可能是 list。
-        # 这里统一按可迭代数值处理，只要任一 kp 非零，就认为已经不是 damping 增益。
-        kp_values = gain.kp() if hasattr(gain, "kp") else ()
-        if not isinstance(kp_values, Iterable):
+    def zero_gravity_drag(self) -> CommandResponse:
+        return self._apply_gain_profile(DebugProfileName.ZERO_GRAVITY_DRAG)
+
+    def _gain_matches(self, left_gain, right_gain) -> bool:
+        # 这里做的是“是否基本相同”的数值比较，
+        # 用来避免已经在目标 profile 上时还重复 ramp 一次。
+        left_kp = tuple(float(value) for value in left_gain.kp()) if hasattr(left_gain, "kp") else ()
+        right_kp = tuple(float(value) for value in right_gain.kp()) if hasattr(right_gain, "kp") else ()
+        left_kd = tuple(float(value) for value in left_gain.kd()) if hasattr(left_gain, "kd") else ()
+        right_kd = tuple(float(value) for value in right_gain.kd()) if hasattr(right_gain, "kd") else ()
+        if left_kp != right_kp or left_kd != right_kd:
             return False
-        return max((abs(float(value)) for value in kp_values), default=0.0) <= 1e-9
+        return (
+            abs(float(getattr(left_gain, "gripper_kp", 0.0)) - float(getattr(right_gain, "gripper_kp", 0.0))) <= 1e-9
+            and abs(float(getattr(left_gain, "gripper_kd", 0.0)) - float(getattr(right_gain, "gripper_kd", 0.0))) <= 1e-9
+        )
 
     def apply_debug_profile(self, request: DebugProfileRequest) -> CommandResponse:
         if request.plan_only:
@@ -360,15 +383,9 @@ class Arx5SDKAdapter:
                 controller.reset_to_home()
                 self._mode = ArmMode.IDLE
             elif request.name == DebugProfileName.LOW_GAIN_PASSIVE:
-                # 这里直接调用 SDK 的 gain 接口。
-                # 目标不是发明新的“低增益模式”，而是复用 SDK 已验证的控制参数通道。
-                gain = controller.get_gain()
-                controller.set_gain(gain * 0.2)
-                self._mode = ArmMode.MAINTENANCE
+                return self._apply_gain_profile(DebugProfileName.LOW_GAIN_PASSIVE)
             elif request.name == DebugProfileName.COMPLIANCE_SLOW:
-                gain = controller.get_gain()
-                controller.set_gain(gain * 0.5)
-                self._mode = ArmMode.MAINTENANCE
+                return self._apply_gain_profile(DebugProfileName.COMPLIANCE_SLOW)
             elif request.name == DebugProfileName.GRAVITY_COMPENSATION_STARTUP:
                 # 这个 profile 不是运行期热切换项。
                 # 用户如果要切到重补，应当在控制器构造前通过参数决定。

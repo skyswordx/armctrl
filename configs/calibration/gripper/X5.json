@@ -1,10 +1,10 @@
 {
   "closed_motor_readout": 0.0,
-  "gripper_open_readout": 5.02117,
+  "gripper_open_readout": 4.97768,
   "gripper_width": 0.082,
   "interface": null,
   "model": "X5",
-  "notes": "from sdk calibrate stdout 2026-04-24",
+  "notes": "from sdk calibrate stdout 2026-04-26",
   "source": "manual_set",
-  "updated_at": "2026-04-24T15:08:09+00:00"
+  "updated_at": "2026-04-26T12:05:17+00:00"
 }

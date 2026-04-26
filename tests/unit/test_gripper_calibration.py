@@ -3,7 +3,7 @@
 这里重点锁住三件事：
 1. 标定文件能够稳定保存和读取；
 2. SDK adapter / joint backend 会自动应用项目侧标定；
-3. 交互式 wizard 会复用 SDK 标定流程，并把结果保存回项目配置。
+3. 交互式 wizard 会复用 SDK 标定流程，并把 SDK 终端打印值保存回项目配置。
 """
 
 from types import SimpleNamespace
@@ -116,7 +116,7 @@ def test_gripper_calibration_wizard_saves_result_and_bootstraps_from_store(tmp_p
             source="bootstrap",
         )
     )
-    prompts = iter(["", "现场记录"])
+    prompts = iter(["4.97768", "", "现场记录"])
     outputs: list[str] = []
     service = GripperCalibrationService(
         store=store,
@@ -130,9 +130,11 @@ def test_gripper_calibration_wizard_saves_result_and_bootstraps_from_store(tmp_p
     assert response.status.value == "completed"
     assert _FakeSDK.last_controller is not None
     assert _FakeSDK.last_controller.robot_config.gripper_open_readout == pytest.approx(-3.4)
+    assert _FakeSDK.last_controller.controller_config.background_send_recv is False
     saved = store.load("X5")
     assert saved is not None
-    assert saved.gripper_open_readout == pytest.approx(-1.7)
+    # wizard 现在只认 SDK 终端打印出来的 fully-open 值，不再从 JointState 反推。
+    assert saved.gripper_open_readout == pytest.approx(4.97768)
     assert saved.gripper_width == pytest.approx(0.082)
     assert saved.notes == "现场记录"
     assert outputs

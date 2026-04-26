@@ -36,7 +36,7 @@ from armctrl.identification.trajectories import (
 from armctrl.protocol.enums import AdapterKind, CommandStatus, DebugProfileName, ErrorCode
 from armctrl.protocol.errors import ArmctrlError
 from armctrl.protocol.models import CommandResponse, DebugProfileRequest, MoveEEFRequest
-from armctrl.safety.debug_profiles import DebugProfileRegistry
+from armctrl.safety.profiles import DebugProfileRegistry
 from armctrl.teleop.mapping import XboxMapper
 from armctrl.teleop.xbox import XboxDebugRunner, create_tk_dashboard, load_events, show_response_dashboard
 

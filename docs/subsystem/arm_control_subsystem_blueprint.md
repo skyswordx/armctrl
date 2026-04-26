@@ -437,7 +437,6 @@ armctrl/
       guard.py
       limits.py
       profiles.py
-      debug_profiles.py
     planning/
       eef_goal.py
       trajectory_request.py
@@ -518,7 +517,7 @@ armctrl/
 
 目标：任何运动、维护和调试命令进入执行器前都经过可测试安全检查。
 
-- 创建/修改文件：`src/armctrl/safety/limits.py`、`src/armctrl/safety/profiles.py`、`src/armctrl/safety/debug_profiles.py`、`src/armctrl/safety/guard.py`、`tests/unit/test_safety_guard.py`。
+- 创建/修改文件：`src/armctrl/safety/limits.py`、`src/armctrl/safety/profiles.py`、`src/armctrl/safety/guard.py`、`tests/unit/test_safety_guard.py`。
 - 必须复用的 SDK 能力：只把 SDK 的控制模式能力映射成权限和 profile，不复制 SDK 控制逻辑。
 - 禁止 agent 自研的内容：不在安全层生成轨迹，不用启发式绕过 SDK 限位，不给 agent 开放任意 `kp/kd/gravity_compensation` 参数。
 - 单元测试/无硬件验证：工作空间、关节范围、单步位移、速度、频率、deadman、模式权限、VLA 置信度、维护命令权限均有测试。
@@ -575,7 +574,7 @@ armctrl/
 
 - 创建/修改文件：`src/armctrl/teleop/xbox.py`、`src/armctrl/teleop/mapping.py`、`src/armctrl/teleop/filters.py`、`tests/unit/test_xbox_mapping.py`、`tests/unit/test_teleop_rate_limit.py`、`tests/unit/test_debug_profiles.py`。
 - 必须复用的 SDK 能力：手柄层只生成 `TeleopCommand`；实际运动仍走 daemon、SafetyGuard、adapter 和 SDK。
-- 禁止 agent 自研的内容：手柄层不调用 SDK，不切换 `gravity_compensation`，不直接写 `Gain`，不创建“零重力”控制器。
+- 禁止 agent 自研的内容：手柄层不调用 SDK，不切换 `gravity_compensation`，不直接写 `Gain`，不创建“零重力”控制器；ARX5 专属的 gain profile 应集中在 adapter 侧单独模块维护。
 - 单元测试/无硬件验证：deadman、死区、低通滤波、轴映射、步长限制、输入超时、退出阻尼、profile 权限均可测试。
 - 硬件验证：按 `state -> damping -> deadman -> 低速 jog -> 超时阻尼 -> cancel` 顺序验证。
 - 退出条件：A/B/X/Y 等按键只能请求命名 debug profile；重力补偿和低增益实验必须进入维护流程并记录结果。

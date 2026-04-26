@@ -39,6 +39,9 @@ class ArmCommandExecutor:
         # 而不是每一拍都从测量值重新出发。
         self._teleop_target_pose: tuple[float, ...] | None = None
         self._teleop_target_gripper: float | None = None
+        # 这个标记专门描述“下一次 deadman 按下后，第一拍要不要先做接管同步”。
+        # 语义不是“有没有缓存”，而是“当前缓存能不能继续代表真实控制基线”。
+        self._teleop_sync_required = True
         self._deadman_was_active = False
 
     def health(self) -> CommandResponse:
@@ -103,11 +106,18 @@ class ArmCommandExecutor:
                 state=self.adapter.get_state(),
             )
         state = self.adapter.get_state()
-        # 首次进入 teleop 时，用当前测量状态初始化目标。
-        if self._teleop_target_pose is None:
-            self._teleop_target_pose = state.eef.pose_6d
-        if self._teleop_target_gripper is None:
-            self._teleop_target_gripper = self.guard.limits.clamp_gripper_pos(state.eef.gripper_pos)
+        # 从非 teleop 模式恢复接管时，第一拍不直接吃摇杆增量。
+        # 必须先把“当前实测状态”覆盖成 teleop 会话的新基线，并发一条保持当前姿态的命令。
+        # 这样做的目的不是让第一拍更保守一点，而是确保三件事同时成立：
+        # 1. executor 内部积分基线等于当前实测值；
+        # 2. adapter / SDK 内部插值目标也被拉回当前实测值；
+        # 3. 第二拍开始再累加摇杆增量时，不会从旧目标突然跳过去。
+        if self._teleop_sync_required:
+            return self._bootstrap_teleop_session(state, command)
+        # 理论上正常路径里，sync 完成后这两个缓存就一定存在。
+        # 这里仍保留防御式分支，避免未来外部调用者只清掉一个字段时把状态机搞坏。
+        if self._teleop_target_pose is None or self._teleop_target_gripper is None:
+            self._sync_teleop_target_from_state(state)
         self._deadman_was_active = True
         # 这里用积分目标，而不是“当前测量值 + 本拍增量”。
         # 这么做的好处是减少反馈噪声直接进入目标命令，手感更连续。
@@ -130,6 +140,7 @@ class ArmCommandExecutor:
         if response.status is CommandStatus.COMPLETED:
             self._teleop_target_pose = target_pose
             self._teleop_target_gripper = target_gripper
+            self._teleop_sync_required = False
         return self._with_teleop_detail(response, target_pose, target_gripper, command)
 
     def apply_debug_profile(self, request: DebugProfileRequest) -> CommandResponse:
@@ -158,7 +169,46 @@ class ArmCommandExecutor:
         # 它代表“teleop 会话结束，内部目标状态作废”。
         self._teleop_target_pose = None
         self._teleop_target_gripper = None
+        self._teleop_sync_required = True
         self._deadman_was_active = False
+
+    def _sync_teleop_target_from_state(self, state) -> tuple[tuple[float, ...], float]:
+        # teleop 的安全基线统一来自“当前实测状态”，不是 home pose，也不是上一拍命令值。
+        # 夹爪这里仍然先过 safety clamp，防止现场因为读数噪声出现一个负值，
+        # 结果把下一拍 teleop 基线直接初始化到非法区间。
+        pose = state.eef.pose_6d
+        gripper = self.guard.limits.clamp_gripper_pos(state.eef.gripper_pos)
+        self._teleop_target_pose = pose
+        self._teleop_target_gripper = gripper
+        return pose, gripper
+
+    def _bootstrap_teleop_session(self, state, command: TeleopCommand) -> CommandResponse:
+        # 这一拍只做“接管同步”，不做摇杆增量累加。
+        # 现场手感上等价于：按下 deadman 后，系统先把当前位置认成新的 teleop 原点；
+        # 从下一拍开始，摇杆增量才真正叠加到这个原点上。
+        target_pose, target_gripper = self._sync_teleop_target_from_state(state)
+        response = self.move_eef(
+            MoveEEFRequest(
+                pose_6d=target_pose,
+                gripper_pos=target_gripper,
+                preview_time_s=0.1,
+                profile="xbox_teleop_slow",
+            )
+        )
+        if response.status is CommandStatus.COMPLETED:
+            self._teleop_sync_required = False
+            self._deadman_was_active = True
+        else:
+            # 接管同步如果失败，当前 teleop 会话就不能继续相信这份基线。
+            # 这里直接把内部状态作废，强制下一次重新从实测值接管。
+            self._reset_teleop_target()
+        return self._with_teleop_detail(
+            response,
+            target_pose,
+            target_gripper,
+            command,
+            teleop_sync_only=True,
+        )
 
     def _with_teleop_detail(
         self,
@@ -166,6 +216,7 @@ class ArmCommandExecutor:
         target_pose: tuple[float, ...],
         target_gripper: float,
         command: TeleopCommand,
+        teleop_sync_only: bool = False,
     ) -> CommandResponse:
         # adapter 返回的是统一响应；这里重新包装一层，把“累计目标”和“速度命令”
         # 放进 detail，供 GUI 区分“本拍增量”“累计目标”“真实反馈”。
@@ -178,6 +229,7 @@ class ArmCommandExecutor:
                 "translation_velocity_mps": list(command.translation_velocity_mps),
                 "rotation_velocity_radps": list(command.rotation_velocity_radps),
                 "gripper_velocity_mps": command.gripper_velocity_mps,
+                "teleop_sync_only": teleop_sync_only,
             }
         )
         return CommandResponse(

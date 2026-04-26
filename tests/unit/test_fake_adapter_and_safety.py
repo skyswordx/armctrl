@@ -8,9 +8,8 @@
 from armctrl.adapters.arx5.fake import FakeArx5Adapter
 from armctrl.protocol.enums import DebugProfileName
 from armctrl.protocol.models import DebugProfileRequest, MoveEEFRequest, TeleopCommand
-from armctrl.safety.debug_profiles import DebugProfileRegistry
 from armctrl.safety.guard import SafetyGuard
-from armctrl.safety.profiles import MotionLimits
+from armctrl.safety.profiles import DebugProfileRegistry, MotionLimits
 
 
 def test_fake_adapter_plan_only_does_not_move():

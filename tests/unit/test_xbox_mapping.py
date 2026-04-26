@@ -189,7 +189,8 @@ def test_snapshot_extracts_controller_and_control_fields():
     assert control["command_dt_s"] == 0.01
     assert control["command_velocity_x"] > 0.0
     assert control["command_translation_x"] > 0.0
-    assert control["target_eef_x"] > 0.3
+    # 第一拍现在先做 teleop 接管同步，因此目标应先落在当前实测值。
+    assert control["target_eef_x"] == pytest.approx(0.3)
     assert control["response_status"] == "completed"
     assert control["state_mode"] == "teleop"
 

@@ -14,8 +14,9 @@ from armctrl.daemon.executor import ArmCommandExecutor
 from armctrl.protocol.models import EEFStateModel, MoveEEFRequest, TeleopCommand
 
 
-def test_executor_teleop_moves_fake_adapter_when_deadman_active():
-    # deadman 按住后，teleop 命令应当真正进入运动路径，而不是被 executor 直接挡掉。
+def test_executor_first_deadman_tick_syncs_current_pose_before_motion():
+    # deadman 第一次按下后，第一拍先同步当前位置为 teleop 基线，
+    # 这一拍不直接累加摇杆增量，避免从旧模式切回 teleop 时立刻跳一下。
     adapter = FakeArx5Adapter()
     executor = ArmCommandExecutor(adapter)
     response = executor.handle_teleop(
@@ -26,7 +27,9 @@ def test_executor_teleop_moves_fake_adapter_when_deadman_active():
         )
     )
     assert response.status.value == "completed"
-    assert adapter.get_state().eef.pose_6d[0] > 0.3
+    assert response.detail["teleop_sync_only"] is True
+    assert adapter.get_state().mode.value == "teleop"
+    assert adapter.get_state().eef.pose_6d[0] == pytest.approx(0.3)
 
 
 def test_cli_health_json(capsys):
@@ -137,7 +140,7 @@ def test_cli_teleop_json_stays_machine_readable(capsys):
 
 
 def test_executor_teleop_clamps_negative_gripper_feedback():
-    # 反馈侧如果出现负夹爪位置，executor 应当先夹紧到安全范围再继续积分。
+    # 反馈侧如果出现负夹爪位置，executor 应当先夹紧到安全范围并完成 teleop 接管同步。
     adapter = FakeArx5Adapter()
     adapter._eef = EEFStateModel(
         pose_6d=(0.3, 0.0, 0.2, 0.0, 0.0, 0.0),
@@ -154,7 +157,8 @@ def test_executor_teleop_clamps_negative_gripper_feedback():
     )
     assert response.status.value == "completed"
     assert response.state is not None
-    assert response.state.eef.pose_6d[0] > 0.3
+    assert response.detail["teleop_sync_only"] is True
+    assert response.state.eef.pose_6d[0] == pytest.approx(0.3)
     assert response.state.eef.gripper_pos == 0.0
 
 
@@ -185,10 +189,14 @@ def test_executor_teleop_integrates_target_independent_of_feedback():
 
     executor.handle_teleop(command)
     executor.handle_teleop(command)
+    executor.handle_teleop(command)
 
-    assert len(adapter.requests) == 2
-    assert adapter.requests[0].pose_6d[0] == pytest.approx(0.301)
-    assert adapter.requests[1].pose_6d[0] == pytest.approx(0.302)
+    assert len(adapter.requests) == 3
+    # 第一拍只做接管同步，目标就是当前姿态。
+    assert adapter.requests[0].pose_6d[0] == pytest.approx(0.3)
+    # 后两拍才开始真正做积分累加。
+    assert adapter.requests[1].pose_6d[0] == pytest.approx(0.301)
+    assert adapter.requests[2].pose_6d[0] == pytest.approx(0.302)
 
 
 def test_executor_teleop_centered_stick_holds_accumulated_target():
@@ -196,6 +204,14 @@ def test_executor_teleop_centered_stick_holds_accumulated_target():
     adapter = FakeArx5Adapter()
     executor = ArmCommandExecutor(adapter)
 
+    sync_response = executor.handle_teleop(
+        TeleopCommand(
+            translation_m=(0.002, 0.0, 0.0),
+            translation_velocity_mps=(0.2, 0.0, 0.0),
+            dt_s=0.01,
+            deadman=True,
+        )
+    )
     move_response = executor.handle_teleop(
         TeleopCommand(
             translation_m=(0.002, 0.0, 0.0),
@@ -213,6 +229,8 @@ def test_executor_teleop_centered_stick_holds_accumulated_target():
         )
     )
 
+    assert sync_response.status.value == "completed"
+    assert sync_response.detail["teleop_sync_only"] is True
     assert move_response.status.value == "completed"
     assert hold_response.status.value == "completed"
     assert hold_response.state is not None
@@ -259,3 +277,41 @@ def test_executor_deadman_release_enters_zero_gravity_drag_only_once():
     assert idle_response.state.mode.value == "zero_gravity_drag"
     assert adapter.zero_gravity_drag_calls == 1
     assert adapter.damping_calls == 0
+
+
+def test_executor_second_deadman_cycle_reenters_zero_gravity_drag():
+    # 这个回归测试锁住“按 RB -> 松开 -> 再按 RB -> 再松开”两次循环。
+    # release 分支必须每次都重新进入 zero_gravity_drag，而不是只在第一次生效。
+    class CountingAdapter(FakeArx5Adapter):
+        def __init__(self) -> None:
+            super().__init__()
+            self.zero_gravity_drag_calls = 0
+
+        def apply_debug_profile(self, request):
+            if request.name.value == "zero_gravity_drag":
+                self.zero_gravity_drag_calls += 1
+            return super().apply_debug_profile(request)
+
+    adapter = CountingAdapter()
+    executor = ArmCommandExecutor(adapter)
+
+    executor.handle_teleop(
+        TeleopCommand(
+            translation_m=(0.001, 0.0, 0.0),
+            deadman=True,
+        )
+    )
+    release_1 = executor.handle_teleop(TeleopCommand(deadman=False))
+    executor.handle_teleop(
+        TeleopCommand(
+            translation_m=(0.001, 0.0, 0.0),
+            deadman=True,
+        )
+    )
+    release_2 = executor.handle_teleop(TeleopCommand(deadman=False))
+
+    assert release_1.status.value == "completed"
+    assert release_2.status.value == "completed"
+    assert release_2.state is not None
+    assert release_2.state.mode.value == "zero_gravity_drag"
+    assert adapter.zero_gravity_drag_calls == 2
