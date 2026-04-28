@@ -8,14 +8,16 @@
 
 import csv
 import json
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 import armctrl.cli.arx5ctl as arx5ctl_cli
 from armctrl.cli.arx5ctl import main
-from armctrl.identification.backends import FakeJointRobotIO
+from armctrl.identification.backends import Arx5JointRobotIO, FakeJointRobotIO
+from armctrl.identification.models import TrajectoryPoint
 from armctrl.identification.optimization import optimize_fourier_multisine, score_excitation_profile
 from armctrl.identification.postprocess import postprocess_dataset
 from armctrl.identification.recorder import DatasetRecorder
@@ -29,6 +31,94 @@ from armctrl.identification.trajectories import (
     generate_friction_sweep,
     generate_gravity_sweep,
 )
+
+
+class _FakeIdentGain:
+    def __init__(self, kp_or_dof, kd=None, gripper_kp: float = 0.0, gripper_kd: float = 0.0) -> None:
+        if isinstance(kp_or_dof, int):
+            self._kp = [0.0] * kp_or_dof
+            self._kd = [0.0] * kp_or_dof
+        else:
+            self._kp = list(kp_or_dof)
+            self._kd = list(kd)
+        self.gripper_kp = gripper_kp
+        self.gripper_kd = gripper_kd
+
+    def kp(self):
+        return self._kp
+
+    def kd(self):
+        return self._kd
+
+    def __mul__(self, scalar: float):
+        return _FakeIdentGain(
+            [value * scalar for value in self._kp],
+            [value * scalar for value in self._kd],
+            self.gripper_kp * scalar,
+            self.gripper_kd * scalar,
+        )
+
+    def __add__(self, other):
+        return _FakeIdentGain(
+            [left + right for left, right in zip(self._kp, other._kp)],
+            [left + right for left, right in zip(self._kd, other._kd)],
+            self.gripper_kp + other.gripper_kp,
+            self.gripper_kd + other.gripper_kd,
+        )
+
+
+class _FakeIdentJointState:
+    def __init__(self, dof: int) -> None:
+        self._pos = [0.0] * dof
+        self._vel = [0.0] * dof
+        self._torque = [0.0] * dof
+        self.timestamp = 0.0
+        self.gripper_pos = 0.0
+
+    def pos(self):
+        return self._pos
+
+    def vel(self):
+        return self._vel
+
+    def torque(self):
+        return self._torque
+
+
+class _FakeIdentController:
+    def __init__(self) -> None:
+        self.config = SimpleNamespace(
+            default_kp=[80.0, 70.0],
+            default_kd=[2.0, 2.0],
+            default_gripper_kp=5.0,
+            default_gripper_kd=0.2,
+            controller_dt=0.002,
+        )
+        self.gain = _FakeIdentGain(2)
+        self.calls: list[str] = []
+        self.joint_traj = None
+
+    def get_controller_config(self):
+        return self.config
+
+    def get_gain(self):
+        return self.gain
+
+    def set_gain(self, gain):
+        self.calls.append("set_gain")
+        self.gain = gain
+
+    def get_timestamp(self):
+        return 10.0
+
+    def set_joint_traj(self, joint_traj):
+        self.calls.append("set_joint_traj")
+        self.joint_traj = joint_traj
+
+
+class _FakeIdentSDK:
+    Gain = _FakeIdentGain
+    JointState = _FakeIdentJointState
 
 
 def test_gravity_sweep_moves_one_joint_at_a_time_with_low_velocity():
@@ -133,6 +223,28 @@ def test_runner_records_fake_backend_dataset(tmp_path: Path):
         rows = list(csv.DictReader(file))
     assert rows
     assert {"q_cmd_1", "dq_cmd_1", "ddq_cmd_1", "tau_meas_1"}.issubset(rows[0])
+
+
+def test_sdk_joint_backend_restores_motion_gain_before_sending_trajectory():
+    backend = Arx5JointRobotIO(model="X5", interface="can0", resume_gain_duration_s=0.006, sleep_fn=lambda _: None)
+    backend._sdk = _FakeIdentSDK()
+    backend._controller = _FakeIdentController()
+    backend.dof = 2
+
+    response = backend.send_joint_trajectory(
+        (
+            TrajectoryPoint(0.0, (0.0, 0.0), (0.0, 0.0), (0.0, 0.0)),
+            TrajectoryPoint(0.1, (0.1, -0.1), (0.0, 0.0), (0.0, 0.0)),
+        )
+    )
+
+    assert response.status.value == "completed"
+    assert backend._controller.calls == ["set_gain", "set_gain", "set_gain", "set_joint_traj"]
+    assert backend._controller.gain.kp() == pytest.approx(backend._controller.config.default_kp)
+    assert backend._controller.gain.kd() == pytest.approx(backend._controller.config.default_kd)
+    assert backend._controller.joint_traj is not None
+    assert backend._controller.joint_traj[0].timestamp == pytest.approx(10.2)
+    assert backend._controller.joint_traj[1].timestamp == pytest.approx(10.3)
 
 
 def test_runner_execute_resets_home_before_sending_trajectory():

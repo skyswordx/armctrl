@@ -256,25 +256,90 @@ uv run arx5ctl teleop-xbox \
 
 ## 参数辨识链路
 
+当前 CLI 的 `--profile` 只支持 3 种模式：
+
+- `gravity_sweep`
+  - 低风险、小范围、准静态扫描。
+  - 一次主要移动一个关节，优先用于重力项、末端 payload 影响和基础连通性验证。
+  - 如果你说的“小范围辨识”是先做保守扫描，通常就是先从这个模式开始。
+- `friction_sweep`
+  - 每个关节做正反向慢速/中速扫描。
+  - 主要用于库伦摩擦和粘性摩擦估计。
+- `fourier_multisine`
+  - 多关节有限傅里叶激励轨迹。
+  - 起止端带五次包络，保证边界处位置、速度、加速度回零。
+  - 主要用于更强的耦合动力学激励。
+
+当前推荐顺序是：
+
+1. 先用 `gravity_sweep` 做小幅度 bringup 和基础数据采集。
+2. 再用 `friction_sweep` 补摩擦相关数据。
+3. 最后再上 `fourier_multisine` 做更完整的耦合激励。
+
+几个常用参数：
+
+- `--amplitude`
+  - 控制关节摆动幅度，单位弧度。
+  - 想做更保守的小范围扫描时，优先把这个值调小，例如 `0.05` 或 `0.08`。
+- `--duration`
+  - `gravity_sweep` 下表示单段扫描时长。
+  - `fourier_multisine` 下表示整段激励总时长。
+- `--harmonics`
+  - 只对 `fourier_multisine` 有意义，控制傅里叶谐波数。
+- `--optimize --candidate-count N`
+  - 只对 `fourier_multisine` 有意义。
+  - 会在多个随机候选里挑一个代理条件数更好的激励轨迹。
+
 轨迹预览：
 
 ```bash
+# 低风险、小范围预览
 uv run arx5ctl ident-plan \
   --adapter fake \
   --profile gravity_sweep \
   --dof 6 \
+  --amplitude 0.05 \
+  --duration 2.0 \
   --sample-hz 100 \
+  --json
+```
+
+```bash
+# 傅里叶多谐波激励预览
+uv run arx5ctl ident-plan \
+  --adapter fake \
+  --profile fourier_multisine \
+  --dof 6 \
+  --duration 12 \
+  --harmonics 5 \
+  --amplitude 0.10 \
+  --json
+```
+
+```bash
+# 带候选筛选的傅里叶激励预览
+uv run arx5ctl ident-plan \
+  --adapter fake \
+  --profile fourier_multisine \
+  --dof 6 \
+  --duration 12 \
+  --harmonics 5 \
+  --optimize \
+  --candidate-count 12 \
   --json
 ```
 
 真实采集：
 
 ```bash
+# 先用小范围 gravity_sweep 做实机采集
 uv run arx5ctl ident-run \
   --adapter sdk \
   --model X5 \
   --interface can0 \
   --profile gravity_sweep \
+  --amplitude 0.05 \
+  --duration 2.0 \
   --sample-hz 100 \
   --output runs/ident-sdk \
   --execute \
@@ -282,6 +347,23 @@ uv run arx5ctl ident-run \
   --json
 ```
 
+```bash
+# 再用 Fourier multisine 做更强激励
+uv run arx5ctl ident-run \
+  --adapter sdk \
+  --model X5 \
+  --interface can0 \
+  --profile fourier_multisine \
+  --duration 12 \
+  --harmonics 5 \
+  --optimize \
+  --candidate-count 12 \
+  --sample-hz 100 \
+  --output runs/ident-sdk-fourier \
+  --execute \
+  --confirm "I UNDERSTAND THIS WILL MOVE THE ARM" \
+  --json
+```
 `ident-plan`、`ident-run` 和 `ident-postprocess` 在 CLI 层都会把输出目录
 自动改成“前缀 + 时间戳”。
 例如传 `--output runs/ident-sdk`，

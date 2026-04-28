@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import importlib
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Protocol
 
@@ -123,6 +123,8 @@ class Arx5JointRobotIO:
         urdf_path: str | None = None,
         log_level: str = "WARNING",
         start_delay_s: float = 0.20,
+        resume_gain_duration_s: float = 0.4,
+        sleep_fn: Callable[[float], None] = time.sleep,
         calibration_store: GripperCalibrationStore | None = None,
     ) -> None:
         self.model = model
@@ -130,6 +132,8 @@ class Arx5JointRobotIO:
         self.urdf_path = urdf_path
         self.log_level = log_level
         self.start_delay_s = float(start_delay_s)
+        self.resume_gain_duration_s = float(resume_gain_duration_s)
+        self._sleep_fn = sleep_fn
         self._calibration_store = calibration_store or GripperCalibrationStore()
         self.dof = 6
         self._sdk = None
@@ -193,11 +197,58 @@ class Arx5JointRobotIO:
             error = ArmctrlError(ErrorCode.SDK_ERROR, str(exc))
             return CommandResponse(CommandStatus.FAULTED, "sdk joint reset home failed", error=error)
 
+    def _build_motion_gain(self, controller_config):
+        if self._sdk is None or not hasattr(self._sdk, "Gain"):
+            return None
+        return self._sdk.Gain(
+            controller_config.default_kp,
+            controller_config.default_kd,
+            controller_config.default_gripper_kp,
+            controller_config.default_gripper_kd,
+        )
+
+    def _gain_matches(self, left_gain, right_gain) -> bool:
+        left_kp = tuple(float(value) for value in left_gain.kp()) if hasattr(left_gain, "kp") else ()
+        right_kp = tuple(float(value) for value in right_gain.kp()) if hasattr(right_gain, "kp") else ()
+        left_kd = tuple(float(value) for value in left_gain.kd()) if hasattr(left_gain, "kd") else ()
+        right_kd = tuple(float(value) for value in right_gain.kd()) if hasattr(right_gain, "kd") else ()
+        if left_kp != right_kp or left_kd != right_kd:
+            return False
+        return (
+            abs(float(getattr(left_gain, "gripper_kp", 0.0)) - float(getattr(right_gain, "gripper_kp", 0.0))) <= 1e-9
+            and abs(float(getattr(left_gain, "gripper_kd", 0.0)) - float(getattr(right_gain, "gripper_kd", 0.0)))
+            <= 1e-9
+        )
+
+    def _ensure_motion_gain(self, controller) -> None:
+        # SDK joint controller 在 connect / set_to_damping 后默认处在“kp=0 的阻尼态”。
+        # 如果这里只 set_joint_traj，插值目标会更新，但电机不会进入位置跟踪，
+        # 实机表现通常就是“CAN 使能、抖一下、基本不动”。
+        if not hasattr(controller, "get_gain") or not hasattr(controller, "set_gain"):
+            return
+        controller_config = controller.get_controller_config()
+        target_gain = self._build_motion_gain(controller_config)
+        if target_gain is None:
+            return
+        current_gain = controller.get_gain()
+        if self._gain_matches(current_gain, target_gain):
+            return
+        controller_dt = float(getattr(controller_config, "controller_dt", 0.002))
+        if controller_dt <= 0:
+            controller_dt = 0.002
+        steps = max(1, int(round(self.resume_gain_duration_s / controller_dt)))
+        for step_index in range(1, steps + 1):
+            alpha = step_index / steps
+            controller.set_gain(current_gain * (1.0 - alpha) + target_gain * alpha)
+            if step_index < steps:
+                self._sleep_fn(controller_dt)
+
     def send_joint_trajectory(self, points: Sequence[TrajectoryPoint]) -> CommandResponse:
         try:
             if not points:
                 raise ArmctrlError(ErrorCode.INVALID_REQUEST, "trajectory is empty")
             controller = self._require_controller()
+            self._ensure_motion_gain(controller)
             base_timestamp = float(controller.get_timestamp()) + self.start_delay_s
             joint_traj = []
             for point in points:
