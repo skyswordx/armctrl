@@ -3,6 +3,7 @@
 当前实现只做保守的通用预处理：
 - 可选滑动平均；
 - 用中心差分从平滑后位置计算速度和加速度；
+- 同时输出同一条处理链上的 `q_proc / dq_proc / ddq_proc / tau_proc`；
 - 写出统一 `processed_samples.csv`；
 - 生成外部工具交接说明。
 
@@ -82,6 +83,9 @@ def _write_processed(rows: list[dict[str, str]], output_dir: Path, *, dof: int, 
     times = [float(row["t_s"]) for row in rows]
     q_series = [[float(row[f"q_{joint}"]) for row in rows] for joint in range(1, dof + 1)]
     tau_series = [[float(row[f"tau_meas_{joint}"]) for row in rows] for joint in range(1, dof + 1)]
+    # 这里故意让 q 和 tau 共享同一个简单平滑窗口。
+    # 目标不是在 armctrl 内部做最终版辨识滤波器，而是先给离线工具一个
+    # 自洽的 processed 四元组，避免后续脚本把 raw q/dq 与 proc ddq/tau 混合使用。
     q_smooth = [_moving_average(values, smoothing_window) for values in q_series]
     tau_smooth = [_moving_average(values, smoothing_window) for values in tau_series]
     dq_proc = [_central_difference(times, values) for values in q_smooth]
@@ -129,4 +133,3 @@ def _central_difference(times: list[float], values: list[float]) -> list[float]:
             dt = max(times[index + 1] - times[index - 1], 1e-9)
             result.append((values[index + 1] - values[index - 1]) / dt)
     return result
-

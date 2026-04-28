@@ -357,7 +357,9 @@ def dispatch_identification(args: argparse.Namespace) -> CommandResponse:
         validation = validate_trajectory(profile, TrajectorySafetyLimits.conservative(profile.dof))
         detail = profile.summary()
         if args.output:
-            path = DatasetRecorder(args.output).write_trajectory(profile)
+            output_dir = timestamped_output_dir(args.output)
+            path = DatasetRecorder(output_dir).write_trajectory(profile)
+            detail["output_dir"] = str(output_dir)
             detail["planned_trajectory_csv"] = str(path)
         if not validation.allowed:
             return CommandResponse(
@@ -374,7 +376,7 @@ def dispatch_identification(args: argparse.Namespace) -> CommandResponse:
                 message=f"real SDK identification requires --execute --confirm '{MOVE_CONFIRMATION}'",
             )
         profile = build_identification_profile(args)
-        output_dir = args.output or default_identification_output_dir(profile.name)
+        output_dir = timestamped_output_dir(args.output) if args.output else Path(default_identification_output_dir(profile.name))
         backend = build_joint_backend(
             adapter=args.adapter,
             model=args.model,
@@ -398,7 +400,8 @@ def dispatch_identification(args: argparse.Namespace) -> CommandResponse:
         )
     if args.command == "ident-postprocess":
         dataset = Path(args.dataset).expanduser().resolve()
-        output = Path(args.output).expanduser().resolve() if args.output else dataset / "processed"
+        output_base = Path(args.output).expanduser().resolve() if args.output else dataset / "processed"
+        output = timestamped_output_dir(output_base)
         tools = tuple(args.tool or ["all"])
         return postprocess_dataset(
             dataset_dir=dataset,
@@ -457,8 +460,19 @@ def build_identification_profile(args: argparse.Namespace):
 
 
 def default_identification_output_dir(profile_name: str) -> str:
+    return str(timestamped_output_dir(Path("runs") / "identification" / profile_name))
+
+
+def timestamped_output_dir(base_dir: str | Path) -> Path:
+    """把输出目录解析成带时间戳的唯一路径。
+
+    CLI 侧把用户传入的 `--output` 当作目录名前缀，而不是最终落盘目录。
+    这样重复运行同一条辨识命令时，不会把旧的 planned/raw/processed 文件覆盖掉。
+    """
+
+    base = Path(base_dir).expanduser()
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    return str(Path("runs") / "identification" / f"{timestamp}-{profile_name}")
+    return (base.parent / f"{base.name}-{timestamp}").resolve()
 
 
 def list_debug_profiles(args: argparse.Namespace) -> int:

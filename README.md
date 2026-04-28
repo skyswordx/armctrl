@@ -282,11 +282,22 @@ uv run arx5ctl ident-run \
   --json
 ```
 
+`ident-plan`、`ident-run` 和 `ident-postprocess` 在 CLI 层都会把输出目录
+自动改成“前缀 + 时间戳”。
+例如传 `--output runs/ident-sdk`，
+实际生成目录会是 `runs/ident-sdk-YYYYMMDD-HHMMSS`，
+这样重复运行同一条命令时不会覆盖旧数据。
+
+`ident-run` 当前会在 `--execute` 时先自动调用一次 `reset_home()`，
+再下发关节轨迹。
+这样可以把实机起始姿态先拉回辨识轨迹默认的零位基线，
+避免直接从未知姿态切入第一段轨迹。
+
 后处理：
 
 ```bash
 uv run arx5ctl ident-postprocess \
-  --dataset runs/ident-sdk \
+  --dataset runs/ident-sdk-YYYYMMDD-HHMMSS \
   --tool pinocchio \
   --tool figaroh \
   --tool flobaroid \

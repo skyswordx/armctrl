@@ -14,7 +14,7 @@
 - `backends.py`：`JointRobotIO` 协议、fake 后端和 ARX5 SDK 关节后端。
 - `recorder.py`：写入 `raw_samples.csv`、`planned_trajectory.csv` 和 `manifest.json`。
 - `runner.py`：把轨迹发送给后端，并按轨迹时间轴采集关节状态。
-- `postprocess.py`：生成 `processed_samples.csv`，计算平滑后速度和加速度。
+- `postprocess.py`：生成 `processed_samples.csv`，计算平滑后速度和加速度，并导出默认辨识用的 `q_proc / dq_proc / ddq_proc / tau_proc`。
 - `tools.py`：生成 URDFly、Pinocchio、FIGAROH、FloBaRoID 的离线交接说明。
 
 ## 实现思路
@@ -22,6 +22,19 @@
 本模块不实现刚体动力学回归矩阵。
 `armctrl` 只保证真实机械臂安全运动并记录可复现数据。
 回归矩阵、基参数提取、条件数优化、OLS/WLS 求解交给专门工具。
+
+当前离线交接默认推荐使用统一 processed 四元组：
+`q_proc / dq_proc / ddq_proc / tau_proc`。
+这样至少能保证送进 Pinocchio、URDFly、FIGAROH 或 FloBaRoID 的四组量
+来自同一条预处理链，而不是把原始 `q / dq` 和后处理 `ddq / tau` 混用。
+如果后续要专门研究 ARX5 SDK 电流换算力矩的噪声影响，
+再在离线脚本里把 `tau_proc` 切回 `tau_meas` 做对比。
+
+当前 `IdentificationRunner` 在 `execute=True` 时，
+会先调用一次后端的 `reset_home()`，
+再发送关节轨迹。
+这是因为现有 CLI 生成的三类辨识轨迹默认都以 `q0=0` 为起点，
+如果实机此时停在别的姿态，直接执行第一段轨迹不安全。
 
 轨迹按风险递增：
 

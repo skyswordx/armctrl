@@ -31,7 +31,7 @@ TOOL_PROFILES: dict[str, ExternalToolProfile] = {
         label="Pinocchio",
         python_module="pinocchio",
         purpose="用 URDF 构建刚体动力学模型，并调用 computeJointTorqueRegressor 生成观测矩阵。",
-        handoff="读取 processed_samples.csv 的 q/dq/ddq/tau_meas，逐行调用 Pinocchio 回归矩阵接口。",
+        handoff="默认优先读取 processed_samples.csv 的 q_proc/dq_proc/ddq_proc/tau_proc；如需对比电流换算原始力矩噪声，可再单独切回 tau_meas。",
     ),
     "figaroh": ExternalToolProfile(
         name="figaroh",
@@ -52,7 +52,7 @@ TOOL_PROFILES: dict[str, ExternalToolProfile] = {
         label="URDFly",
         python_module="urdfly",
         purpose="从 URDF 生成符号动力学回归矩阵代码。",
-        handoff="用 URDFly 生成 regressor 代码，然后读取 processed_samples.csv 组装 Yπ=τ。",
+        handoff="用 URDFly 生成 regressor 代码，然后优先读取 processed_samples.csv 的 q_proc/dq_proc/ddq_proc/tau_proc 组装 Yπ=τ。",
     ),
 }
 
@@ -90,11 +90,16 @@ def write_tool_handoff(
         "",
         "## Data Contract",
         "",
-        "- `q_*`: measured joint position, rad",
-        "- `dq_*`: measured joint velocity, rad/s",
-        "- `ddq_proc_*`: postprocessed joint acceleration, rad/s²",
-        "- `tau_meas_*`: backend torque feedback",
+        "- `q_* / dq_* / tau_meas_*`: 原始实测关节位置、速度和后端力矩反馈。",
+        "- `q_proc_* / dq_proc_* / ddq_proc_* / tau_proc_*`: 同一条后处理链生成的默认辨识输入。",
+        "- `ddq_proc_*`: 由平滑后的 `q_proc_*` 再经中心差分得到，不再和原始 `q_* / dq_*` 混用。",
+        "- `tau_proc_*`: 对 `tau_meas_*` 做同窗口平滑后的结果，用于和 `q_proc_* / dq_proc_* / ddq_proc_*` 保持时间对齐策略一致。",
         "- `q_cmd_* / dq_cmd_* / ddq_cmd_*`: commanded excitation trajectory",
+        "",
+        "## Recommended Offline Tuple",
+        "",
+        "- 默认使用 `q_proc_* / dq_proc_* / ddq_proc_* / tau_proc_*` 进入回归矩阵与最小二乘流程。",
+        "- 如果要评估电流换算力矩未经平滑时的影响，可在离线脚本里额外对比 `tau_meas_*`。",
         "",
         "## Tools",
         "",
@@ -129,7 +134,8 @@ def write_tool_handoff(
 
 def _write_pinocchio_skeleton(output_dir: Path) -> None:
     # 这个脚本是交接骨架，不在单测中执行。
-    # 用户安装 pinocchio 后，可在其中填入 CSV 读取和矩阵堆叠逻辑。
+    # 默认使用统一 processed 四元组，避免把 raw q/dq 和 proc ddq/tau 混在一起。
+    # 如果后续要比较 raw tau 与 filtered tau 的辨识残差，可只替换 tau 读取列。
     skeleton = '''"""Pinocchio regressor handoff skeleton.
 
 Run after installing Pinocchio in a dedicated offline environment.
@@ -159,10 +165,12 @@ def main() -> None:
     regressors = []
     torques = []
     for row in rows:
-        q = np.array([float(row[f"q_{index}"]) for index in range(1, model.nv + 1)])
-        dq = np.array([float(row[f"dq_{index}"]) for index in range(1, model.nv + 1)])
+        # 统一使用同一条后处理链生成的 q/dq/ddq/tau。
+        # 这样更容易保证求导、平滑和力矩序列在时间上采用一致策略。
+        q = np.array([float(row[f"q_proc_{index}"]) for index in range(1, model.nv + 1)])
+        dq = np.array([float(row[f"dq_proc_{index}"]) for index in range(1, model.nv + 1)])
         ddq = np.array([float(row[f"ddq_proc_{index}"]) for index in range(1, model.nv + 1)])
-        tau = np.array([float(row[f"tau_meas_{index}"]) for index in range(1, model.nv + 1)])
+        tau = np.array([float(row[f"tau_proc_{index}"]) for index in range(1, model.nv + 1)])
         regressors.append(pin.computeJointTorqueRegressor(model, data, q, dq, ddq))
         torques.append(tau)
     y_matrix = np.vstack(regressors)

@@ -28,12 +28,17 @@ class IdentificationRunner:
         safety_limits: TrajectorySafetyLimits | None = None,
         sleep_fn: Callable[[float], None] = time.sleep,
         damping_after: bool = True,
+        reset_home_before_execute: bool = True,
     ) -> None:
         self.backend = backend
         self.sample_hz = float(sample_hz)
         self.safety_limits = safety_limits
         self.sleep_fn = sleep_fn
         self.damping_after = damping_after
+        # 当前 CLI 生成的辨识轨迹默认都以 q0=0 为基线。
+        # 如果实机起始姿态和这条基线偏差很大，直接下发第一段轨迹会有明显风险。
+        # 因此 runner 在真实执行前默认先调用一次后端的 `reset_home()`。
+        self.reset_home_before_execute = reset_home_before_execute
 
     def run(
         self,
@@ -55,6 +60,12 @@ class IdentificationRunner:
         if connect_response.status is not CommandStatus.COMPLETED:
             return connect_response
         if execute:
+            if self.reset_home_before_execute:
+                # 这里把“执行前自动回零”放在 runner，而不是散落到 CLI 或具体后端里。
+                # 好处是 fake / sdk / 未来 Piper 后端都共用同一条安全语义。
+                reset_response = self.backend.reset_home()
+                if reset_response.status is not CommandStatus.COMPLETED:
+                    return reset_response
             send_response = self.backend.send_joint_trajectory(profile.points)
             if send_response.status is not CommandStatus.COMPLETED:
                 return send_response
@@ -77,6 +88,7 @@ class IdentificationRunner:
                 "backend_name": self.backend.name,
                 "sample_count": len(samples),
                 "execute": execute,
+                "reset_home_before_execute": bool(execute and self.reset_home_before_execute),
                 "output_dir": str(recorder.output_dir) if recorder else None,
                 "manifest": manifest.to_dict() if manifest else None,
             }
@@ -96,4 +108,3 @@ class IdentificationRunner:
             # fake 后端会返回命令值，SDK 后端只有 execute=True 时才应在实机上使用。
             samples.append(self.backend.read_sample(point, point.phase))
         return samples
-
