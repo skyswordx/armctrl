@@ -133,7 +133,7 @@ class Arx5GainProfileRegistry:
                     # X5 默认 cartesian kd 顺序 = [J1, J2, J3, J4, J5, J6] = [5, 5, 5, 1, 1, 1]
                     kd_scale=JointScaleProfile(
                         uniform=0.00001,
-                        per_joint=(1.0, 0.3, 0.3, 1.0, 1.0, 1.0),
+                        per_joint=(0.3, 0.3, 0.3, 1.5, 1.0, 1.0),
                     ),
                     gripper_kp_scale=0.0,
                     gripper_kd_scale=0.0,
