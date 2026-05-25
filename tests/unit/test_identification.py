@@ -847,6 +847,36 @@ def test_solver_base_parameter_subset_reduces_rank_deficient_regressor():
     assert len(subset["selected_columns"]) == 2
 
 
+def test_solver_base_parameter_subset_accepts_numpy_like_matrix_without_truthiness():
+    class AmbiguousMatrix:
+        def __init__(self, rows):
+            self._rows = rows
+            self.shape = (len(rows), len(rows[0]))
+
+        def __bool__(self):
+            raise ValueError("truth value is ambiguous")
+
+        def __iter__(self):
+            return iter(self._rows)
+
+        def __getitem__(self, index):
+            return self._rows[index]
+
+    matrix = AmbiguousMatrix(
+        [
+            [1.0, 0.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0, 1.0],
+            [2.0, 0.0, 2.0, 0.0],
+            [0.0, 3.0, 0.0, 3.0],
+        ]
+    )
+
+    subset = _base_parameter_subset_from_regressor(matrix, source_hint="unit_test")
+
+    assert subset["original_parameter_count"] == 4
+    assert subset["selected_parameter_count"] == 2
+
+
 def test_solver_augmented_friction_columns_add_bias_viscous_and_coulomb():
     y_matrix = [[1.0, 2.0], [3.0, 4.0]]
     rows = [

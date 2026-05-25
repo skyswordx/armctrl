@@ -331,7 +331,7 @@ def _gravity_base_parameter_columns(parameter_count: int) -> list[int]:
 
 
 def _base_parameter_subset_from_regressor(matrix, *, source_hint: str = "figaroh_qr") -> dict[str, Any]:
-    original_parameter_count = len(matrix[0]) if matrix else 0
+    original_parameter_count = _matrix_column_count(matrix)
     figaroh_subset = _figaroh_base_parameter_subset(matrix, source_hint=source_hint)
     if figaroh_subset is not None:
         return figaroh_subset
@@ -345,6 +345,17 @@ def _base_parameter_subset_from_regressor(matrix, *, source_hint: str = "figaroh
         "selected_columns": selected_columns,
         "meaning": "rank-revealing independent column subset used as an identifiable base-parameter regressor",
     }
+
+
+def _matrix_column_count(matrix) -> int:
+    shape = getattr(matrix, "shape", None)
+    if shape is not None and len(shape) >= 2:
+        return int(shape[1])
+    try:
+        first_row = matrix[0]
+    except (IndexError, TypeError):
+        return 0
+    return len(first_row)
 
 
 def _figaroh_base_parameter_subset(matrix, *, source_hint: str) -> dict[str, Any] | None:
