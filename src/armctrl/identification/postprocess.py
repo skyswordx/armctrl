@@ -170,10 +170,20 @@ def _central_difference(times: list[float], values: list[float]) -> list[float]:
 def _build_quality_metrics(manifest: dict, rows: list[dict[str, str]], *, tools: tuple[str, ...]) -> dict:
     dof = int(manifest["dof"])
     times = _float_column(rows, "t_s")
-    profile_metadata = manifest.get("profile_metadata", {})
+    profile_name = manifest.get("profile_name")
+    profile_metadata = dict(manifest.get("profile_metadata", {}))
+    gravity_min_actual_range_deg = 30.0 if profile_name == "gravity_sweep" else 8.0
+    profile_metadata["gravity_min_actual_range_deg"] = gravity_min_actual_range_deg
     expected_sample_count = _expected_sample_count(manifest)
     data_health = _data_health(rows, dof=dof, times=times, expected_sample_count=expected_sample_count)
-    joint_metrics = [_joint_quality(rows, joint=joint) for joint in range(1, dof + 1)]
+    joint_metrics = [
+        _joint_quality(
+            rows,
+            joint=joint,
+            min_actual_range_deg=gravity_min_actual_range_deg if profile_name == "gravity_sweep" else None,
+        )
+        for joint in range(1, dof + 1)
+    ]
     excitation_status = _worst_status([joint["excitation_status"] for joint in joint_metrics])
     tool_execution = _tool_execution_status(tools)
     document_sections = {
@@ -183,7 +193,10 @@ def _build_quality_metrics(manifest: dict, rows: list[dict[str, str]], *, tools:
         },
         "excitation": {
             "status": excitation_status,
-            "summary": "Joint coverage, command/actual coverage ratio, tracking error, and direction reach checks.",
+            "summary": (
+                "Joint tracking plus absolute angle range checks. For gravity_sweep, high command coverage alone can be "
+                "misleading when the absolute angle range is too small for sin/cos excitation."
+            ),
         },
         "regressor_condition": {
             "status": "not_evaluated",
@@ -206,7 +219,7 @@ def _build_quality_metrics(manifest: dict, rows: list[dict[str, str]], *, tools:
     readiness = "pass" if all(status == "pass" for status in readiness_inputs) else "fail"
     return {
         "schema": "armctrl-ident-quality-v1",
-        "profile_name": manifest.get("profile_name"),
+        "profile_name": profile_name,
         "profile_metadata": profile_metadata,
         "sample_count": len(rows),
         "expected_sample_count": expected_sample_count,
@@ -214,7 +227,7 @@ def _build_quality_metrics(manifest: dict, rows: list[dict[str, str]], *, tools:
         "thresholds": {
             "min_coverage_ratio": 0.8,
             "max_platform_mean_error_rad": 0.02,
-            "gravity_min_actual_range_deg": 8.0,
+            "gravity_min_actual_range_deg": gravity_min_actual_range_deg,
             "max_sample_count_error_ratio": 0.05,
         },
         "data_health": data_health,
@@ -274,13 +287,19 @@ def _data_health(rows: list[dict[str, str]], *, dof: int, times: list[float], ex
     }
 
 
-def _joint_quality(rows: list[dict[str, str]], *, joint: int) -> dict:
+def _joint_quality(rows: list[dict[str, str]], *, joint: int, min_actual_range_deg: float | None = None) -> dict:
     q = _float_column(rows, f"q_{joint}")
     q_cmd = _float_column(rows, f"q_cmd_{joint}")
     dq = _float_column(rows, f"dq_{joint}")
     tau = _float_column(rows, f"tau_meas_{joint}")
     q_range = _range(q)
     q_cmd_range = _range(q_cmd)
+    q_actual_range_deg = math.degrees(q_range)
+    absolute_range_status = (
+        "not_applicable"
+        if min_actual_range_deg is None
+        else ("pass" if q_actual_range_deg >= min_actual_range_deg else "fail")
+    )
     coverage_ratio = q_range / q_cmd_range if q_cmd_range > 1e-12 else None
     errors = [actual - command for actual, command in zip(q, q_cmd, strict=False)]
     abs_errors = [abs(value) for value in errors]
@@ -292,6 +311,8 @@ def _joint_quality(rows: list[dict[str, str]], *, joint: int) -> dict:
     excitation_status = "pass"
     if q_cmd_range > 1e-12 and (coverage_ratio is None or coverage_ratio < 0.8):
         excitation_status = "fail"
+    if absolute_range_status != "not_applicable":
+        excitation_status = _worst_status([excitation_status, absolute_range_status])
     if direction_statuses:
         excitation_status = _worst_status([excitation_status, *direction_statuses])
     return {
@@ -299,7 +320,9 @@ def _joint_quality(rows: list[dict[str, str]], *, joint: int) -> dict:
         "q_cmd_range_rad": q_cmd_range,
         "q_cmd_range_deg": math.degrees(q_cmd_range),
         "q_actual_range_rad": q_range,
-        "q_actual_range_deg": math.degrees(q_range),
+        "q_actual_range_deg": q_actual_range_deg,
+        "absolute_range_status": absolute_range_status,
+        "min_actual_range_deg": min_actual_range_deg,
         "coverage_ratio": coverage_ratio,
         "qerr_rms_rad": _rms(errors),
         "qerr_p95_abs_rad": _percentile(abs_errors, 0.95),

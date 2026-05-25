@@ -151,21 +151,24 @@ def _run_pinocchio_solver(*, processed_csv: Path, urdf_path: str | None, dof: in
                 dof=active_dof,
                 mode=mode,
             )
+            parameter_subset = _parameter_subset_for_mode(mode, int(y_matrix.shape[1]))
+            y_solve = y_matrix[:, parameter_subset["selected_columns"]]
             equation_train_mask = np.repeat(train_mask, active_dof)
             tau_vector = tau_matrix.reshape(-1)
             pi_hat, _, lstsq_rank, _ = np.linalg.lstsq(
-                y_matrix[equation_train_mask],
+                y_solve[equation_train_mask],
                 tau_vector[equation_train_mask],
                 rcond=None,
             )
-            tau_pred = (y_matrix @ pi_hat).reshape(len(rows), active_dof)
-            regressor = _regressor_metrics(y_matrix)
+            tau_pred = (y_solve @ pi_hat).reshape(len(rows), active_dof)
+            regressor = _regressor_metrics(y_solve)
             validation = _prediction_metrics(tau_matrix, tau_pred, train_mask == 0)
             train = _prediction_metrics(tau_matrix, tau_pred, train_mask)
-            physical = _physical_consistency_from_min_norm(model, pi_hat)
+            physical = _physical_consistency_for_mode(mode, model, pi_hat)
             runs[mode] = {
                 "status": "completed",
                 "interpretation": _mode_interpretation(mode),
+                "parameter_subset": parameter_subset,
                 "regressor": regressor,
                 "lstsq_rank_train": int(lstsq_rank),
                 "train_metrics": train,
@@ -190,6 +193,36 @@ def _run_pinocchio_solver(*, processed_csv: Path, urdf_path: str | None, dof: in
         }
     except Exception as exc:
         return {"status": "failed", "reason": str(exc), "stage": "solve"}
+
+
+def _parameter_subset_for_mode(mode: str, parameter_count: int) -> dict[str, Any]:
+    if mode != "gravity_only":
+        return {
+            "mode": "full_dynamic_parameters",
+            "original_parameter_count": parameter_count,
+            "selected_parameter_count": parameter_count,
+            "selected_columns": list(range(parameter_count)),
+            "meaning": "all Pinocchio dynamic parameters are used",
+        }
+    selected_columns = _gravity_base_parameter_columns(parameter_count)
+    return {
+        "mode": "gravity_base_columns",
+        "original_parameter_count": parameter_count,
+        "selected_parameter_count": len(selected_columns),
+        "selected_columns": selected_columns,
+        "meaning": (
+            "mass and first-moment columns only; inertia tensor columns are omitted because "
+            "quasi-static gravity sweeps do not excite them"
+        ),
+    }
+
+
+def _gravity_base_parameter_columns(parameter_count: int) -> list[int]:
+    selected: list[int] = []
+    for block_start in range(0, parameter_count, 10):
+        block_end = min(block_start + 10, parameter_count)
+        selected.extend(range(block_start, min(block_start + 4, block_end)))
+    return selected
 
 
 def _figaroh_status() -> dict[str, Any]:
@@ -311,6 +344,18 @@ def _physical_consistency_from_min_norm(model, pi_hat) -> dict[str, Any]:
         else "fail",
         "links": links,
     }
+
+
+def _physical_consistency_for_mode(mode: str, model, pi_hat) -> dict[str, Any]:
+    if mode == "gravity_only":
+        return {
+            "status": "not_applicable",
+            "reason": (
+                "gravity_only solves a reduced mass/first-moment parameter vector, so it cannot be "
+                "mapped back to full per-link inertia tensors for the standard physical consistency gate"
+            ),
+        }
+    return _physical_consistency_from_min_norm(model, pi_hat)
 
 
 def _mode_interpretation(mode: str) -> str:
