@@ -129,11 +129,12 @@ def generate_gravity_sweep(
     amplitude_rad: float = 0.20,
     segment_duration_s: float = 4.0,
     dwell_s: float = 0.0,
+    q_center: tuple[float, ...] | None = None,
     q0: tuple[float, ...] | None = None,
 ) -> ExcitationProfile:
     """生成静态/准静态重力扫描轨迹。"""
 
-    base = _base_q(dof, q0)
+    base = _center_q(dof, q_center, q0)
     points = [TrajectoryPoint(0.0, base, _zeros(dof), _zeros(dof), "gravity_start")]
     current_q = base
     current_t = 0.0
@@ -174,6 +175,7 @@ def generate_gravity_sweep(
             "amplitude_rad": amplitude_rad,
             "segment_duration_s": segment_duration_s,
             "dwell_s": dwell_s,
+            "q_center": base,
             "recommended_use": "先辨识重力项和末端 payload 影响。",
         },
     )

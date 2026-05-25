@@ -45,6 +45,7 @@ MOVE_CONFIRMATION = "I UNDERSTAND THIS WILL MOVE THE ARM"
 DEFAULT_GRAVITY_SWEEP_AMPLITUDE_RAD = 0.12
 DEFAULT_GRAVITY_SWEEP_SEGMENT_DURATION_S = 6.0
 DEFAULT_GRAVITY_SWEEP_DWELL_S = 1.0
+DEFAULT_X5_GRAVITY_SWEEP_CENTER = (0.0, 0.30, 0.30, 0.0, 0.0, 0.0)
 GRIPPER_CALIBRATION_COMMANDS = {
     "gripper-calibration-show",
     "gripper-calibration-set",
@@ -176,7 +177,7 @@ def add_identification_profile_args(parser: argparse.ArgumentParser) -> None:
         "--q-center",
         nargs="+",
         type=float,
-        help="Center joint pose for fourier_multisine, in radians",
+        help="Center joint pose for gravity_sweep and fourier_multisine, in radians",
     )
     parser.add_argument("--optimize", action="store_true")
     parser.add_argument("--candidate-count", type=int, default=12)
@@ -429,12 +430,14 @@ def build_identification_profile(args: argparse.Namespace):
     # 三个 profile 的默认参数按风险递增设置。
     # 用户可以用 --duration / --amplitude 覆盖，但仍会经过 safety 预检查。
     if args.profile == "gravity_sweep":
+        q_center = tuple(args.q_center) if args.q_center is not None else _default_gravity_sweep_center(args)
         return generate_gravity_sweep(
             dof=args.dof,
             sample_hz=args.sample_hz,
             amplitude_rad=args.amplitude if args.amplitude is not None else DEFAULT_GRAVITY_SWEEP_AMPLITUDE_RAD,
             segment_duration_s=args.duration if args.duration is not None else DEFAULT_GRAVITY_SWEEP_SEGMENT_DURATION_S,
             dwell_s=args.dwell if args.dwell is not None else DEFAULT_GRAVITY_SWEEP_DWELL_S,
+            q_center=q_center,
         )
     if args.profile == "friction_sweep":
         return generate_friction_sweep(
@@ -473,6 +476,12 @@ def build_identification_profile(args: argparse.Namespace):
             q_center=q_center,
         )
     raise ArmctrlError(ErrorCode.INVALID_REQUEST, f"unsupported identification profile {args.profile}")
+
+
+def _default_gravity_sweep_center(args: argparse.Namespace) -> tuple[float, ...] | None:
+    if args.dof == 6 and getattr(args, "model", "X5") == "X5":
+        return DEFAULT_X5_GRAVITY_SWEEP_CENTER
+    return None
 
 
 def default_identification_output_dir(profile_name: str) -> str:

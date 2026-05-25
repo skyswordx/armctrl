@@ -161,6 +161,22 @@ def test_gravity_sweep_can_insert_static_dwell_samples():
     assert all(max(abs(value) for value in point.ddq) == pytest.approx(0.0) for point in hold_points)
 
 
+def test_gravity_sweep_uses_center_pose_for_all_targets():
+    profile = generate_gravity_sweep(
+        dof=3,
+        sample_hz=10.0,
+        amplitude_rad=0.12,
+        segment_duration_s=0.5,
+        q_center=(0.0, 0.30, 0.30),
+    )
+
+    assert profile.metadata["q_center"] == pytest.approx((0.0, 0.30, 0.30))
+    assert profile.points[0].q == pytest.approx((0.0, 0.30, 0.30))
+    assert profile.points[-1].q == pytest.approx((0.0, 0.30, 0.30))
+    assert min(point.q[1] for point in profile.points) >= 0.18 - 1e-12
+    assert min(point.q[2] for point in profile.points) >= 0.18 - 1e-12
+
+
 def test_friction_sweep_covers_positive_and_negative_velocity_per_joint():
     profile = generate_friction_sweep(dof=2, sample_hz=30.0, amplitude_rad=0.10, slow_speed_radps=0.05)
 
@@ -252,6 +268,7 @@ def test_tool_handoff_makes_figaroh_the_offline_math_target(tmp_path: Path):
     handoff = (tmp_path / "processed" / "tool_handoff.md").read_text(encoding="utf-8")
     assert "FIGAROH" in handoff
     assert "LeRobot" in handoff
+    assert "does not execute" in handoff
     assert "tau = Y(q, dq, ddq) * pi" in handoff
 
 
@@ -480,8 +497,16 @@ def test_postprocess_writes_processed_csv_and_tool_handoff(tmp_path: Path):
     assert (tmp_path / "processed" / "tool_handoff.md").is_file()
     assert (tmp_path / "processed" / "lerobot_contract.json").is_file()
     assert (tmp_path / "processed" / "pinocchio_regressor_skeleton.py").is_file()
+    assert (tmp_path / "processed" / "quality_metrics.json").is_file()
+    assert (tmp_path / "processed" / "quality_report.md").is_file()
+    assert response.detail["quality_metrics_json"] == str(tmp_path / "processed" / "quality_metrics.json")
     with (tmp_path / "processed" / "lerobot_contract.json").open(encoding="utf-8") as file:
         assert json.load(file)["schema"] == "lerobot-compatible"
+    with (tmp_path / "processed" / "quality_metrics.json").open(encoding="utf-8") as file:
+        quality = json.load(file)
+    assert quality["schema"] == "armctrl-ident-quality-v1"
+    assert quality["document_sections"]["physical_consistency"]["status"] == "not_evaluated"
+    assert quality["tool_execution"]["figaroh"]["status"] == "handoff_only"
     handoff = (tmp_path / "processed" / "tool_handoff.md").read_text(encoding="utf-8")
     skeleton = (tmp_path / "processed" / "pinocchio_regressor_skeleton.py").read_text(encoding="utf-8")
     assert "Pinocchio" in handoff
@@ -491,6 +516,91 @@ def test_postprocess_writes_processed_csv_and_tool_handoff(tmp_path: Path):
     assert 'row[f"dq_proc_{index}"]' in skeleton
     assert 'row[f"ddq_proc_{index}"]' in skeleton
     assert 'row[f"tau_proc_{index}"]' in skeleton
+
+
+def test_postprocess_quality_metrics_flags_unreached_negative_sweep(tmp_path: Path):
+    raw_path = tmp_path / "raw_samples.csv"
+    fieldnames = [
+        "t_s",
+        "phase",
+        "q_1",
+        "q_2",
+        "dq_1",
+        "dq_2",
+        "tau_meas_1",
+        "tau_meas_2",
+        "q_cmd_1",
+        "q_cmd_2",
+        "dq_cmd_1",
+        "dq_cmd_2",
+        "ddq_cmd_1",
+        "ddq_cmd_2",
+        "tau_cmd_1",
+        "tau_cmd_2",
+    ]
+    rows = [
+        {
+            "t_s": index * 0.25,
+            "phase": "gravity_joint_2",
+            "q_1": 0.0,
+            "q_2": actual,
+            "dq_1": 0.0,
+            "dq_2": 0.0,
+            "tau_meas_1": 0.1,
+            "tau_meas_2": tau,
+            "q_cmd_1": 0.0,
+            "q_cmd_2": command,
+            "dq_cmd_1": 0.0,
+            "dq_cmd_2": 0.0,
+            "ddq_cmd_1": 0.0,
+            "ddq_cmd_2": 0.0,
+            "tau_cmd_1": 0.0,
+            "tau_cmd_2": 0.0,
+        }
+        for index, (command, actual, tau) in enumerate(
+            [
+                (0.0, 0.0, 0.0),
+                (0.10, 0.10, 0.5),
+                (0.12, 0.12, 0.7),
+                (-0.10, 0.0, -0.4),
+                (-0.12, 0.0, -0.5),
+            ]
+        )
+    ]
+    with raw_path.open("w", encoding="utf-8", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    (tmp_path / "manifest.json").write_text(
+        json.dumps(
+            {
+                "dof": 2,
+                "duration_s": 1.0,
+                "sample_hz": 4.0,
+                "profile_name": "gravity_sweep",
+                "profile_metadata": {"amplitude_rad": 0.12},
+                "raw_samples": "raw_samples.csv",
+                "lerobot_contract": {"schema": "lerobot-compatible"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    response = postprocess_dataset(
+        dataset_dir=tmp_path,
+        output_dir=tmp_path / "processed",
+        tools=("figaroh", "pinocchio"),
+        smoothing_window=1,
+    )
+
+    assert response.status.value == "completed"
+    quality = response.detail["quality_metrics"]
+    assert quality["data_readiness_status"] == "fail"
+    assert quality["document_sections"]["excitation"]["status"] == "fail"
+    joint_2 = quality["joint_metrics"][1]
+    assert joint_2["coverage_ratio"] == pytest.approx(0.5)
+    assert joint_2["direction_reach"]["negative"]["status"] == "fail"
+    assert joint_2["direction_reach"]["negative"]["mean_error_rad"] > 0.09
 
 
 def test_cli_ident_plan_json_outputs_summary(capsys):
@@ -541,6 +651,7 @@ def test_cli_ident_plan_uses_field_gravity_defaults(capsys):
     assert payload["detail"]["metadata"]["amplitude_rad"] == pytest.approx(0.12)
     assert payload["detail"]["metadata"]["segment_duration_s"] == pytest.approx(6.0)
     assert payload["detail"]["metadata"]["dwell_s"] == pytest.approx(1.0)
+    assert payload["detail"]["metadata"]["q_center"] == pytest.approx((0.0, 0.30, 0.30, 0.0, 0.0, 0.0))
     assert payload["detail"]["duration_s"] == pytest.approx(168.0)
 
 

@@ -172,7 +172,7 @@ commit: b6ed292
 
 ## 下一轮采集建议
 
-下一轮建议仍从 `gravity_sweep` 开始，但增大覆盖、降低速度并加入目标姿态驻留。CLI 的 `gravity_sweep` 默认值已经调整为 `0.12 rad / 6.0 s / 1.0 s dwell`；下面命令显式写出参数，方便现场确认。
+下一轮建议仍从 `gravity_sweep` 开始，但增大覆盖、降低速度并加入目标姿态驻留。CLI 的 X5/6DOF `gravity_sweep` 默认值已经调整为 `0.12 rad / 6.0 s / 1.0 s dwell / q_center=(0, 0.30, 0.30, 0, 0, 0)`；下面命令显式写出参数，方便现场确认。
 
 这个选择不是全局最优动力学激励轨迹。公开文献中，完整动力学辨识通常使用有限 Fourier 或改进 Fourier 轨迹，并在关节位置、速度、加速度约束下优化回归矩阵条件数、奇异值谱或 Fisher 信息矩阵。当前阶段只针对重力项和 payload 的低风险数据采集，所以优先选择准静态、单关节、大覆盖、带驻留的扫描，减少动态项和控制跟踪抖动对力矩数据的污染。后续完整动力学再交给 FIGAROH/Pinocchio/URDFly 生成真实 regressor 后做条件数优化。
 
@@ -184,6 +184,7 @@ uv run arx5ctl ident-plan \
   --amplitude 0.12 \
   --duration 6.0 \
   --dwell 1.0 \
+  --q-center 0 0.30 0.30 0 0 0 \
   --sample-hz 100 \
   --json
 ```
@@ -200,6 +201,7 @@ uv run arx5ctl ident-run \
   --amplitude 0.12 \
   --duration 6.0 \
   --dwell 1.0 \
+  --q-center 0 0.30 0.30 0 0 0 \
   --sample-hz 100 \
   --output runs/ident-steam-gravity \
   --execute \
@@ -207,11 +209,11 @@ uv run arx5ctl ident-run \
   --json
 ```
 
-如果 `0.12 rad` 仍有明显抖动，不要继续加大幅度，先检查增益恢复、轨迹跟踪、机械间隙、线缆/负载干涉、CAN 时延和 SDK 插值执行状态。如果它稳定但覆盖仍不足，再考虑围绕安全中心姿态设置 `--q-center`，或进入完整动力学阶段的优化轨迹。
+如果 `0.12 rad` 仍有明显抖动，不要继续加大幅度，先检查增益恢复、轨迹跟踪、机械间隙、线缆/负载干涉、CAN 时延和 SDK 插值执行状态。如果它稳定但覆盖仍不足，再微调安全中心姿态 `--q-center`，或进入完整动力学阶段的优化轨迹。
 
 建议的递进顺序：
 
-1. `gravity_sweep --amplitude 0.12 --duration 6.0 --dwell 1.0`
+1. `gravity_sweep --amplitude 0.12 --duration 6.0 --dwell 1.0 --q-center 0 0.30 0.30 0 0 0`
 2. 如果各关节实际覆盖达到约 8 到 15 度且运动平滑，再进入后处理和 FIGAROH 重力项验证
 3. 重力数据健康后，再跑 `friction_sweep`
 4. 最后再跑带 `--q-center` 和 `--optimize` 的 `fourier_multisine`
@@ -223,6 +225,13 @@ uv run arx5ctl ident-run \
 - 每个关节 `q - q_cmd` RMS
 - 每个关节 `tau_meas` range 和 std
 - 后处理是否生成 `processed_samples.csv` 与 `lerobot_contract.json`
+
+`ident-postprocess` 现在会在常规后处理文件之外额外生成两份质量门禁文件：
+
+- `quality_metrics.json`：机器可读指标，schema 为 `armctrl-ident-quality-v1`
+- `quality_report.md`：人工可读报告，包含 data health、excitation、tool execution、direction reach 等表格
+
+其中 `data_readiness_status` 只判断当前数据是否值得交给下一阶段求解器。`--tool figaroh --tool pinocchio` 在当前阶段表示生成对应工具的 handoff 和 skeleton，不表示已经执行 FIGAROH/Pinocchio 求解。真正的 regressor condition、physical consistency、prediction error 和 control benefit 仍要在外部求解与上机验证完成后才能从 `not_evaluated` 变成可判定状态。
 
 只有当各关节覆盖足够、跟踪正常、力矩反馈有变化后，才值得把数据交给 FIGAROH 做正式辨识。
 
@@ -240,4 +249,4 @@ uv run arx5ctl ident-run \
 - "Optimal excitation trajectories for mechanical systems identification", Automatica, 2021.
 - "An Analytical Approach for Dealing With Explicit Physical Constraints in Excitation Optimization Problems of Dynamic Identification", HKUST research portal.
 
-本文当前给出的 `gravity_sweep --amplitude 0.12 --duration 6.0 --dwell 1.0` 不是完整动力学的全局最优 Fourier 激励，而是针对重力项/末端 payload 的现场安全折中：覆盖比上一轮足够大，速度和加速度又低，并通过驻留样本降低动态项污染。
+本文当前给出的 `gravity_sweep --amplitude 0.12 --duration 6.0 --dwell 1.0 --q-center 0 0.30 0.30 0 0 0` 不是完整动力学的全局最优 Fourier 激励，而是针对重力项/末端 payload 的现场安全折中：覆盖比上一轮足够大，速度和加速度又低，并通过驻留样本降低动态项污染。

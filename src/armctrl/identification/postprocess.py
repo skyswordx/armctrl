@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import csv
 import json
+import math
+import statistics
 from pathlib import Path
 
-from armctrl.identification.tools import write_tool_handoff
+from armctrl.identification.tools import selected_tools, write_tool_handoff
 from armctrl.protocol.enums import CommandStatus, ErrorCode
 from armctrl.protocol.errors import ArmctrlError
 from armctrl.protocol.models import CommandResponse
@@ -47,6 +49,9 @@ def postprocess_dataset(
             urdf_path=urdf_path or manifest.get("urdf_path"),
             tools=tools,
         )
+        quality_metrics = _build_quality_metrics(manifest, rows, tools=tools)
+        quality_metrics_path = _write_quality_metrics(output, quality_metrics)
+        quality_report_path = _write_quality_report(output, quality_metrics)
         return CommandResponse(
             CommandStatus.COMPLETED,
             "identification dataset postprocessed",
@@ -56,6 +61,9 @@ def postprocess_dataset(
                 "processed_csv": str(processed_path),
                 "tool_handoff": str(handoff_path),
                 "lerobot_contract_json": str(lerobot_contract_path),
+                "quality_metrics_json": str(quality_metrics_path),
+                "quality_report_md": str(quality_report_path),
+                "quality_metrics": quality_metrics,
                 "dof": dof,
                 "sample_count": len(rows),
                 "lerobot_contract": manifest.get("lerobot_contract", {}),
@@ -144,3 +152,353 @@ def _central_difference(times: list[float], values: list[float]) -> list[float]:
             dt = max(times[index + 1] - times[index - 1], 1e-9)
             result.append((values[index + 1] - values[index - 1]) / dt)
     return result
+
+
+def _build_quality_metrics(manifest: dict, rows: list[dict[str, str]], *, tools: tuple[str, ...]) -> dict:
+    dof = int(manifest["dof"])
+    times = _float_column(rows, "t_s")
+    profile_metadata = manifest.get("profile_metadata", {})
+    expected_sample_count = _expected_sample_count(manifest)
+    data_health = _data_health(rows, dof=dof, times=times, expected_sample_count=expected_sample_count)
+    joint_metrics = [_joint_quality(rows, joint=joint) for joint in range(1, dof + 1)]
+    excitation_status = _worst_status([joint["excitation_status"] for joint in joint_metrics])
+    tool_execution = _tool_execution_status(tools)
+    document_sections = {
+        "data_health": {
+            "status": data_health["status"],
+            "summary": "CSV columns, numeric values, sample count, and time base checks.",
+        },
+        "excitation": {
+            "status": excitation_status,
+            "summary": "Joint coverage, command/actual coverage ratio, tracking error, and direction reach checks.",
+        },
+        "regressor_condition": {
+            "status": "not_evaluated",
+            "summary": "Requires Pinocchio, FIGAROH, or URDFly to build the true dynamics regressor.",
+        },
+        "physical_consistency": {
+            "status": "not_evaluated",
+            "summary": "Requires external identification output with masses, inertias, centers of mass, and base parameters.",
+        },
+        "prediction_error": {
+            "status": "not_evaluated",
+            "summary": "Requires solved parameters to compute tau_pred, residuals, RMSE, NRMSE, and R2.",
+        },
+        "control_benefit": {
+            "status": "not_evaluated",
+            "summary": "Requires an on-robot A/B test against default or previous gravity compensation parameters.",
+        },
+    }
+    readiness_inputs = [data_health["status"], excitation_status]
+    readiness = "pass" if all(status == "pass" for status in readiness_inputs) else "fail"
+    return {
+        "schema": "armctrl-ident-quality-v1",
+        "profile_name": manifest.get("profile_name"),
+        "profile_metadata": profile_metadata,
+        "sample_count": len(rows),
+        "expected_sample_count": expected_sample_count,
+        "dof": dof,
+        "thresholds": {
+            "min_coverage_ratio": 0.8,
+            "max_platform_mean_error_rad": 0.02,
+            "gravity_min_actual_range_deg": 8.0,
+            "max_sample_count_error_ratio": 0.05,
+        },
+        "data_health": data_health,
+        "joint_metrics": joint_metrics,
+        "tool_execution": tool_execution,
+        "document_sections": document_sections,
+        "data_readiness_status": readiness,
+        "handoff_note": (
+            "ident-postprocess creates cleaned CSVs, LeRobot-compatible metadata, quality gates, "
+            "and external-tool handoff artifacts. FIGAROH/Pinocchio solving is not executed unless "
+            "a later offline solver stage consumes these artifacts."
+        ),
+    }
+
+
+def _data_health(rows: list[dict[str, str]], *, dof: int, times: list[float], expected_sample_count: int | None) -> dict:
+    required_columns = ["t_s", "phase"]
+    for joint in range(1, dof + 1):
+        required_columns.extend(
+            [
+                f"q_{joint}",
+                f"dq_{joint}",
+                f"tau_meas_{joint}",
+                f"q_cmd_{joint}",
+                f"dq_cmd_{joint}",
+                f"ddq_cmd_{joint}",
+            ]
+        )
+    missing_columns = [column for column in required_columns if rows and column not in rows[0]]
+    nonfinite_values = _count_nonfinite(rows, [column for column in required_columns if column != "phase"])
+    dt = [times[index] - times[index - 1] for index in range(1, len(times))]
+    monotonic = all(value > 0 for value in dt)
+    sample_count_error_ratio = None
+    if expected_sample_count:
+        sample_count_error_ratio = abs(len(rows) - expected_sample_count) / expected_sample_count
+    dt_stats = {
+        "mean_s": _mean(dt),
+        "std_s": _pstdev(dt),
+        "min_s": min(dt) if dt else None,
+        "max_s": max(dt) if dt else None,
+        "p95_s": _percentile(dt, 0.95),
+    }
+    status = "pass"
+    if missing_columns or nonfinite_values or not rows or not monotonic:
+        status = "fail"
+    elif sample_count_error_ratio is not None and sample_count_error_ratio > 0.05:
+        status = "warn"
+    return {
+        "status": status,
+        "missing_columns": missing_columns,
+        "nonfinite_values": nonfinite_values,
+        "sample_count": len(rows),
+        "expected_sample_count": expected_sample_count,
+        "sample_count_error_ratio": sample_count_error_ratio,
+        "time_monotonic": monotonic,
+        "dt": dt_stats,
+    }
+
+
+def _joint_quality(rows: list[dict[str, str]], *, joint: int) -> dict:
+    q = _float_column(rows, f"q_{joint}")
+    q_cmd = _float_column(rows, f"q_cmd_{joint}")
+    dq = _float_column(rows, f"dq_{joint}")
+    tau = _float_column(rows, f"tau_meas_{joint}")
+    q_range = _range(q)
+    q_cmd_range = _range(q_cmd)
+    coverage_ratio = q_range / q_cmd_range if q_cmd_range > 1e-12 else None
+    errors = [actual - command for actual, command in zip(q, q_cmd, strict=False)]
+    abs_errors = [abs(value) for value in errors]
+    direction_reach = {
+        "positive": _direction_reach(rows, joint=joint, sign=1),
+        "negative": _direction_reach(rows, joint=joint, sign=-1),
+    }
+    direction_statuses = [value["status"] for value in direction_reach.values() if value["status"] != "not_applicable"]
+    excitation_status = "pass"
+    if q_cmd_range > 1e-12 and (coverage_ratio is None or coverage_ratio < 0.8):
+        excitation_status = "fail"
+    if direction_statuses:
+        excitation_status = _worst_status([excitation_status, *direction_statuses])
+    return {
+        "joint": joint,
+        "q_cmd_range_rad": q_cmd_range,
+        "q_cmd_range_deg": math.degrees(q_cmd_range),
+        "q_actual_range_rad": q_range,
+        "q_actual_range_deg": math.degrees(q_range),
+        "coverage_ratio": coverage_ratio,
+        "qerr_rms_rad": _rms(errors),
+        "qerr_p95_abs_rad": _percentile(abs_errors, 0.95),
+        "qerr_max_abs_rad": max(abs_errors) if abs_errors else None,
+        "max_abs_dq_radps": max((abs(value) for value in dq), default=None),
+        "tau_range_nm": _range(tau),
+        "tau_std_nm": _pstdev(tau),
+        "direction_reach": direction_reach,
+        "excitation_status": excitation_status,
+    }
+
+
+def _direction_reach(rows: list[dict[str, str]], *, joint: int, sign: int) -> dict:
+    q_cmd_values = _float_column(rows, f"q_cmd_{joint}")
+    max_abs_cmd = max((abs(value) for value in q_cmd_values), default=0.0)
+    if max_abs_cmd <= 1e-12:
+        return {"status": "not_applicable", "sample_count": 0}
+    threshold = 0.5 * max_abs_cmd
+    selected = [row for row in rows if sign * _float_value(row.get(f"q_cmd_{joint}", "")) >= threshold]
+    if not selected:
+        return {"status": "not_applicable", "sample_count": 0}
+    q = [_float_value(row[f"q_{joint}"]) for row in selected]
+    q_cmd = [_float_value(row[f"q_cmd_{joint}"]) for row in selected]
+    errors = [actual - command for actual, command in zip(q, q_cmd, strict=False)]
+    mean_error = _mean(errors)
+    status = "pass" if mean_error is not None and abs(mean_error) <= 0.02 else "fail"
+    return {
+        "status": status,
+        "sample_count": len(selected),
+        "cmd_mean_rad": _mean(q_cmd),
+        "actual_mean_rad": _mean(q),
+        "mean_error_rad": mean_error,
+        "actual_std_rad": _pstdev(q),
+    }
+
+
+def _tool_execution_status(tools: tuple[str, ...]) -> dict:
+    statuses = {}
+    for tool in selected_tools(tools):
+        statuses[tool.name] = {
+            "status": "handoff_only",
+            "installed_python_module": tool.installed,
+            "label": tool.label,
+            "note": "No solver is executed by ident-postprocess; use the generated handoff files in an offline tool stage.",
+        }
+    return statuses
+
+
+def _write_quality_metrics(output_dir: Path, metrics: dict) -> Path:
+    output_path = output_dir / "quality_metrics.json"
+    with output_path.open("w", encoding="utf-8") as file:
+        json.dump(metrics, file, ensure_ascii=False, sort_keys=True, indent=2)
+    return output_path
+
+
+def _write_quality_report(output_dir: Path, metrics: dict) -> Path:
+    output_path = output_dir / "quality_report.md"
+    lines = [
+        "# Identification Quality Report",
+        "",
+        f"- profile: `{metrics.get('profile_name')}`",
+        f"- data_readiness_status: `{metrics['data_readiness_status']}`",
+        f"- sample_count: `{metrics['sample_count']}`",
+        f"- expected_sample_count: `{metrics['expected_sample_count']}`",
+        "",
+        "## Tool Execution",
+        "",
+        "This postprocess step does not execute FIGAROH, Pinocchio, URDFly, or FloBaRoID solvers. It writes cleaned data, quality gates, and handoff artifacts for those tools.",
+        "",
+        "| Tool | Status | Installed Python Module |",
+        "| --- | --- | --- |",
+    ]
+    for name, status in metrics["tool_execution"].items():
+        lines.append(f"| {name} | {status['status']} | {status['installed_python_module']} |")
+    lines.extend(
+        [
+            "",
+            "## Document Gate Coverage",
+            "",
+            "| Section | Status | Summary |",
+            "| --- | --- | --- |",
+        ]
+    )
+    for name, section in metrics["document_sections"].items():
+        lines.append(f"| {name} | {section['status']} | {section['summary']} |")
+    lines.extend(
+        [
+            "",
+            "## Joint Metrics",
+            "",
+            "| Joint | Status | Actual Range deg | Command Range deg | Coverage Ratio | qerr RMS rad | Tau Range Nm |",
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for joint in metrics["joint_metrics"]:
+        lines.append(
+            "| {joint} | {status} | {actual:.3f} | {cmd:.3f} | {coverage} | {qerr:.5f} | {tau:.5f} |".format(
+                joint=joint["joint"],
+                status=joint["excitation_status"],
+                actual=joint["q_actual_range_deg"],
+                cmd=joint["q_cmd_range_deg"],
+                coverage=_format_optional(joint["coverage_ratio"]),
+                qerr=joint["qerr_rms_rad"],
+                tau=joint["tau_range_nm"],
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Direction Reach",
+            "",
+            "| Joint | Direction | Status | Command Mean rad | Actual Mean rad | Mean Error rad |",
+            "| --- | --- | --- | ---: | ---: | ---: |",
+        ]
+    )
+    for joint in metrics["joint_metrics"]:
+        for direction, reach in joint["direction_reach"].items():
+            lines.append(
+                "| {joint} | {direction} | {status} | {cmd} | {actual} | {error} |".format(
+                    joint=joint["joint"],
+                    direction=direction,
+                    status=reach["status"],
+                    cmd=_format_optional(reach.get("cmd_mean_rad")),
+                    actual=_format_optional(reach.get("actual_mean_rad")),
+                    error=_format_optional(reach.get("mean_error_rad")),
+                )
+            )
+    output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return output_path
+
+
+def _expected_sample_count(manifest: dict) -> int | None:
+    duration = manifest.get("duration_s")
+    sample_hz = manifest.get("sample_hz")
+    if duration is None or sample_hz is None:
+        return None
+    return int(round(float(duration) * float(sample_hz))) + 1
+
+
+def _float_column(rows: list[dict[str, str]], column: str) -> list[float]:
+    values = []
+    for row in rows:
+        value = row.get(column)
+        if value is None or value == "":
+            continue
+        values.append(_float_value(value))
+    return values
+
+
+def _float_value(value: str) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return math.nan
+
+
+def _count_nonfinite(rows: list[dict[str, str]], columns: list[str]) -> int:
+    count = 0
+    for row in rows:
+        for column in columns:
+            if column not in row:
+                continue
+            value = _float_value(row[column])
+            if not math.isfinite(value):
+                count += 1
+    return count
+
+
+def _range(values: list[float]) -> float:
+    finite = [value for value in values if math.isfinite(value)]
+    if not finite:
+        return 0.0
+    return max(finite) - min(finite)
+
+
+def _mean(values: list[float]) -> float | None:
+    finite = [value for value in values if math.isfinite(value)]
+    if not finite:
+        return None
+    return sum(finite) / len(finite)
+
+
+def _pstdev(values: list[float]) -> float | None:
+    finite = [value for value in values if math.isfinite(value)]
+    if len(finite) < 2:
+        return 0.0 if finite else None
+    return statistics.pstdev(finite)
+
+
+def _rms(values: list[float]) -> float | None:
+    finite = [value for value in values if math.isfinite(value)]
+    if not finite:
+        return None
+    return math.sqrt(sum(value * value for value in finite) / len(finite))
+
+
+def _percentile(values: list[float], percentile: float) -> float | None:
+    finite = sorted(value for value in values if math.isfinite(value))
+    if not finite:
+        return None
+    index = min(len(finite) - 1, max(0, int(math.ceil(percentile * len(finite))) - 1))
+    return finite[index]
+
+
+def _worst_status(statuses: list[str]) -> str:
+    order = {"not_evaluated": 0, "not_applicable": 0, "pass": 1, "warn": 2, "fail": 3}
+    if not statuses:
+        return "not_evaluated"
+    return max(statuses, key=lambda status: order.get(status, 0))
+
+
+def _format_optional(value: float | None) -> str:
+    if value is None:
+        return "n/a"
+    return f"{value:.5f}"

@@ -97,6 +97,7 @@ def write_tool_handoff(
         "- Use `q_proc_* / dq_proc_* / ddq_proc_* / tau_proc_*` as the default least-squares input.",
         "- `lerobot_contract` only unifies the interface semantics; it does not replace FIGAROH's offline math core.",
         "- If you want to study unsmoothed current-based torque estimates, compare against `tau_meas_*` in a separate offline script.",
+        "- This postprocess command does not execute FIGAROH, Pinocchio, URDFly, or FloBaRoID solvers; it prepares handoff inputs and local quality gates.",
         "",
         "## Tools",
         "",

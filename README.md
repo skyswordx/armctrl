@@ -287,6 +287,9 @@ uv run arx5ctl teleop-xbox \
 - `--dwell`
   - `gravity_sweep` 下表示每个目标姿态的静止驻留时间。
   - 默认 `1.0` 秒，用于降低动态项和跟踪抖动对重力项数据的污染。
+- `--q-center`
+  - `gravity_sweep` 和 `fourier_multisine` 的中心关节姿态，单位弧度。
+  - X5/6DOF 的 `gravity_sweep` 默认中心是 `(0, 0.30, 0.30, 0, 0, 0)`，避免 joint2/joint3 的负向半程贴近 URDF/SDK 下限。
 - `--harmonics`
   - 只对 `fourier_multisine` 有意义，控制傅里叶谐波数。
 - `--optimize --candidate-count N`
@@ -304,6 +307,7 @@ uv run arx5ctl ident-plan \
   --amplitude 0.12 \
   --duration 6.0 \
   --dwell 1.0 \
+  --q-center 0 0.30 0.30 0 0 0 \
   --sample-hz 100 \
   --json
 ```
@@ -345,6 +349,7 @@ uv run arx5ctl ident-run \
   --amplitude 0.12 \
   --duration 6.0 \
   --dwell 1.0 \
+  --q-center 0 0.30 0.30 0 0 0 \
   --sample-hz 100 \
   --output runs/ident-sdk \
   --execute \
@@ -377,7 +382,7 @@ uv run arx5ctl ident-run \
 
 `ident-run` 当前会在 `--execute` 时先自动调用一次 `reset_home()`，
 再下发关节轨迹。
-这样可以把实机起始姿态先拉回辨识轨迹默认的零位基线，
+这样可以把实机起始姿态先拉回辨识轨迹默认的安全中心基线，
 避免直接从未知姿态切入第一段轨迹。
 
 `ident-run` 执行中按 `Ctrl+C` 会请求后端进入 damping，并返回 `cancelled` 响应。
@@ -394,6 +399,13 @@ uv run arx5ctl ident-postprocess \
   --tool urdfly \
   --json
 ```
+
+后处理会生成 `processed_samples.csv`、`tool_handoff.md`、
+`lerobot_contract.json`、`quality_metrics.json` 和 `quality_report.md`。
+当前 `--tool` 参数表示生成对应外部工具的交接文件和 skeleton，
+不会在 `ident-postprocess` 内部直接执行 FIGAROH/Pinocchio 求解。
+先看 `quality_report.md` 的 `data_readiness_status` 与各关节覆盖，
+再决定是否把数据交给外部求解阶段。
 
 ## 常用命令汇总
 
