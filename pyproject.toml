@@ -8,7 +8,9 @@ version = "0.1.0"
 description = "Safe ARX5 arm control interface for Roboclaw"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+  "arx5-interface==0.1.2; sys_platform == 'linux'",
+]
 
 [project.optional-dependencies]
 dev = [

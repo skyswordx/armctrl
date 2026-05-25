@@ -6,6 +6,9 @@ requires-python = ">=3.12"
 name = "armctrl"
 version = "0.1.0"
 source = { editable = "." }
+dependencies = [
+    { name = "arx5-interface", marker = "sys_platform == 'linux'" },
+]
 
 [package.optional-dependencies]
 dev = [
@@ -18,11 +21,27 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "pytest", marker = "extra == 'dev'", specifier = ">=8.2" }]
+requires-dist = [
+    { name = "arx5-interface", marker = "sys_platform == 'linux'", specifier = "==0.1.2" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.2" },
+]
 provides-extras = ["dev"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=9.0.3" }]
+
+[[package]]
+name = "arx5-interface"
+version = "0.1.2"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ce/b8/1982e715e9706d6a44f5d6c8ad79a1a4cc64f6bf0e0296eb6a0237adfd81/arx5_interface-0.1.2-cp312-cp312-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:cbe63bde2ce632e8fae72b087bfd29dfc196c7ebdaadaeafc2612e4ecee570d4", size = 1546243, upload-time = "2026-03-21T12:34:27.205Z" },
+    { url = "https://files.pythonhosted.org/packages/32/9c/574ea7d7290c7111cb9d23b40aba2a2182ac818b906fc0d4cb6871beaba4/arx5_interface-0.1.2-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:c2e7eee7200822c55a133e4d6f66907432c86b99aca0e011665ee6ae1201ecb0", size = 1641131, upload-time = "2026-03-21T02:19:49.878Z" },
+    { url = "https://files.pythonhosted.org/packages/15/1e/e5c14bcb5ac1d8f40003b12d6028decdaedab0d82ce07a4cc5c34464a618/arx5_interface-0.1.2-cp313-cp313-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:762211955f2495b654ad816705b381f78837a16e56e36009bf1e200fd5a0116e", size = 1545652, upload-time = "2026-03-21T12:34:28.768Z" },
+    { url = "https://files.pythonhosted.org/packages/35/53/e951a1d7975532d53b15e0b13fea42f7671f6ce51ea641c3597f84045a6b/arx5_interface-0.1.2-cp313-cp313-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:a15f6414238ee20163361a2864a0ab677e7df4e771e53e1c1e4b7d58de95f2f4", size = 1641152, upload-time = "2026-03-21T02:19:51.374Z" },
+    { url = "https://files.pythonhosted.org/packages/77/86/2e989cfe08f92c6cd5901955c3517d62b95f779a022a0e19ee0f8c99dbbb/arx5_interface-0.1.2-cp314-cp314-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:c83a037782f907bdf2ea6ce1a8164d47f44b31edd95687af39821c6cad37ba8f", size = 1547036, upload-time = "2026-03-21T12:34:30.486Z" },
+    { url = "https://files.pythonhosted.org/packages/48/7f/1b9ba405790c1213ed99309c8c5f81691dfb35e3618548dd9e0060c4ff5d/arx5_interface-0.1.2-cp314-cp314-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:15b5dbeee10793861deeb2fad61d5502fafa8e794100088015ddac3d9e8d4ebd", size = 1641349, upload-time = "2026-03-21T02:19:53.488Z" },
+]
 
 [[package]]
 name = "colorama"
