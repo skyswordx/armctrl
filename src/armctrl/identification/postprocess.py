@@ -39,6 +39,7 @@ def postprocess_dataset(
         dof = int(manifest["dof"])
         rows = _load_rows(dataset / manifest["raw_samples"])
         processed_path = _write_processed(rows, output, dof=dof, smoothing_window=smoothing_window)
+        lerobot_contract_path = _write_lerobot_contract(output, manifest.get("lerobot_contract", {}))
         handoff_path = write_tool_handoff(
             output_dir=output,
             dataset_dir=dataset,
@@ -54,8 +55,10 @@ def postprocess_dataset(
                 "output_dir": str(output),
                 "processed_csv": str(processed_path),
                 "tool_handoff": str(handoff_path),
+                "lerobot_contract_json": str(lerobot_contract_path),
                 "dof": dof,
                 "sample_count": len(rows),
+                "lerobot_contract": manifest.get("lerobot_contract", {}),
             },
         )
     except Exception as exc:
@@ -103,6 +106,14 @@ def _write_processed(rows: list[dict[str, str]], output_dir: Path, *, dof: int, 
                 output_row[f"ddq_proc_{joint}"] = ddq_proc[joint - 1][row_index]
                 output_row[f"tau_proc_{joint}"] = tau_smooth[joint - 1][row_index]
             writer.writerow(output_row)
+    return output_path
+
+
+def _write_lerobot_contract(output_dir: Path, contract: dict) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / "lerobot_contract.json"
+    with output_path.open("w", encoding="utf-8") as file:
+        json.dump(contract, file, ensure_ascii=False, sort_keys=True, indent=2)
     return output_path
 
 

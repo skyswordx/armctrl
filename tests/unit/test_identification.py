@@ -168,6 +168,65 @@ def test_fourier_multisine_has_zero_boundary_velocity_and_passes_safety():
     assert profile.points[-1].dq == pytest.approx((0.0, 0.0, 0.0, 0.0), abs=1e-12)
 
 
+def test_fourier_multisine_uses_explicit_center_pose():
+    profile = generate_fourier_multisine(
+        dof=3,
+        sample_hz=20.0,
+        duration_s=2.0,
+        harmonics=2,
+        amplitude_rad=0.05,
+        seed=3,
+        q_center=(0.6, 0.7, 0.2),
+    )
+
+    assert profile.metadata["q_center"] == pytest.approx((0.6, 0.7, 0.2))
+    assert profile.points[0].q == pytest.approx((0.6, 0.7, 0.2), abs=1e-12)
+    assert profile.points[-1].q == pytest.approx((0.6, 0.7, 0.2), abs=1e-12)
+
+
+def test_dataset_manifest_exports_lerobot_contract(tmp_path: Path):
+    profile = generate_gravity_sweep(dof=2, sample_hz=10.0, amplitude_rad=0.05, segment_duration_s=0.5)
+    recorder = DatasetRecorder(tmp_path)
+
+    manifest = recorder.write_run(
+        profile=profile,
+        backend_name="fake_joint",
+        model="X5",
+        samples=[],
+        execute=False,
+        urdf_path="configs/models/X5_camera.urdf",
+    )
+
+    assert manifest.lerobot_contract["schema"] == "lerobot-compatible"
+    assert manifest.lerobot_contract["observation_features"]["joint_1.pos"]["unit"] == "rad"
+    assert manifest.lerobot_contract["action_features"]["joint_2.pos"]["unit"] == "rad"
+    assert manifest.lerobot_contract["column_map"]["observation"]["q_1"] == "joint_1.pos"
+    assert manifest.lerobot_contract["column_map"]["action"]["q_cmd_2"] == "joint_2.pos"
+    with (tmp_path / "lerobot_contract.json").open(encoding="utf-8") as file:
+        assert json.load(file) == manifest.lerobot_contract
+
+
+def test_tool_handoff_makes_figaroh_the_offline_math_target(tmp_path: Path):
+    profile = generate_gravity_sweep(dof=2, sample_hz=10.0, amplitude_rad=0.05, segment_duration_s=0.5)
+    recorder = DatasetRecorder(tmp_path)
+    runner = IdentificationRunner(FakeJointRobotIO(dof=2), sample_hz=10.0, sleep_fn=lambda _: None)
+    runner.run(profile, recorder=recorder, execute=True)
+
+    response = postprocess_dataset(
+        dataset_dir=tmp_path,
+        output_dir=tmp_path / "processed",
+        tools=("figaroh",),
+        urdf_path="configs/models/X5_camera.urdf",
+        smoothing_window=3,
+    )
+
+    assert response.status.value == "completed"
+    handoff = (tmp_path / "processed" / "tool_handoff.md").read_text(encoding="utf-8")
+    assert "FIGAROH" in handoff
+    assert "LeRobot" in handoff
+    assert "tau = Y(q, dq, ddq) * pi" in handoff
+
+
 def test_optimized_fourier_multisine_improves_surrogate_condition_number():
     limits = TrajectorySafetyLimits(
         joint_min=(-0.5, -0.5, -0.5),
@@ -319,7 +378,10 @@ def test_postprocess_writes_processed_csv_and_tool_handoff(tmp_path: Path):
     assert response.status.value == "completed"
     assert (tmp_path / "processed" / "processed_samples.csv").is_file()
     assert (tmp_path / "processed" / "tool_handoff.md").is_file()
+    assert (tmp_path / "processed" / "lerobot_contract.json").is_file()
     assert (tmp_path / "processed" / "pinocchio_regressor_skeleton.py").is_file()
+    with (tmp_path / "processed" / "lerobot_contract.json").open(encoding="utf-8") as file:
+        assert json.load(file)["schema"] == "lerobot-compatible"
     handoff = (tmp_path / "processed" / "tool_handoff.md").read_text(encoding="utf-8")
     skeleton = (tmp_path / "processed" / "pinocchio_regressor_skeleton.py").read_text(encoding="utf-8")
     assert "Pinocchio" in handoff
@@ -354,6 +416,35 @@ def test_cli_ident_plan_json_outputs_summary(capsys):
     assert payload["status"] == "completed"
     assert payload["detail"]["profile_name"] == "fourier_multisine"
     assert payload["detail"]["dof"] == 3
+    assert payload["detail"]["lerobot_contract"]["schema"] == "lerobot-compatible"
+    assert payload["detail"]["lerobot_contract"]["joint_names"] == ["joint_1", "joint_2", "joint_3"]
+
+
+def test_cli_ident_plan_accepts_fourier_center_pose(capsys):
+    code = main(
+        [
+            "ident-plan",
+            "--adapter",
+            "fake",
+            "--profile",
+            "fourier_multisine",
+            "--dof",
+            "3",
+            "--duration",
+            "1.0",
+            "--sample-hz",
+            "20",
+            "--q-center",
+            "0.4",
+            "0.5",
+            "0.6",
+            "--json",
+        ]
+    )
+
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["detail"]["metadata"]["q_center"] == pytest.approx((0.4, 0.5, 0.6))
 
 
 def test_cli_ident_plan_can_optimize_fourier_profile(capsys):
@@ -372,6 +463,10 @@ def test_cli_ident_plan_can_optimize_fourier_profile(capsys):
             "20",
             "--harmonics",
             "3",
+            "--q-center",
+            "0.1",
+            "0.2",
+            "0.3",
             "--optimize",
             "--candidate-count",
             "5",
@@ -383,6 +478,7 @@ def test_cli_ident_plan_can_optimize_fourier_profile(capsys):
     payload = json.loads(capsys.readouterr().out)
     assert payload["detail"]["metadata"]["optimization"]["candidate_count"] == 5
     assert payload["detail"]["metadata"]["optimization"]["best_seed"] >= 1
+    assert payload["detail"]["metadata"]["q_center"] == pytest.approx((0.1, 0.2, 0.3))
 
 
 def test_cli_ident_run_fake_writes_dataset(tmp_path: Path, capsys):
@@ -413,6 +509,7 @@ def test_cli_ident_run_fake_writes_dataset(tmp_path: Path, capsys):
     assert output_dir.name.startswith("ident-sdk-")
     assert (output_dir / "raw_samples.csv").is_file()
     assert (output_dir / "manifest.json").is_file()
+    assert (output_dir / "lerobot_contract.json").is_file()
 
 
 def test_cli_ident_plan_output_directory_gets_timestamp_suffix(tmp_path: Path, capsys, monkeypatch: pytest.MonkeyPatch):

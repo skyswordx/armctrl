@@ -1,4 +1,4 @@
-"""辨识数据集写入器。"""
+"""Identification dataset writer."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import csv
 import json
 from pathlib import Path
 
+from armctrl.compat.lerobot import build_lerobot_contract
 from armctrl.identification.models import (
     DatasetManifest,
     ExcitationProfile,
@@ -16,13 +17,12 @@ from armctrl.identification.models import (
 
 
 class DatasetRecorder:
-    """把轨迹与采样结果写成稳定的数据集目录。"""
+    """Write trajectory and sample results into a stable dataset directory."""
 
     def __init__(self, output_dir: str | Path) -> None:
         self.output_dir = Path(output_dir).expanduser().resolve()
 
     def write_trajectory(self, profile: ExcitationProfile) -> Path:
-        # planned_trajectory.csv 只保存命令轨迹，适合执行前人工审阅和画图。
         self.output_dir.mkdir(parents=True, exist_ok=True)
         path = self.output_dir / "planned_trajectory.csv"
         with path.open("w", encoding="utf-8", newline="") as file:
@@ -70,20 +70,24 @@ class DatasetRecorder:
                 "ddq_cmd": vector_column_names("ddq_cmd", profile.dof),
                 "tau_cmd": vector_column_names("tau_cmd", profile.dof),
             },
+            lerobot_contract=build_lerobot_contract(dof=profile.dof, gripper=True),
             profile_metadata=profile.metadata,
             notes=[
-                "tau_meas 是后端反馈力矩；ARX5 SDK 下它来自 SDK 的电流换算力矩反馈。",
-                "离线回归矩阵和基参数提取优先交给 URDFly、Pinocchio、FIGAROH 或 FloBaRoID。",
+                "tau_meas comes from the backend torque estimate.",
+                "Offline regressors and base-parameter extraction are delegated to external tools.",
+                "The manifest stores a LeRobot-shaped contract so the dataset can be consumed through a unified interface.",
             ],
             tool_hints={
-                "pinocchio": "使用 computeJointTorqueRegressor(model, data, q, dq, ddq) 构造回归矩阵。",
-                "urdfly": "使用 URDF 生成符号回归矩阵代码，再读取 raw/processed CSV。",
-                "figaroh": "把 manifest、URDF 和 processed CSV 映射到 FIGAROH identification 配置。",
-                "flobaroid": "可使用其 URDF 辨识流程继续做滤波、OLS/WLS 和 URDF 参数输出。",
+                "pinocchio": "Use computeJointTorqueRegressor(model, data, q, dq, ddq) to build the regressor.",
+                "urdfly": "Generate symbolic regressor code from URDF, then read raw/processed CSV.",
+                "figaroh": "Map manifest, URDF, and processed CSV into FIGAROH identification configuration.",
+                "flobaroid": "Convert processed_samples.csv into FloBaRoID tables and use its optimization/parameter export flow.",
             },
         )
         with (self.output_dir / "manifest.json").open("w", encoding="utf-8") as file:
             json.dump(manifest.to_dict(), file, ensure_ascii=False, sort_keys=True, indent=2)
+        with (self.output_dir / "lerobot_contract.json").open("w", encoding="utf-8") as file:
+            json.dump(manifest.lerobot_contract, file, ensure_ascii=False, sort_keys=True, indent=2)
         return manifest
 
     def _trajectory_fieldnames(self, dof: int) -> list[str]:

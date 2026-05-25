@@ -1,7 +1,4 @@
-"""外部辨识工具交接文件。
-
-armctrl 只准备数据和脚手架，不在这里重复实现外部工具已经成熟的回归矩阵与优化流程。
-"""
+"""External tool handoff helpers."""
 
 from __future__ import annotations
 
@@ -30,29 +27,29 @@ TOOL_PROFILES: dict[str, ExternalToolProfile] = {
         name="pinocchio",
         label="Pinocchio",
         python_module="pinocchio",
-        purpose="用 URDF 构建刚体动力学模型，并调用 computeJointTorqueRegressor 生成观测矩阵。",
-        handoff="默认优先读取 processed_samples.csv 的 q_proc/dq_proc/ddq_proc/tau_proc；如需对比电流换算原始力矩噪声，可再单独切回 tau_meas。",
+        purpose="Build rigid-body dynamics models and compute torque regressors.",
+        handoff="Prefer processed_samples.csv with q_proc/dq_proc/ddq_proc/tau_proc; compare tau_meas only when needed.",
     ),
     "figaroh": ExternalToolProfile(
         name="figaroh",
         label="FIGAROH",
         python_module="figaroh",
-        purpose="做标定与动力学辨识流程编排。",
-        handoff="把 URDF、manifest.json 和 processed_samples.csv 映射成 FIGAROH identification 配置。",
+        purpose="Do dynamics identification, trajectory optimization, and physical-consistency projection.",
+        handoff="Map LeRobot-shaped manifest, URDF, and processed_samples.csv into FIGAROH identification config, then let the external tool compute base parameters, regressors, and consistency projection.",
     ),
     "flobaroid": ExternalToolProfile(
         name="flobaroid",
         label="FloBaRoID",
         python_module=None,
-        purpose="URDF 驱动的参数辨识、滤波、OLS/WLS 和 URDF 参数输出流程。",
-        handoff="把 processed_samples.csv 转成 FloBaRoID 期望的数据表，再使用其优化与参数输出流程。",
+        purpose="URDF-driven parameter identification and OLS/WLS solver flow.",
+        handoff="Convert processed_samples.csv into the table shape FloBaRoID expects and run its optimization/export pipeline.",
     ),
     "urdfly": ExternalToolProfile(
         name="urdfly",
         label="URDFly",
         python_module="urdfly",
-        purpose="从 URDF 生成符号动力学回归矩阵代码。",
-        handoff="用 URDFly 生成 regressor 代码，然后优先读取 processed_samples.csv 的 q_proc/dq_proc/ddq_proc/tau_proc 组装 Yπ=τ。",
+        purpose="Generate symbolic dynamics regressor code from URDF.",
+        handoff="Generate regressor code with URDFly, then assemble Y(pi)=tau from processed_samples.csv columns.",
     ),
 }
 
@@ -76,8 +73,6 @@ def write_tool_handoff(
     urdf_path: str | None,
     tools: tuple[str, ...],
 ) -> Path:
-    """写入离线工具交接说明和 Pinocchio 脚手架。"""
-
     output_dir.mkdir(parents=True, exist_ok=True)
     active_tools = selected_tools(tools)
     handoff_path = output_dir / "tool_handoff.md"
@@ -90,16 +85,18 @@ def write_tool_handoff(
         "",
         "## Data Contract",
         "",
-        "- `q_* / dq_* / tau_meas_*`: 原始实测关节位置、速度和后端力矩反馈。",
-        "- `q_proc_* / dq_proc_* / ddq_proc_* / tau_proc_*`: 同一条后处理链生成的默认辨识输入。",
-        "- `ddq_proc_*`: 由平滑后的 `q_proc_*` 再经中心差分得到，不再和原始 `q_* / dq_*` 混用。",
-        "- `tau_proc_*`: 对 `tau_meas_*` 做同窗口平滑后的结果，用于和 `q_proc_* / dq_proc_* / ddq_proc_*` 保持时间对齐策略一致。",
-        "- `q_cmd_* / dq_cmd_* / ddq_cmd_*`: commanded excitation trajectory",
+        "- `q_* / dq_* / tau_meas_*`: raw measured joint state and torque feedback.",
+        "- `q_proc_* / dq_proc_* / ddq_proc_* / tau_proc_*`: default offline identification input from one postprocess chain.",
+        "- `lerobot_contract`: LeRobot-style observation/action feature contract and column map.",
+        "- `ddq_proc_*`: centered differences of smoothed `q_proc_*`, not mixed with raw `q_* / dq_*`.",
+        "- `tau_proc_*`: smoothed `tau_meas_*` aligned to the same time base as the processed kinematics.",
+        "- `q_cmd_* / dq_cmd_* / ddq_cmd_*`: commanded excitation trajectory.",
         "",
         "## Recommended Offline Tuple",
         "",
-        "- 默认使用 `q_proc_* / dq_proc_* / ddq_proc_* / tau_proc_*` 进入回归矩阵与最小二乘流程。",
-        "- 如果要评估电流换算力矩未经平滑时的影响，可在离线脚本里额外对比 `tau_meas_*`。",
+        "- Use `q_proc_* / dq_proc_* / ddq_proc_* / tau_proc_*` as the default least-squares input.",
+        "- `lerobot_contract` only unifies the interface semantics; it does not replace FIGAROH's offline math core.",
+        "- If you want to study unsmoothed current-based torque estimates, compare against `tau_meas_*` in a separate offline script.",
         "",
         "## Tools",
         "",
@@ -118,14 +115,14 @@ def write_tool_handoff(
         )
     lines.extend(
         [
-        "## Identification Equation",
-        "",
-        "The offline target is `tau = Y(q, dq, ddq) * pi`.",
-        "Use external tooling for regressor generation, base-parameter extraction, filtering strategy, and OLS/WLS solving.",
-        "If the trajectory was created with `--optimize`, its current score is based on a surrogate feature matrix.",
-        "Replace the surrogate score with a true regressor condition number once Pinocchio or URDFly regressor generation is wired in.",
-        "",
-    ]
+            "## Identification Equation",
+            "",
+            "The offline target is `tau = Y(q, dq, ddq) * pi`.",
+            "Use external tooling for regressor generation, base-parameter extraction, filtering strategy, and OLS/WLS solving.",
+            "If the trajectory was created with `--optimize`, its current score is based on a surrogate feature matrix.",
+            "Replace the surrogate score with a true regressor condition number once Pinocchio or URDFly regressor generation is wired in.",
+            "",
+        ]
     )
     handoff_path.write_text("\n".join(lines), encoding="utf-8")
     _write_pinocchio_skeleton(output_dir)
@@ -133,9 +130,6 @@ def write_tool_handoff(
 
 
 def _write_pinocchio_skeleton(output_dir: Path) -> None:
-    # 这个脚本是交接骨架，不在单测中执行。
-    # 默认使用统一 processed 四元组，避免把 raw q/dq 和 proc ddq/tau 混在一起。
-    # 如果后续要比较 raw tau 与 filtered tau 的辨识残差，可只替换 tau 读取列。
     skeleton = '''"""Pinocchio regressor handoff skeleton.
 
 Run after installing Pinocchio in a dedicated offline environment.
@@ -165,8 +159,6 @@ def main() -> None:
     regressors = []
     torques = []
     for row in rows:
-        # 统一使用同一条后处理链生成的 q/dq/ddq/tau。
-        # 这样更容易保证求导、平滑和力矩序列在时间上采用一致策略。
         q = np.array([float(row[f"q_proc_{index}"]) for index in range(1, model.nv + 1)])
         dq = np.array([float(row[f"dq_proc_{index}"]) for index in range(1, model.nv + 1)])
         ddq = np.array([float(row[f"ddq_proc_{index}"]) for index in range(1, model.nv + 1)])

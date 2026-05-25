@@ -46,6 +46,7 @@ def optimize_fourier_multisine(
     seed: int,
     candidate_count: int,
     safety_limits: TrajectorySafetyLimits | None = None,
+    q_center: tuple[float, ...] | None = None,
     q0: tuple[float, ...] | None = None,
 ) -> ExcitationProfile:
     """在多个候选有限傅里叶轨迹中选择代理条件数最低的一条。"""
@@ -64,6 +65,7 @@ def optimize_fourier_multisine(
             harmonics=harmonics,
             amplitude_rad=amplitude_rad,
             seed=candidate_seed,
+            q_center=q_center,
             q0=q0,
         )
         validation = validate_trajectory(candidate, safety_limits)

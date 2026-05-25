@@ -30,6 +30,22 @@ def _base_q(dof: int, q0: tuple[float, ...] | None) -> tuple[float, ...]:
     return tuple(float(value) for value in q0)
 
 
+def _center_q(
+    dof: int,
+    q_center: tuple[float, ...] | None,
+    q0: tuple[float, ...] | None,
+) -> tuple[float, ...]:
+    if q_center is not None and q0 is not None:
+        if tuple(float(value) for value in q_center) != tuple(float(value) for value in q0):
+            raise ValueError("q_center and q0 must match when both are provided")
+    source = q_center if q_center is not None else q0
+    if source is None:
+        return _zeros(dof)
+    if len(source) != dof:
+        raise ValueError(f"q_center must contain {dof} values")
+    return tuple(float(value) for value in source)
+
+
 def _sample_times(duration_s: float, sample_hz: float) -> list[float]:
     # 末尾显式包含 duration_s，保证轨迹最后一个点能回到安全边界条件。
     if duration_s <= 0:
@@ -226,11 +242,12 @@ def generate_fourier_multisine(
     harmonics: int = 5,
     amplitude_rad: float = 0.12,
     seed: int = 1,
+    q_center: tuple[float, ...] | None = None,
     q0: tuple[float, ...] | None = None,
 ) -> ExcitationProfile:
     """生成带五次包络的有限傅里叶多关节激励轨迹。"""
 
-    base = _base_q(dof, q0)
+    base = _center_q(dof, q_center, q0)
     omega = 2.0 * math.pi / duration_s
     coefficients = _normalised_fourier_coefficients(
         dof=dof,
@@ -272,6 +289,7 @@ def generate_fourier_multisine(
             "duration_s": duration_s,
             "harmonics": harmonics,
             "seed": seed,
+            "q_center": base,
             "boundary_mode": "quintic_envelope_zero_velocity_acceleration",
             "recommended_use": "让回归矩阵观测条件更好，真实硬件上应放在最后阶段。",
         },

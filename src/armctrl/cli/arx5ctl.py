@@ -21,6 +21,7 @@ from pathlib import Path
 from armctrl.adapters.arx5.fake import FakeArx5Adapter
 from armctrl.adapters.arx5.sdk import Arx5SDKAdapter
 from armctrl.calibration.gripper import GripperCalibrationService
+from armctrl.compat.lerobot import build_lerobot_contract
 from armctrl.daemon.executor import ArmCommandExecutor
 from armctrl.identification.backends import build_joint_backend
 from armctrl.identification.optimization import optimize_fourier_multisine
@@ -167,6 +168,12 @@ def add_identification_profile_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--amplitude", type=float)
     parser.add_argument("--harmonics", type=int, default=5)
     parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument(
+        "--q-center",
+        nargs="+",
+        type=float,
+        help="Center joint pose for fourier_multisine, in radians",
+    )
     parser.add_argument("--optimize", action="store_true")
     parser.add_argument("--candidate-count", type=int, default=12)
 
@@ -356,6 +363,7 @@ def dispatch_identification(args: argparse.Namespace) -> CommandResponse:
         profile = build_identification_profile(args)
         validation = validate_trajectory(profile, TrajectorySafetyLimits.conservative(profile.dof))
         detail = profile.summary()
+        detail["lerobot_contract"] = build_lerobot_contract(dof=profile.dof, gripper=True)
         if args.output:
             output_dir = timestamped_output_dir(args.output)
             path = DatasetRecorder(output_dir).write_trajectory(profile)
@@ -437,6 +445,7 @@ def build_identification_profile(args: argparse.Namespace):
         # 用户显式传 --amplitude 时仍按用户值生成并交给 safety 检查。
         default_amplitude = min(0.12, 0.02 * duration_s * duration_s)
         amplitude_rad = args.amplitude if args.amplitude is not None else default_amplitude
+        q_center = tuple(args.q_center) if args.q_center is not None else None
         if args.optimize:
             return optimize_fourier_multisine(
                 dof=args.dof,
@@ -447,6 +456,7 @@ def build_identification_profile(args: argparse.Namespace):
                 seed=args.seed,
                 candidate_count=args.candidate_count,
                 safety_limits=TrajectorySafetyLimits.conservative(args.dof),
+                q_center=q_center,
             )
         return generate_fourier_multisine(
             dof=args.dof,
@@ -455,6 +465,7 @@ def build_identification_profile(args: argparse.Namespace):
             harmonics=args.harmonics,
             amplitude_rad=amplitude_rad,
             seed=args.seed,
+            q_center=q_center,
         )
     raise ArmctrlError(ErrorCode.INVALID_REQUEST, f"unsupported identification profile {args.profile}")
 

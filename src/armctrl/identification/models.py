@@ -146,6 +146,7 @@ class DatasetManifest:
     urdf_path: str | None = None
     execute: bool = False
     columns: dict[str, list[str]] = field(default_factory=dict)
+    lerobot_contract: dict[str, Any] = field(default_factory=dict)
     profile_metadata: dict[str, Any] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
     tool_hints: dict[str, Any] = field(default_factory=dict)
