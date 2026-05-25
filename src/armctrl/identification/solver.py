@@ -9,6 +9,9 @@ import math
 from pathlib import Path
 from typing import Any
 
+from armctrl.identification.models import ExcitationProfile
+from armctrl.identification.optimization import ExcitationScore
+
 
 DOCUMENT_GATE_MAPPING = {
     "data_health": {
@@ -36,6 +39,46 @@ DOCUMENT_GATE_MAPPING = {
         "meaning": "上机 A/B 测试后，保持力矩、电流、拖动手感和姿态误差是否改善。",
     },
 }
+
+
+def pinocchio_regressor_scorer(*, urdf_path: str | Path, dof: int):
+    """Return a Fourier scorer backed by Pinocchio's true torque regressor when available."""
+
+    def score(profile: ExcitationProfile) -> ExcitationScore:
+        if importlib.util.find_spec("pinocchio") is None:
+            return ExcitationScore(math.inf, 0, 0, len(profile.points), mode="pinocchio_regressor_unavailable")
+        resolved_urdf = Path(urdf_path).expanduser()
+        if not resolved_urdf.is_file():
+            return ExcitationScore(math.inf, 0, 0, len(profile.points), mode="pinocchio_regressor_unavailable")
+        try:
+            import numpy as np
+            import pinocchio as pin
+
+            model = pin.buildModelFromUrdf(str(resolved_urdf))
+            data = model.createData()
+            active_dof = min(int(dof), int(model.nv))
+            regressors = []
+            for point in profile.points:
+                q = np.zeros(model.nq)
+                dq = np.zeros(model.nv)
+                ddq = np.zeros(model.nv)
+                q[: min(point.dof, model.nq)] = np.asarray(point.q[: model.nq], dtype=float)
+                dq[: min(point.dof, model.nv)] = np.asarray(point.dq[: model.nv], dtype=float)
+                ddq[: min(point.dof, model.nv)] = np.asarray(point.ddq[: model.nv], dtype=float)
+                regressors.append(pin.computeJointTorqueRegressor(model, data, q, dq, ddq)[:active_dof, :])
+            matrix = np.vstack(regressors)
+            metrics = _regressor_metrics(matrix)
+            return ExcitationScore(
+                condition_number=float(metrics["condition_number_effective"]),
+                rank=int(metrics["rank"]),
+                feature_count=int(metrics["parameter_count"]),
+                sample_count=len(profile.points),
+                mode="pinocchio_regressor_condition",
+            )
+        except Exception:
+            return ExcitationScore(math.inf, 0, 0, len(profile.points), mode="pinocchio_regressor_unavailable")
+
+    return score
 
 
 def solve_processed_dataset(
@@ -143,6 +186,7 @@ def _run_pinocchio_solver(*, processed_csv: Path, urdf_path: str | None, dof: in
         active_dof = min(int(dof), int(model.nv))
         train_mask = np.array([index % 5 != 0 for index in range(len(rows))], dtype=bool)
         runs = {}
+        raw_regressions = {}
         for mode in ("gravity_only", "full"):
             y_matrix, tau_matrix = _build_pinocchio_regression(
                 pin=pin,
@@ -152,31 +196,46 @@ def _run_pinocchio_solver(*, processed_csv: Path, urdf_path: str | None, dof: in
                 dof=active_dof,
                 mode=mode,
             )
+            raw_regressions[mode] = (y_matrix, tau_matrix)
             parameter_subset = _parameter_subset_for_mode(mode, int(y_matrix.shape[1]))
             y_solve = y_matrix[:, parameter_subset["selected_columns"]]
-            equation_train_mask = np.repeat(train_mask, active_dof)
-            tau_vector = tau_matrix.reshape(-1)
-            pi_hat, _, lstsq_rank, _ = np.linalg.lstsq(
-                y_solve[equation_train_mask],
-                tau_vector[equation_train_mask],
-                rcond=None,
+            runs[mode] = _solve_regression_run(
+                mode=mode,
+                y_solve=y_solve,
+                tau_matrix=tau_matrix,
+                train_mask=train_mask,
+                active_dof=active_dof,
+                parameter_subset=parameter_subset,
+                physical_model=model,
             )
-            tau_pred = (y_solve @ pi_hat).reshape(len(rows), active_dof)
-            regressor = _regressor_metrics(y_solve)
-            validation = _prediction_metrics(tau_matrix, tau_pred, train_mask == 0)
-            train = _prediction_metrics(tau_matrix, tau_pred, train_mask)
-            physical = _physical_consistency_for_mode(mode, model, pi_hat)
-            runs[mode] = {
-                "status": "completed",
-                "interpretation": _mode_interpretation(mode),
-                "parameter_subset": parameter_subset,
-                "regressor": regressor,
-                "lstsq_rank_train": int(lstsq_rank),
-                "train_metrics": train,
-                "validation_metrics": validation,
-                "physical_consistency_min_norm_solution": physical,
-                "verdict": _pinocchio_run_verdict(regressor, validation, physical),
-            }
+
+        full_y_matrix, full_tau_matrix = raw_regressions["full"]
+        base_subset = _base_parameter_subset_from_regressor(full_y_matrix, source_hint="figaroh_qr")
+        full_base_y = full_y_matrix[:, base_subset["selected_columns"]]
+        runs["full_base"] = _solve_regression_run(
+            mode="full_base",
+            y_solve=full_base_y,
+            tau_matrix=full_tau_matrix,
+            train_mask=train_mask,
+            active_dof=active_dof,
+            parameter_subset=base_subset,
+            physical_model=None,
+        )
+        augmented_y, augmented_subset = _append_joint_affine_friction_columns(
+            full_base_y,
+            rows=rows,
+            dof=active_dof,
+        )
+        augmented_subset["base_parameter_subset"] = base_subset
+        runs["full_augmented"] = _solve_regression_run(
+            mode="full_augmented",
+            y_solve=augmented_y,
+            tau_matrix=full_tau_matrix,
+            train_mask=train_mask,
+            active_dof=active_dof,
+            parameter_subset=augmented_subset,
+            physical_model=None,
+        )
         return {
             "status": "completed",
             "model": {
@@ -194,6 +253,51 @@ def _run_pinocchio_solver(*, processed_csv: Path, urdf_path: str | None, dof: in
         }
     except Exception as exc:
         return {"status": "failed", "reason": str(exc), "stage": "solve"}
+
+
+def _solve_regression_run(
+    *,
+    mode: str,
+    y_solve,
+    tau_matrix,
+    train_mask,
+    active_dof: int,
+    parameter_subset: dict[str, Any],
+    physical_model,
+) -> dict[str, Any]:
+    import numpy as np
+
+    equation_train_mask = np.repeat(train_mask, active_dof)
+    tau_vector = tau_matrix.reshape(-1)
+    pi_hat, _, lstsq_rank, _ = np.linalg.lstsq(
+        y_solve[equation_train_mask],
+        tau_vector[equation_train_mask],
+        rcond=None,
+    )
+    tau_pred = (y_solve @ pi_hat).reshape(tau_matrix.shape[0], active_dof)
+    regressor = _regressor_metrics(y_solve)
+    validation = _prediction_metrics(tau_matrix, tau_pred, train_mask == 0)
+    train = _prediction_metrics(tau_matrix, tau_pred, train_mask)
+    physical = _physical_consistency_for_mode(mode, physical_model, pi_hat)
+    run = {
+        "status": "completed",
+        "interpretation": _mode_interpretation(mode),
+        "parameter_subset": parameter_subset,
+        "regressor": regressor,
+        "lstsq_rank_train": int(lstsq_rank),
+        "train_metrics": train,
+        "validation_metrics": validation,
+        "physical_consistency_min_norm_solution": physical,
+        "verdict": _pinocchio_run_verdict(regressor, validation, physical),
+    }
+    projection = _figaroh_physical_projection_for_min_norm(
+        model=physical_model,
+        pi_hat=pi_hat,
+        active_dof=active_dof,
+    )
+    if projection["status"] != "not_applicable":
+        run["physical_consistency_projection"] = projection
+    return run
 
 
 def _parameter_subset_for_mode(mode: str, parameter_count: int) -> dict[str, Any]:
@@ -224,6 +328,188 @@ def _gravity_base_parameter_columns(parameter_count: int) -> list[int]:
         block_end = min(block_start + 10, parameter_count)
         selected.extend(range(block_start, min(block_start + 4, block_end)))
     return selected
+
+
+def _base_parameter_subset_from_regressor(matrix, *, source_hint: str = "figaroh_qr") -> dict[str, Any]:
+    original_parameter_count = len(matrix[0]) if matrix else 0
+    figaroh_subset = _figaroh_base_parameter_subset(matrix, source_hint=source_hint)
+    if figaroh_subset is not None:
+        return figaroh_subset
+
+    selected_columns = _rank_revealing_column_subset(matrix)
+    return {
+        "mode": "base_parameter_columns",
+        "source": "svd_rank_revealing_fallback",
+        "original_parameter_count": original_parameter_count,
+        "selected_parameter_count": len(selected_columns),
+        "selected_columns": selected_columns,
+        "meaning": "rank-revealing independent column subset used as an identifiable base-parameter regressor",
+    }
+
+
+def _figaroh_base_parameter_subset(matrix, *, source_hint: str) -> dict[str, Any] | None:
+    if source_hint != "figaroh_qr" or importlib.util.find_spec("figaroh.tools.qrdecomposition") is None:
+        return None
+    try:
+        import numpy as np
+        from figaroh.tools.qrdecomposition import QRDecomposer
+
+        y_matrix = np.asarray(matrix, dtype=float)
+        params = [f"theta_{index}" for index in range(y_matrix.shape[1])]
+        result = QRDecomposer().decompose(y_matrix, params, method="pivoting")
+        selected_columns = sorted(int(index) for index in result.base_indices)
+        return {
+            "mode": "base_parameter_columns",
+            "source": "figaroh_qr",
+            "original_parameter_count": int(y_matrix.shape[1]),
+            "selected_parameter_count": len(selected_columns),
+            "selected_columns": selected_columns,
+            "base_parameter_expressions": list(result.base_param_expressions),
+            "condition_number_base_factor": float(result.cond_R1),
+            "meaning": "FIGAROH QRDecomposer selected an identifiable base-parameter column subset",
+        }
+    except Exception as exc:
+        fallback = _base_parameter_subset_from_regressor(matrix, source_hint="fallback_only")
+        fallback["source"] = "svd_rank_revealing_fallback"
+        fallback["figaroh_error"] = str(exc)
+        return fallback
+
+
+def _rank_revealing_column_subset(matrix) -> list[int]:
+    try:
+        import numpy as np
+    except ModuleNotFoundError:
+        return _rank_revealing_column_subset_pure(matrix)
+
+    y_matrix = np.asarray(matrix, dtype=float)
+    if y_matrix.ndim != 2 or y_matrix.shape[1] == 0:
+        return []
+    standardized = _standardize_numpy_columns(y_matrix)
+    target_rank = int(np.linalg.matrix_rank(standardized))
+    selected: list[int] = []
+    current = np.empty((standardized.shape[0], 0))
+    current_rank = 0
+    for column in range(standardized.shape[1]):
+        candidate = np.column_stack([current, standardized[:, column]])
+        candidate_rank = int(np.linalg.matrix_rank(candidate))
+        if candidate_rank > current_rank:
+            selected.append(column)
+            current = candidate
+            current_rank = candidate_rank
+        if current_rank >= target_rank:
+            break
+    return selected
+
+
+def _rank_revealing_column_subset_pure(matrix) -> list[int]:
+    rows = [[float(value) for value in row] for row in matrix]
+    if not rows or not rows[0]:
+        return []
+    selected: list[int] = []
+    current_columns: list[list[float]] = []
+    current_rank = 0
+    for column in range(len(rows[0])):
+        candidate_columns = current_columns + [[row[column] for row in rows]]
+        candidate_rank = _column_rank_pure(candidate_columns)
+        if candidate_rank > current_rank:
+            selected.append(column)
+            current_columns = candidate_columns
+            current_rank = candidate_rank
+    return selected
+
+
+def _column_rank_pure(columns: list[list[float]], *, tolerance: float = 1e-10) -> int:
+    if not columns:
+        return 0
+    matrix = [[columns[column][row] for column in range(len(columns))] for row in range(len(columns[0]))]
+    row_count = len(matrix)
+    col_count = len(matrix[0]) if matrix else 0
+    rank = 0
+    pivot_row = 0
+    for col in range(col_count):
+        pivot = max(range(pivot_row, row_count), key=lambda row: abs(matrix[row][col]), default=None)
+        if pivot is None or abs(matrix[pivot][col]) <= tolerance:
+            continue
+        matrix[pivot_row], matrix[pivot] = matrix[pivot], matrix[pivot_row]
+        pivot_value = matrix[pivot_row][col]
+        matrix[pivot_row] = [value / pivot_value for value in matrix[pivot_row]]
+        for row in range(row_count):
+            if row == pivot_row:
+                continue
+            factor = matrix[row][col]
+            if abs(factor) <= tolerance:
+                continue
+            matrix[row] = [
+                value - factor * pivot_row_value
+                for value, pivot_row_value in zip(matrix[row], matrix[pivot_row], strict=False)
+            ]
+        rank += 1
+        pivot_row += 1
+        if pivot_row >= row_count:
+            break
+    return rank
+
+
+def _standardize_numpy_columns(matrix):
+    import numpy as np
+
+    means = np.mean(matrix, axis=0)
+    scales = np.std(matrix, axis=0)
+    scales = np.where(scales > 1e-12, scales, 1.0)
+    return (matrix - means) / scales
+
+
+def _append_joint_affine_friction_columns(y_matrix, *, rows: list[dict[str, str]], dof: int):
+    try:
+        import numpy as np
+    except ModuleNotFoundError:
+        return _append_joint_affine_friction_columns_pure(y_matrix, rows=rows, dof=dof)
+
+    base = np.asarray(y_matrix, dtype=float)
+    augmented = np.zeros((base.shape[0], 3 * dof), dtype=float)
+    normal_layout = base.shape[0] == len(rows) * dof
+    for row_index in range(base.shape[0]):
+        sample_index = row_index // dof if normal_layout else min(row_index, len(rows) - 1)
+        joint_index = row_index % dof
+        dq = float(rows[sample_index].get(f"dq_proc_{joint_index + 1}", 0.0))
+        col = 3 * joint_index
+        augmented[row_index, col] = 1.0
+        augmented[row_index, col + 1] = dq
+        augmented[row_index, col + 2] = 1.0 if dq > 1e-6 else (-1.0 if dq < -1e-6 else 0.0)
+    metadata = {
+        "mode": "base_plus_joint_bias_viscous_coulomb",
+        "rigid_parameter_count": int(base.shape[1]),
+        "friction_parameter_count": int(augmented.shape[1]),
+        "augmented_parameter_count": int(base.shape[1] + augmented.shape[1]),
+        "friction_columns": ["bias", "viscous_dq", "coulomb_sign_dq"],
+        "meaning": "base rigid-body regressor with per-joint torque bias, viscous friction, and Coulomb-like friction columns",
+    }
+    return np.hstack([base, augmented]), metadata
+
+
+def _append_joint_affine_friction_columns_pure(y_matrix, *, rows: list[dict[str, str]], dof: int):
+    base = [[float(value) for value in row] for row in y_matrix]
+    normal_layout = len(base) == len(rows) * dof
+    augmented_rows = []
+    for row_index, base_row in enumerate(base):
+        sample_index = row_index // dof if normal_layout else min(row_index, len(rows) - 1)
+        joint_index = row_index % dof
+        dq = float(rows[sample_index].get(f"dq_proc_{joint_index + 1}", 0.0))
+        extra = [0.0 for _ in range(3 * dof)]
+        col = 3 * joint_index
+        extra[col] = 1.0
+        extra[col + 1] = dq
+        extra[col + 2] = 1.0 if dq > 1e-6 else (-1.0 if dq < -1e-6 else 0.0)
+        augmented_rows.append(base_row + extra)
+    metadata = {
+        "mode": "base_plus_joint_bias_viscous_coulomb",
+        "rigid_parameter_count": len(base[0]) if base else 0,
+        "friction_parameter_count": 3 * dof,
+        "augmented_parameter_count": (len(base[0]) if base else 0) + 3 * dof,
+        "friction_columns": ["bias", "viscous_dq", "coulomb_sign_dq"],
+        "meaning": "base rigid-body regressor with per-joint torque bias, viscous friction, and Coulomb-like friction columns",
+    }
+    return augmented_rows, metadata
 
 
 def _figaroh_status() -> dict[str, Any]:
@@ -356,12 +642,85 @@ def _physical_consistency_for_mode(mode: str, model, pi_hat) -> dict[str, Any]:
                 "mapped back to full per-link inertia tensors for the standard physical consistency gate"
             ),
         }
+    if mode == "full_base":
+        return {
+            "status": "not_applicable",
+            "reason": (
+                "full_base solves a rank-revealing base-parameter column subset. Its vector is identifiable, "
+                "but it is not a complete 10-parameter-per-link inertia vector."
+            ),
+        }
+    if mode == "full_augmented":
+        return {
+            "status": "not_applicable",
+            "reason": (
+                "full_augmented appends joint torque bias, viscous friction, and Coulomb-like friction columns. "
+                "The augmented vector intentionally mixes rigid-body base parameters with actuator/friction terms."
+            ),
+        }
     return _physical_consistency_from_min_norm(model, pi_hat)
+
+
+def _figaroh_physical_projection_for_min_norm(*, model, pi_hat, active_dof: int) -> dict[str, Any]:
+    if model is None or len(pi_hat) < active_dof * 10:
+        return {
+            "status": "not_applicable",
+            "source": "figaroh_physical_consistency",
+            "reason": "requires a full Pinocchio 10-parameter-per-link vector",
+        }
+    if importlib.util.find_spec("figaroh.identification.physical_consistency") is None:
+        return {
+            "status": "skipped",
+            "source": "figaroh_physical_consistency",
+            "reason": "FIGAROH physical_consistency module is not importable",
+        }
+    try:
+        import numpy as np
+        from figaroh.identification.physical_consistency import project_robot_p10_lmi
+
+        p10_by_link = {}
+        joint_names = [str(name) for name in getattr(model, "names", [])][1 : active_dof + 1]
+        for index, name in enumerate(joint_names):
+            start = index * 10
+            p10_by_link[name] = np.asarray(pi_hat[start : start + 10], dtype=float)
+        _, report = project_robot_p10_lmi(p10_by_link, max_seconds=5.0)
+        return {
+            "status": report.status,
+            "source": "figaroh_physical_consistency",
+            "projected_links": int(report.projected_links),
+            "failed_links": int(report.failed_links),
+            "per_link": {
+                link: {
+                    "status": item.status,
+                    "mass": float(item.mass),
+                    "min_eig": float(item.min_eig),
+                    "solver": item.solver,
+                    "message": item.message,
+                }
+                for link, item in report.per_link.items()
+            },
+        }
+    except ImportError as exc:
+        return {
+            "status": "skipped",
+            "source": "figaroh_physical_consistency",
+            "reason": str(exc),
+        }
+    except Exception as exc:
+        return {
+            "status": "failed",
+            "source": "figaroh_physical_consistency",
+            "reason": str(exc),
+        }
 
 
 def _mode_interpretation(mode: str) -> str:
     if mode == "gravity_only":
         return "将 dq/ddq 置零，只检查准静态重力项能否解释力矩趋势。"
+    if mode == "full_base":
+        return "先用 FIGAROH QR 或 SVD fallback 提取最小可辨识基础参数列，再求解满秩动力学回归。"
+    if mode == "full_augmented":
+        return "在基础参数列之后追加每关节力矩零偏、粘滞摩擦和库仑摩擦列，用来检查非刚体项是否主导残差。"
     return "使用 q_proc/dq_proc/ddq_proc，检查完整动力学回归；会受数值微分噪声影响。"
 
 
@@ -388,11 +747,19 @@ def _overall_verdict(metrics: dict[str, Any]) -> str:
         return "solver_not_completed"
     gravity = pinocchio["runs"].get("gravity_only", {})
     full = pinocchio["runs"].get("full", {})
+    full_base = pinocchio["runs"].get("full_base", {})
+    full_augmented = pinocchio["runs"].get("full_augmented", {})
     gravity_prediction = gravity.get("verdict", {}).get("prediction_error_pass_by_20pct_nrmse_range", False)
     full_rank = full.get("verdict", {}).get("full_parameter_rank_identifiable", False)
     physical = full.get("verdict", {}).get("physical_consistency_pass", False)
     if gravity_prediction and full_rank and physical:
         return "pass"
+    base_prediction = full_base.get("verdict", {}).get("prediction_error_pass_by_20pct_nrmse_range", False)
+    augmented_prediction = full_augmented.get("verdict", {}).get("prediction_error_pass_by_20pct_nrmse_range", False)
+    if augmented_prediction:
+        return "augmented_model_trend_only"
+    if base_prediction:
+        return "base_parameter_trend_only"
     if gravity_prediction:
         return "gravity_trend_only"
     return "fail"
@@ -419,11 +786,13 @@ def _render_chinese_solver_report(metrics: dict[str, Any]) -> str:
     if pinocchio.get("status") == "completed":
         full = pinocchio["runs"]["full"]
         gravity = pinocchio["runs"]["gravity_only"]
+        full_base = pinocchio["runs"].get("full_base", full)
+        full_augmented = pinocchio["runs"].get("full_augmented", full_base)
         lines.append(
             "| 回归矩阵条件数 | `rank {rank}/{count}, cond {cond}` | rank 不满说明完整参数不可全部辨识；条件数越大越病态。 |".format(
-                rank=full["regressor"]["rank"],
-                count=full["regressor"]["parameter_count"],
-                cond=_format_number(full["regressor"]["condition_number_effective"]),
+                rank=full_base["regressor"]["rank"],
+                count=full_base["regressor"]["parameter_count"],
+                cond=_format_number(full_base["regressor"]["condition_number_effective"]),
             )
         )
         lines.append(
@@ -433,7 +802,7 @@ def _render_chinese_solver_report(metrics: dict[str, Any]) -> str:
         )
         lines.append(
             "| 预测误差 | `{status}` | 重点看验证集每关节 NRMSE 和 R2；NRMSE < 20% 只是起点，R2 低说明解释力弱。 |".format(
-                status=gravity["verdict"]["prediction_error_pass_by_20pct_nrmse_range"]
+                status=full_augmented["verdict"]["prediction_error_pass_by_20pct_nrmse_range"]
             )
         )
     else:
@@ -447,8 +816,11 @@ def _render_chinese_solver_report(metrics: dict[str, Any]) -> str:
         lines.append(f"- 状态: `{pinocchio.get('status')}`")
         lines.append(f"- 原因: {pinocchio.get('reason', '未知')}")
     else:
-        for mode_name in ("gravity_only", "full"):
+        for mode_name in ("gravity_only", "full", "full_base", "full_augmented"):
+            if mode_name not in pinocchio["runs"]:
+                continue
             run = pinocchio["runs"][mode_name]
+            subset = run.get("parameter_subset", {})
             lines.extend(
                 [
                     f"### {mode_name}",
@@ -459,6 +831,12 @@ def _render_chinese_solver_report(metrics: dict[str, Any]) -> str:
                         cols=run["regressor"]["parameter_count"],
                         rank=run["regressor"]["rank"],
                         cond=_format_number(run["regressor"]["condition_number_effective"]),
+                    ),
+                    "- 参数子集: `{mode}`, `{selected}/{original}`，来源 `{source}`".format(
+                        mode=subset.get("mode", "unknown"),
+                        selected=subset.get("selected_parameter_count", subset.get("augmented_parameter_count", "n/a")),
+                        original=subset.get("original_parameter_count", subset.get("rigid_parameter_count", "n/a")),
+                        source=subset.get("source", "n/a"),
                     ),
                     f"- 预测误差门: `{run['verdict']['prediction_error_pass_by_20pct_nrmse_range']}`",
                     f"- R2 门: `{run['verdict']['prediction_error_pass_by_r2_0p8']}`",
@@ -479,6 +857,17 @@ def _render_chinese_solver_report(metrics: dict[str, Any]) -> str:
                     )
                 )
             lines.append("")
+
+        lines.extend(
+            [
+                "### 分支解读",
+                "",
+                "- `full`: 直接解完整 10 参数/连杆向量，用来暴露原始 rank、条件数和物理一致性风险。",
+                "- `full_base`: 解最小可辨识基础参数列，优先来自 FIGAROH QR，失败时使用 SVD/秩揭示 fallback。",
+                "- `full_augmented`: 在基础参数后加入关节力矩零偏/粘滞/库仑摩擦列；若它显著改善误差，说明摩擦或执行器项正在主导残差。",
+                "",
+            ]
+        )
 
     figaroh = metrics["solvers"].get("figaroh")
     if figaroh is not None:

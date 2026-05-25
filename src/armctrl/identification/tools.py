@@ -122,9 +122,9 @@ def write_tool_handoff(
             "",
             "The offline target is `tau = Y(q, dq, ddq) * pi`.",
             "The postprocess solver report now evaluates this equation through the fixed Pinocchio path when available.",
-            "Use FIGAROH or other external tooling for base-parameter extraction, physical-consistency projection, filtering strategy, and OLS/WLS variants once their robot-specific configuration is ready.",
-            "If the trajectory was created with `--optimize`, its current score is based on a surrogate feature matrix.",
-            "Replace the surrogate score with a true regressor condition number from Pinocchio/FIGAROH before trusting full dynamic identification.",
+            "The fixed solver stage now uses FIGAROH QR for base-parameter extraction when importable, with a rank-revealing fallback.",
+            "Physical-consistency projection is delegated to FIGAROH when its optional LMI backend is available.",
+            "If the trajectory was created with `--optimize --optimize-regressor --urdf-path ...`, candidates can be scored by the true Pinocchio regressor condition number; otherwise the safe fallback is a surrogate feature matrix.",
             "",
         ]
     )

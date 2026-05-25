@@ -18,11 +18,17 @@ import armctrl.cli.arx5ctl as arx5ctl_cli
 from armctrl.cli.arx5ctl import main
 from armctrl.identification.backends import Arx5JointRobotIO, FakeJointRobotIO
 from armctrl.identification.models import TrajectoryPoint
-from armctrl.identification.optimization import optimize_fourier_multisine, score_excitation_profile
-from armctrl.identification.postprocess import postprocess_dataset
+from armctrl.identification.optimization import ExcitationScore, optimize_fourier_multisine, score_excitation_profile
+from armctrl.identification.postprocess import _zero_phase_moving_average, postprocess_dataset
 from armctrl.identification.recorder import DatasetRecorder
 from armctrl.identification.runner import IdentificationRunner
 from armctrl.identification.safety import TrajectorySafetyLimits, validate_trajectory
+from armctrl.identification.solver import (
+    _append_joint_affine_friction_columns,
+    _base_parameter_subset_from_regressor,
+    _figaroh_physical_projection_for_min_norm,
+    pinocchio_regressor_scorer,
+)
 from armctrl.protocol.enums import CommandStatus, ErrorCode
 from armctrl.protocol.errors import ArmctrlError
 from armctrl.protocol.models import CommandResponse
@@ -320,6 +326,54 @@ def test_optimized_fourier_multisine_improves_surrogate_condition_number():
     assert optimized_score.condition_number <= baseline_score.condition_number
     assert optimized.metadata["optimization"]["candidate_count"] == 6
     assert optimized.metadata["optimization"]["score_mode"] == "surrogate_feature_condition"
+
+
+def test_optimized_fourier_multisine_accepts_real_regressor_scorer():
+    seen_seeds: list[int] = []
+
+    def scorer(profile):
+        seed = int(profile.metadata["seed"])
+        seen_seeds.append(seed)
+        return ExcitationScore(
+            condition_number=100.0 - seed,
+            rank=12,
+            feature_count=18,
+            sample_count=len(profile.points),
+            mode="pinocchio_regressor_condition",
+        )
+
+    optimized = optimize_fourier_multisine(
+        dof=2,
+        sample_hz=20.0,
+        duration_s=2.0,
+        harmonics=2,
+        amplitude_rad=0.04,
+        seed=3,
+        candidate_count=4,
+        scorer=scorer,
+    )
+
+    assert seen_seeds == [3, 4, 5, 6]
+    assert optimized.metadata["seed"] == 6
+    assert optimized.metadata["optimization"]["score_mode"] == "pinocchio_regressor_condition"
+    assert optimized.metadata["optimization"]["condition_number"] == pytest.approx(94.0)
+
+
+def test_pinocchio_regressor_scorer_skips_when_pinocchio_unavailable():
+    scorer = pinocchio_regressor_scorer(urdf_path="missing.urdf", dof=2)
+    profile = generate_fourier_multisine(
+        dof=2,
+        sample_hz=20.0,
+        duration_s=1.0,
+        harmonics=2,
+        amplitude_rad=0.04,
+        seed=1,
+    )
+
+    score = scorer(profile)
+
+    assert score.mode in {"pinocchio_regressor_unavailable", "pinocchio_regressor_condition"}
+    assert score.sample_count == len(profile.points)
 
 
 def test_runner_records_fake_backend_dataset(tmp_path: Path):
@@ -669,6 +723,7 @@ def test_postprocess_writes_processed_csv_and_tool_handoff(tmp_path: Path):
         tools=("pinocchio", "figaroh", "flobaroid", "urdfly"),
         urdf_path="configs/models/X5_camera.urdf",
         smoothing_window=3,
+        filter_mode="zero_phase_moving_average",
     )
 
     assert response.status.value == "completed"
@@ -684,6 +739,8 @@ def test_postprocess_writes_processed_csv_and_tool_handoff(tmp_path: Path):
     with (tmp_path / "processed" / "quality_metrics.json").open(encoding="utf-8") as file:
         quality = json.load(file)
     assert quality["schema"] == "armctrl-ident-quality-v1"
+    assert quality["preprocessing"]["filter_mode"] == "zero_phase_moving_average"
+    assert quality["preprocessing"]["zero_phase"] is True
     assert quality["document_sections"]["physical_consistency"]["status"] == "not_evaluated"
     assert quality["tool_execution"]["figaroh"]["status"] == "handoff_only"
     handoff = (tmp_path / "processed" / "tool_handoff.md").read_text(encoding="utf-8")
@@ -699,6 +756,16 @@ def test_postprocess_writes_processed_csv_and_tool_handoff(tmp_path: Path):
     assert "参数辨识数据质量报告" in quality_report
     assert "数据健康" in quality_report
     assert "激励充分性" in quality_report
+
+
+def test_zero_phase_moving_average_is_symmetric_and_preserves_peak_center():
+    values = [0.0, 0.0, 1.0, 0.0, 0.0]
+
+    filtered = _zero_phase_moving_average(values, 3)
+
+    assert filtered == pytest.approx(list(reversed(filtered)))
+    assert filtered.index(max(filtered)) == 2
+    assert filtered[1] == pytest.approx(filtered[3])
 
 
 def test_postprocess_writes_solver_metrics_and_chinese_report(tmp_path: Path):
@@ -738,6 +805,16 @@ def test_postprocess_writes_solver_metrics_and_chinese_report(tmp_path: Path):
         assert gravity_only["parameter_subset"]["mode"] == "gravity_base_columns"
         assert gravity_only["parameter_subset"]["selected_parameter_count"] < gravity_only["parameter_subset"]["original_parameter_count"]
         assert gravity_only["physical_consistency_min_norm_solution"]["status"] == "not_applicable"
+        assert "full_base" in pinocchio["runs"]
+        full_base = pinocchio["runs"]["full_base"]
+        assert full_base["parameter_subset"]["mode"] == "base_parameter_columns"
+        assert full_base["parameter_subset"]["selected_parameter_count"] <= full_base["parameter_subset"]["original_parameter_count"]
+        assert full_base["parameter_subset"]["source"] in {"figaroh_qr", "svd_rank_revealing_fallback"}
+        assert "full_augmented" in pinocchio["runs"]
+        full_augmented = pinocchio["runs"]["full_augmented"]
+        assert full_augmented["parameter_subset"]["mode"] == "base_plus_joint_bias_viscous_coulomb"
+        assert full_augmented["parameter_subset"]["augmented_parameter_count"] == full_augmented["regressor"]["parameter_count"]
+        assert full_augmented["physical_consistency_min_norm_solution"]["status"] == "not_applicable"
     report = solver_report_path.read_text(encoding="utf-8")
     assert "参数辨识结果质量评估指标" in report
     assert "数据健康" in report
@@ -746,6 +823,52 @@ def test_postprocess_writes_solver_metrics_and_chinese_report(tmp_path: Path):
     assert "参数物理一致性" in report
     assert "预测误差" in report
     assert "控制收益" in report
+    if pinocchio["status"] == "completed":
+        assert "full_base" in report
+        assert "full_augmented" in report
+        assert "最小可辨识基础参数" in report
+        assert "关节力矩零偏/粘滞/库仑摩擦" in report
+
+
+def test_solver_base_parameter_subset_reduces_rank_deficient_regressor():
+    matrix = [
+        [1.0, 0.0, 1.0, 0.0],
+        [0.0, 1.0, 0.0, 1.0],
+        [2.0, 0.0, 2.0, 0.0],
+        [0.0, 3.0, 0.0, 3.0],
+    ]
+
+    subset = _base_parameter_subset_from_regressor(matrix, source_hint="unit_test")
+
+    assert subset["mode"] == "base_parameter_columns"
+    assert subset["original_parameter_count"] == 4
+    assert subset["selected_parameter_count"] == 2
+    assert subset["source"] == "svd_rank_revealing_fallback"
+    assert len(subset["selected_columns"]) == 2
+
+
+def test_solver_augmented_friction_columns_add_bias_viscous_and_coulomb():
+    y_matrix = [[1.0, 2.0], [3.0, 4.0]]
+    rows = [
+        {"dq_proc_1": "0.25", "dq_proc_2": "-0.5"},
+        {"dq_proc_1": "0.0", "dq_proc_2": "0.75"},
+    ]
+
+    augmented, metadata = _append_joint_affine_friction_columns(y_matrix, rows=rows, dof=2)
+
+    assert metadata["mode"] == "base_plus_joint_bias_viscous_coulomb"
+    assert metadata["rigid_parameter_count"] == 2
+    assert metadata["friction_parameter_count"] == 6
+    assert metadata["augmented_parameter_count"] == 8
+    assert augmented[0][2:] == pytest.approx([1.0, 0.25, 1.0, 0.0, 0.0, 0.0])
+    assert augmented[1][2:] == pytest.approx([0.0, 0.0, 0.0, 1.0, 0.75, 1.0])
+
+
+def test_figaroh_physical_projection_reports_unavailable_without_projection_backend():
+    projection = _figaroh_physical_projection_for_min_norm(model=None, pi_hat=[1.0, 2.0, 3.0], active_dof=2)
+
+    assert projection["status"] in {"skipped", "not_applicable"}
+    assert projection["source"] == "figaroh_physical_consistency"
 
 
 def test_postprocess_quality_metrics_flags_unreached_negative_sweep(tmp_path: Path):

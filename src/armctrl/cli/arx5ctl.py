@@ -29,6 +29,7 @@ from armctrl.identification.postprocess import postprocess_dataset
 from armctrl.identification.recorder import DatasetRecorder
 from armctrl.identification.runner import IdentificationRunner
 from armctrl.identification.safety import TrajectorySafetyLimits, validate_trajectory
+from armctrl.identification.solver import pinocchio_regressor_scorer
 from armctrl.identification.trajectories import (
     generate_fourier_multisine,
     generate_friction_sweep,
@@ -126,6 +127,11 @@ def build_parser() -> argparse.ArgumentParser:
     ident_postprocess.add_argument("--tool", action="append", choices=["all", "pinocchio", "figaroh", "flobaroid", "urdfly"])
     ident_postprocess.add_argument("--urdf-path")
     ident_postprocess.add_argument("--smoothing-window", type=int, default=5)
+    ident_postprocess.add_argument(
+        "--filter-mode",
+        choices=["moving_average", "zero_phase_moving_average"],
+        default="zero_phase_moving_average",
+    )
     ident_postprocess.add_argument("--json", action="store_true")
     ident_postprocess.add_argument("--gui", action="store_true")
     ident_postprocess.add_argument("--pretty", action="store_true")
@@ -193,6 +199,11 @@ def add_identification_profile_args(parser: argparse.ArgumentParser) -> None:
         help="Center joint pose for gravity_sweep and fourier_multisine, in radians",
     )
     parser.add_argument("--optimize", action="store_true")
+    parser.add_argument(
+        "--optimize-regressor",
+        action="store_true",
+        help="When Pinocchio and a URDF are available, score Fourier candidates by the true torque regressor condition number.",
+    )
     parser.add_argument("--candidate-count", type=int, default=12)
 
 
@@ -435,6 +446,7 @@ def dispatch_identification(args: argparse.Namespace) -> CommandResponse:
             tools=tools,
             urdf_path=args.urdf_path,
             smoothing_window=args.smoothing_window,
+            filter_mode=args.filter_mode,
         )
     raise ArmctrlError(ErrorCode.INVALID_REQUEST, f"unsupported identification command {args.command}")
 
@@ -478,6 +490,11 @@ def build_identification_profile(args: argparse.Namespace):
         harmonics = args.harmonics if args.harmonics is not None else DEFAULT_FOURIER_HARMONICS
         q_center = tuple(args.q_center) if args.q_center is not None else _default_gravity_sweep_center(args)
         if args.optimize:
+            scorer = (
+                pinocchio_regressor_scorer(urdf_path=args.urdf_path, dof=args.dof)
+                if args.optimize_regressor and args.urdf_path
+                else None
+            )
             return optimize_fourier_multisine(
                 dof=args.dof,
                 sample_hz=args.sample_hz,
@@ -488,6 +505,7 @@ def build_identification_profile(args: argparse.Namespace):
                 candidate_count=args.candidate_count,
                 safety_limits=TrajectorySafetyLimits.conservative(args.dof),
                 q_center=q_center,
+                scorer=scorer,
             )
         return generate_fourier_multisine(
             dof=args.dof,

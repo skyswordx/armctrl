@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Callable
 
 from armctrl.identification.models import ExcitationProfile, TrajectoryPoint
 from armctrl.identification.safety import TrajectorySafetyLimits, validate_trajectory
@@ -48,6 +49,7 @@ def optimize_fourier_multisine(
     safety_limits: TrajectorySafetyLimits | None = None,
     q_center: tuple[float, ...] | None = None,
     q0: tuple[float, ...] | None = None,
+    scorer: Callable[[ExcitationProfile], ExcitationScore] | None = None,
 ) -> ExcitationProfile:
     """在多个候选有限傅里叶轨迹中选择代理条件数最低的一条。"""
 
@@ -72,7 +74,7 @@ def optimize_fourier_multisine(
         if not validation.allowed:
             rejected_candidates += 1
             continue
-        score = score_excitation_profile(candidate)
+        score = scorer(candidate) if scorer is not None else score_excitation_profile(candidate)
         if best_score is None or score.condition_number < best_score.condition_number:
             best_profile = candidate
             best_score = score

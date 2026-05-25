@@ -32,6 +32,7 @@ def postprocess_dataset(
     tools: tuple[str, ...] = ("all",),
     urdf_path: str | None = None,
     smoothing_window: int = 5,
+    filter_mode: str = "moving_average",
 ) -> CommandResponse:
     """把 raw_samples.csv 转成 processed_samples.csv 并生成工具交接文件。"""
 
@@ -41,7 +42,13 @@ def postprocess_dataset(
         manifest = _load_manifest(dataset)
         dof = int(manifest["dof"])
         rows = _load_rows(dataset / manifest["raw_samples"])
-        processed_path = _write_processed(rows, output, dof=dof, smoothing_window=smoothing_window)
+        processed_path = _write_processed(
+            rows,
+            output,
+            dof=dof,
+            smoothing_window=smoothing_window,
+            filter_mode=filter_mode,
+        )
         lerobot_contract_path = _write_lerobot_contract(output, manifest.get("lerobot_contract", {}))
         handoff_path = write_tool_handoff(
             output_dir=output,
@@ -50,7 +57,12 @@ def postprocess_dataset(
             urdf_path=urdf_path or manifest.get("urdf_path"),
             tools=tools,
         )
-        quality_metrics = _build_quality_metrics(manifest, rows, tools=tools)
+        quality_metrics = _build_quality_metrics(
+            manifest,
+            rows,
+            tools=tools,
+            preprocessing=_preprocessing_metadata(filter_mode=filter_mode, smoothing_window=smoothing_window),
+        )
         quality_metrics_path = _write_quality_metrics(output, quality_metrics)
         quality_report_path = _write_quality_report(output, quality_metrics)
         solver_detail = solve_processed_dataset(
@@ -102,7 +114,14 @@ def _load_rows(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(file))
 
 
-def _write_processed(rows: list[dict[str, str]], output_dir: Path, *, dof: int, smoothing_window: int) -> Path:
+def _write_processed(
+    rows: list[dict[str, str]],
+    output_dir: Path,
+    *,
+    dof: int,
+    smoothing_window: int,
+    filter_mode: str,
+) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     times = [float(row["t_s"]) for row in rows]
     q_series = [[float(row[f"q_{joint}"]) for row in rows] for joint in range(1, dof + 1)]
@@ -110,8 +129,9 @@ def _write_processed(rows: list[dict[str, str]], output_dir: Path, *, dof: int, 
     # 这里故意让 q 和 tau 共享同一个简单平滑窗口。
     # 目标不是在 armctrl 内部做最终版辨识滤波器，而是先给离线工具一个
     # 自洽的 processed 四元组，避免后续脚本把 raw q/dq 与 proc ddq/tau 混合使用。
-    q_smooth = [_moving_average(values, smoothing_window) for values in q_series]
-    tau_smooth = [_moving_average(values, smoothing_window) for values in tau_series]
+    filter_fn = _filter_function(filter_mode)
+    q_smooth = [filter_fn(values, smoothing_window) for values in q_series]
+    tau_smooth = [filter_fn(values, smoothing_window) for values in tau_series]
     dq_proc = [_central_difference(times, values) for values in q_smooth]
     ddq_proc = [_central_difference(times, values) for values in dq_proc]
     fieldnames = list(rows[0].keys()) + [f"q_proc_{index}" for index in range(1, dof + 1)] + [f"dq_proc_{index}" for index in range(1, dof + 1)] + [f"ddq_proc_{index}" for index in range(1, dof + 1)] + [f"tau_proc_{index}" for index in range(1, dof + 1)]
@@ -128,6 +148,26 @@ def _write_processed(rows: list[dict[str, str]], output_dir: Path, *, dof: int, 
                 output_row[f"tau_proc_{joint}"] = tau_smooth[joint - 1][row_index]
             writer.writerow(output_row)
     return output_path
+
+
+def _filter_function(filter_mode: str):
+    if filter_mode == "moving_average":
+        return _moving_average
+    if filter_mode == "zero_phase_moving_average":
+        return _zero_phase_moving_average
+    raise ValueError(f"unsupported filter_mode: {filter_mode}")
+
+
+def _preprocessing_metadata(*, filter_mode: str, smoothing_window: int) -> dict:
+    return {
+        "filter_mode": filter_mode,
+        "smoothing_window": smoothing_window,
+        "zero_phase": filter_mode.startswith("zero_phase"),
+        "note": (
+            "q_proc and tau_proc are filtered with the same offline chain before central-difference dq/ddq. "
+            "zero_phase_moving_average applies the symmetric FIR forward and backward to avoid time lag."
+        ),
+    }
 
 
 def _write_lerobot_contract(output_dir: Path, contract: dict) -> Path:
@@ -150,6 +190,12 @@ def _moving_average(values: list[float], window: int) -> list[float]:
     return result
 
 
+def _zero_phase_moving_average(values: list[float], window: int) -> list[float]:
+    forward = _moving_average(values, window)
+    backward = _moving_average(list(reversed(forward)), window)
+    return list(reversed(backward))
+
+
 def _central_difference(times: list[float], values: list[float]) -> list[float]:
     if len(values) <= 1:
         return [0.0 for _ in values]
@@ -167,7 +213,13 @@ def _central_difference(times: list[float], values: list[float]) -> list[float]:
     return result
 
 
-def _build_quality_metrics(manifest: dict, rows: list[dict[str, str]], *, tools: tuple[str, ...]) -> dict:
+def _build_quality_metrics(
+    manifest: dict,
+    rows: list[dict[str, str]],
+    *,
+    tools: tuple[str, ...],
+    preprocessing: dict | None = None,
+) -> dict:
     dof = int(manifest["dof"])
     times = _float_column(rows, "t_s")
     profile_name = manifest.get("profile_name")
@@ -224,6 +276,7 @@ def _build_quality_metrics(manifest: dict, rows: list[dict[str, str]], *, tools:
         "schema": "armctrl-ident-quality-v1",
         "profile_name": profile_name,
         "profile_metadata": profile_metadata,
+        "preprocessing": preprocessing or _preprocessing_metadata(filter_mode="moving_average", smoothing_window=5),
         "sample_count": len(rows),
         "expected_sample_count": expected_sample_count,
         "dof": dof,
@@ -240,8 +293,8 @@ def _build_quality_metrics(manifest: dict, rows: list[dict[str, str]], *, tools:
         "data_readiness_status": readiness,
         "handoff_note": (
             "ident-postprocess creates cleaned CSVs, LeRobot-compatible metadata, quality gates, "
-            "and external-tool handoff artifacts. FIGAROH/Pinocchio solving is not executed unless "
-            "a later offline solver stage consumes these artifacts."
+            "external-tool handoff artifacts, and a fixed solver stage. Pinocchio runs immediately "
+            "when importable and a URDF is provided; FIGAROH helpers are used where safe."
         ),
     }
 
@@ -377,7 +430,7 @@ def _tool_execution_status(tools: tuple[str, ...]) -> dict:
             "status": "handoff_only",
             "installed_python_module": tool.installed,
             "label": tool.label,
-            "note": "No solver is executed by ident-postprocess; use the generated handoff files in an offline tool stage.",
+            "note": "ident-postprocess runs the fixed Pinocchio solver stage when available and still writes handoff files for richer offline tooling.",
         }
     return statuses
 
