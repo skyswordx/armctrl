@@ -97,6 +97,10 @@ class _FakeIdentController:
         self.gain = _FakeIdentGain(2)
         self.calls: list[str] = []
         self.joint_traj = None
+        self.joint_cmds = []
+        self.joint_state = _FakeIdentJointState(2)
+        self.joint_state.pos()[:] = [0.25, -0.15]
+        self.joint_state.timestamp = 9.9
 
     def get_controller_config(self):
         return self.config
@@ -110,6 +114,13 @@ class _FakeIdentController:
 
     def get_timestamp(self):
         return 10.0
+
+    def get_joint_state(self):
+        return self.joint_state
+
+    def set_joint_cmd(self, joint_cmd):
+        self.calls.append("set_joint_cmd")
+        self.joint_cmds.append(joint_cmd)
 
     def set_joint_traj(self, joint_traj):
         self.calls.append("set_joint_traj")
@@ -301,7 +312,7 @@ def test_runner_records_fake_backend_dataset(tmp_path: Path):
     assert {"q_cmd_1", "dq_cmd_1", "ddq_cmd_1", "tau_meas_1"}.issubset(rows[0])
 
 
-def test_sdk_joint_backend_restores_motion_gain_before_sending_trajectory():
+def test_sdk_joint_backend_streams_joint_commands_from_current_state():
     backend = Arx5JointRobotIO(model="X5", interface="can0", resume_gain_duration_s=0.006, sleep_fn=lambda _: None)
     backend._sdk = _FakeIdentSDK()
     backend._controller = _FakeIdentController()
@@ -315,12 +326,17 @@ def test_sdk_joint_backend_restores_motion_gain_before_sending_trajectory():
     )
 
     assert response.status.value == "completed"
-    assert backend._controller.calls == ["set_gain", "set_gain", "set_gain", "set_joint_traj"]
+    assert "set_joint_traj" not in backend._controller.calls
+    assert backend._controller.calls[:4] == ["set_gain", "set_gain", "set_gain", "set_joint_cmd"]
     assert backend._controller.gain.kp() == pytest.approx(backend._controller.config.default_kp)
     assert backend._controller.gain.kd() == pytest.approx(backend._controller.config.default_kd)
-    assert backend._controller.joint_traj is not None
-    assert backend._controller.joint_traj[0].timestamp == pytest.approx(10.2)
-    assert backend._controller.joint_traj[1].timestamp == pytest.approx(10.3)
+    assert backend._controller.joint_cmds[0].pos() == pytest.approx((0.25, -0.15))
+    assert backend._controller.joint_cmds[0].vel() == pytest.approx((0.0, 0.0))
+    assert backend._controller.joint_cmds[0].timestamp == pytest.approx(10.002)
+    assert backend._controller.joint_cmds[1].pos() == pytest.approx((0.0, 0.0))
+    assert backend._controller.joint_cmds[1].timestamp == pytest.approx(10.2)
+    assert backend._controller.joint_cmds[2].pos() == pytest.approx((0.1, -0.1))
+    assert backend._controller.joint_cmds[2].timestamp == pytest.approx(10.3)
 
 
 def test_runner_execute_resets_home_before_sending_trajectory():
@@ -349,6 +365,42 @@ def test_runner_execute_resets_home_before_sending_trajectory():
 
     assert response.status.value == "completed"
     assert backend.calls[:3] == ["connect", "reset_home", "send_joint_trajectory"]
+
+
+def test_runner_streams_points_when_backend_supports_incremental_commands():
+    class StreamingBackend(FakeJointRobotIO):
+        def __init__(self) -> None:
+            super().__init__(dof=2)
+            self.calls: list[str] = []
+
+        def connect(self) -> CommandResponse:
+            self.calls.append("connect")
+            return super().connect()
+
+        def reset_home(self) -> CommandResponse:
+            self.calls.append("reset_home")
+            return super().reset_home()
+
+        def begin_joint_trajectory(self, points) -> CommandResponse:
+            self.calls.append(f"begin:{len(points)}")
+            return CommandResponse(CommandStatus.COMPLETED, "stream prepared")
+
+        def send_joint_command(self, point) -> CommandResponse:
+            self.calls.append(f"send:{point.t_s:.1f}")
+            self._last_command = point
+            return CommandResponse(CommandStatus.COMPLETED, "point sent")
+
+    profile = generate_gravity_sweep(dof=2, sample_hz=2.0, amplitude_rad=0.05, segment_duration_s=0.5)
+    backend = StreamingBackend()
+    runner = IdentificationRunner(backend=backend, sample_hz=2.0, sleep_fn=lambda _: None)
+
+    response = runner.run(profile, execute=True)
+
+    assert response.status.value == "completed"
+    assert backend.calls[:3] == ["connect", "reset_home", f"begin:{len(profile.points)}"]
+    assert [call for call in backend.calls if call.startswith("send:")] == [
+        f"send:{point.t_s:.1f}" for point in profile.points
+    ]
 
 
 def test_runner_execute_aborts_if_reset_home_fails():

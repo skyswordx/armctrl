@@ -9,7 +9,8 @@ from armctrl.identification.backends import JointRobotIO
 from armctrl.identification.models import ExcitationProfile, JointSample
 from armctrl.identification.recorder import DatasetRecorder
 from armctrl.identification.safety import TrajectorySafetyLimits, validate_trajectory
-from armctrl.protocol.enums import CommandStatus
+from armctrl.protocol.enums import CommandStatus, ErrorCode
+from armctrl.protocol.errors import ArmctrlError
 from armctrl.protocol.models import CommandResponse
 
 
@@ -67,7 +68,7 @@ class IdentificationRunner:
                     reset_response = self.backend.reset_home()
                     if reset_response.status is not CommandStatus.COMPLETED:
                         return reset_response
-                send_response = self.backend.send_joint_trajectory(profile.points)
+                send_response = self._begin_execution(profile)
                 if send_response.status is not CommandStatus.COMPLETED:
                     return send_response
             samples = self._collect_samples(profile, execute=execute)
@@ -83,6 +84,22 @@ class IdentificationRunner:
                 }
             )
             return CommandResponse(CommandStatus.CANCELLED, "identification run interrupted; damping requested", detail=detail)
+        except Exception as exc:
+            damping_response = self.backend.damping() if execute else None
+            detail = profile.summary()
+            detail.update(
+                {
+                    "backend_name": self.backend.name,
+                    "execute": execute,
+                    "damping_after_fault": damping_response.to_dict() if damping_response else None,
+                }
+            )
+            return CommandResponse(
+                CommandStatus.FAULTED,
+                "identification run faulted; damping requested",
+                error=ArmctrlError(ErrorCode.SDK_ERROR, str(exc)),
+                detail=detail,
+            )
         manifest = None
         if recorder is not None:
             manifest = recorder.write_run(
@@ -108,6 +125,18 @@ class IdentificationRunner:
         )
         return CommandResponse(CommandStatus.COMPLETED, "identification run completed", detail=detail)
 
+    def _begin_execution(self, profile: ExcitationProfile) -> CommandResponse:
+        begin = getattr(self.backend, "begin_joint_trajectory", None)
+        if callable(begin):
+            return begin(profile.points)
+        return self.backend.send_joint_trajectory(profile.points)
+
+    def _send_point_if_supported(self, point) -> CommandResponse | None:
+        send_point = getattr(self.backend, "send_joint_command", None)
+        if not callable(send_point):
+            return None
+        return send_point(point)
+
     def _collect_samples(self, profile: ExcitationProfile, *, execute: bool) -> list[JointSample]:
         samples: list[JointSample] = []
         start_monotonic = time.monotonic()
@@ -117,6 +146,9 @@ class IdentificationRunner:
                 wait_s = target_monotonic - time.monotonic()
                 if wait_s > 0:
                     self.sleep_fn(wait_s)
+                send_response = self._send_point_if_supported(point)
+                if send_response is not None and send_response.status is not CommandStatus.COMPLETED:
+                    raise RuntimeError(send_response.message)
             # plan-only 采集也走 read_sample。
             # fake 后端会返回命令值，SDK 后端只有 execute=True 时才应在实机上使用。
             samples.append(self.backend.read_sample(point, point.phase))

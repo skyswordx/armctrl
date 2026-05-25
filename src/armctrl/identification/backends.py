@@ -36,6 +36,12 @@ class JointRobotIO(Protocol):
     def send_joint_trajectory(self, points: Sequence[TrajectoryPoint]) -> CommandResponse:
         ...
 
+    def begin_joint_trajectory(self, points: Sequence[TrajectoryPoint]) -> CommandResponse:
+        ...
+
+    def send_joint_command(self, point: TrajectoryPoint) -> CommandResponse:
+        ...
+
     def read_sample(self, command: TrajectoryPoint, phase: str) -> JointSample:
         ...
 
@@ -138,6 +144,8 @@ class Arx5JointRobotIO:
         self.dof = 6
         self._sdk = None
         self._controller = None
+        self._last_stream_base_timestamp = 0.0
+        self._last_sent_commands = 0
 
     def connect(self) -> CommandResponse:
         try:
@@ -243,29 +251,74 @@ class Arx5JointRobotIO:
             if step_index < steps:
                 self._sleep_fn(controller_dt)
 
+    def _joint_state_from_vectors(
+        self,
+        *,
+        q: Sequence[float],
+        dq: Sequence[float] | None = None,
+        timestamp: float,
+    ):
+        joint_state = self._sdk.JointState(self.dof)
+        joint_state.pos()[:] = tuple(float(value) for value in q)
+        joint_state.vel()[:] = tuple(float(value) for value in (dq or (0.0 for _ in range(self.dof))))
+        joint_state.torque()[:] = tuple(0.0 for _ in range(self.dof))
+        joint_state.timestamp = float(timestamp)
+        joint_state.gripper_pos = 0.0
+        return joint_state
+
+    def _sync_joint_target_to_current_state(self, controller) -> None:
+        current_state = controller.get_joint_state()
+        controller_dt = float(getattr(controller.get_controller_config(), "controller_dt", 0.002))
+        if controller_dt <= 0:
+            controller_dt = 0.002
+        sync_cmd = self._joint_state_from_vectors(
+            q=tuple(float(value) for value in current_state.pos()),
+            dq=tuple(0.0 for _ in range(self.dof)),
+            timestamp=float(controller.get_timestamp()) + controller_dt,
+        )
+        controller.set_joint_cmd(sync_cmd)
+        self._sleep_fn(controller_dt)
+
     def send_joint_trajectory(self, points: Sequence[TrajectoryPoint]) -> CommandResponse:
+        begin_response = self.begin_joint_trajectory(points)
+        if begin_response.status is not CommandStatus.COMPLETED:
+            return begin_response
+        for point in points:
+            response = self.send_joint_command(point)
+            if response.status is not CommandStatus.COMPLETED:
+                return response
+        return CommandResponse(CommandStatus.COMPLETED, f"sdk streamed {self._last_sent_commands} joint commands")
+
+    def begin_joint_trajectory(self, points: Sequence[TrajectoryPoint]) -> CommandResponse:
         try:
             if not points:
                 raise ArmctrlError(ErrorCode.INVALID_REQUEST, "trajectory is empty")
             controller = self._require_controller()
             self._ensure_motion_gain(controller)
-            base_timestamp = float(controller.get_timestamp()) + self.start_delay_s
-            joint_traj = []
-            for point in points:
-                joint_state = self._sdk.JointState(self.dof)
-                joint_state.pos()[:] = point.q
-                joint_state.vel()[:] = point.dq
-                joint_state.torque()[:] = tuple(0.0 for _ in range(self.dof))
-                joint_state.timestamp = base_timestamp + point.t_s
-                joint_state.gripper_pos = 0.0
-                joint_traj.append(joint_state)
-            controller.set_joint_traj(joint_traj)
-            return CommandResponse(CommandStatus.COMPLETED, f"sdk accepted {len(joint_traj)} joint waypoints")
+            self._sync_joint_target_to_current_state(controller)
+            self._last_stream_base_timestamp = float(controller.get_timestamp()) + self.start_delay_s
+            self._last_sent_commands = 0
+            return CommandResponse(CommandStatus.COMPLETED, "sdk joint command stream prepared")
         except ArmctrlError as exc:
             return CommandResponse(CommandStatus.REJECTED, exc.message, error=exc)
         except Exception as exc:
             error = ArmctrlError(ErrorCode.SDK_ERROR, str(exc))
-            return CommandResponse(CommandStatus.FAULTED, "sdk set_joint_traj failed", error=error)
+            return CommandResponse(CommandStatus.FAULTED, "sdk prepare joint command stream failed", error=error)
+
+    def send_joint_command(self, point: TrajectoryPoint) -> CommandResponse:
+        try:
+            controller = self._require_controller()
+            joint_state = self._joint_state_from_vectors(
+                q=point.q,
+                dq=point.dq,
+                timestamp=max(0.0, self._last_stream_base_timestamp + point.t_s),
+            )
+            controller.set_joint_cmd(joint_state)
+            self._last_sent_commands += 1
+            return CommandResponse(CommandStatus.COMPLETED, "sdk joint command sent")
+        except Exception as exc:
+            error = ArmctrlError(ErrorCode.SDK_ERROR, str(exc))
+            return CommandResponse(CommandStatus.FAULTED, "sdk set_joint_cmd failed", error=error)
 
     def read_sample(self, command: TrajectoryPoint, phase: str) -> JointSample:
         controller = self._require_controller()
