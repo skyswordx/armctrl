@@ -97,7 +97,9 @@ def write_tool_handoff(
         "- Use `q_proc_* / dq_proc_* / ddq_proc_* / tau_proc_*` as the default least-squares input.",
         "- `lerobot_contract` only unifies the interface semantics; it does not replace FIGAROH's offline math core.",
         "- If you want to study unsmoothed current-based torque estimates, compare against `tau_meas_*` in a separate offline script.",
-        "- This postprocess command does not execute FIGAROH, Pinocchio, URDFly, or FloBaRoID solvers; it prepares handoff inputs and local quality gates.",
+        "- The fixed postprocess solver stage writes `solver_metrics.json`, `solver_report_zh.md`, and `run_solver_stage.py` after these handoff inputs are ready.",
+        "- Pinocchio is used as the deterministic built-in regressor path when it is importable and a URDF is provided.",
+        "- FIGAROH remains the preferred mature identification stack, but it needs a robot-specific configuration mapping before the automatic postprocess stage can safely invoke it end to end.",
         "",
         "## Tools",
         "",
@@ -119,9 +121,10 @@ def write_tool_handoff(
             "## Identification Equation",
             "",
             "The offline target is `tau = Y(q, dq, ddq) * pi`.",
-            "Use external tooling for regressor generation, base-parameter extraction, filtering strategy, and OLS/WLS solving.",
+            "The postprocess solver report now evaluates this equation through the fixed Pinocchio path when available.",
+            "Use FIGAROH or other external tooling for base-parameter extraction, physical-consistency projection, filtering strategy, and OLS/WLS variants once their robot-specific configuration is ready.",
             "If the trajectory was created with `--optimize`, its current score is based on a surrogate feature matrix.",
-            "Replace the surrogate score with a true regressor condition number once Pinocchio or URDFly regressor generation is wired in.",
+            "Replace the surrogate score with a true regressor condition number from Pinocchio/FIGAROH before trusting full dynamic identification.",
             "",
         ]
     )

@@ -18,6 +18,7 @@ import math
 import statistics
 from pathlib import Path
 
+from armctrl.identification.solver import solve_processed_dataset
 from armctrl.identification.tools import selected_tools, write_tool_handoff
 from armctrl.protocol.enums import CommandStatus, ErrorCode
 from armctrl.protocol.errors import ArmctrlError
@@ -52,6 +53,14 @@ def postprocess_dataset(
         quality_metrics = _build_quality_metrics(manifest, rows, tools=tools)
         quality_metrics_path = _write_quality_metrics(output, quality_metrics)
         quality_report_path = _write_quality_report(output, quality_metrics)
+        solver_detail = solve_processed_dataset(
+            output_dir=output,
+            processed_csv=processed_path,
+            urdf_path=urdf_path or manifest.get("urdf_path"),
+            dof=dof,
+            tools=tools,
+            quality_metrics=quality_metrics,
+        )
         return CommandResponse(
             CommandStatus.COMPLETED,
             "identification dataset postprocessed",
@@ -63,6 +72,10 @@ def postprocess_dataset(
                 "lerobot_contract_json": str(lerobot_contract_path),
                 "quality_metrics_json": str(quality_metrics_path),
                 "quality_report_md": str(quality_report_path),
+                "solver_metrics_json": solver_detail["solver_metrics_json"],
+                "solver_report_zh": solver_detail["solver_report_zh"],
+                "solver_script": solver_detail["solver_script"],
+                "solver_metrics": solver_detail["solver_metrics"],
                 "quality_metrics": quality_metrics,
                 "dof": dof,
                 "sample_count": len(rows),
@@ -345,39 +358,47 @@ def _write_quality_metrics(output_dir: Path, metrics: dict) -> Path:
 def _write_quality_report(output_dir: Path, metrics: dict) -> Path:
     output_path = output_dir / "quality_report.md"
     lines = [
-        "# Identification Quality Report",
+        "# 参数辨识数据质量报告",
         "",
-        f"- profile: `{metrics.get('profile_name')}`",
-        f"- data_readiness_status: `{metrics['data_readiness_status']}`",
-        f"- sample_count: `{metrics['sample_count']}`",
-        f"- expected_sample_count: `{metrics['expected_sample_count']}`",
+        f"- 轨迹类型: `{metrics.get('profile_name')}`",
+        f"- 数据进入求解器前置状态: `{metrics['data_readiness_status']}`",
+        f"- 实际样本数: `{metrics['sample_count']}`",
+        f"- 期望样本数: `{metrics['expected_sample_count']}`",
         "",
-        "## Tool Execution",
+        "## 指标对照表",
         "",
-        "This postprocess step does not execute FIGAROH, Pinocchio, URDFly, or FloBaRoID solvers. It writes cleaned data, quality gates, and handoff artifacts for those tools.",
-        "",
-        "| Tool | Status | Installed Python Module |",
+        "| 文档指标 | 当前状态 | 说明 |",
         "| --- | --- | --- |",
     ]
+    zh_sections = {
+        "data_health": "数据健康",
+        "excitation": "激励充分性",
+        "regressor_condition": "回归矩阵条件数",
+        "physical_consistency": "参数物理一致性",
+        "prediction_error": "预测误差",
+        "control_benefit": "控制收益",
+    }
+    for name, section in metrics["document_sections"].items():
+        lines.append(f"| {zh_sections.get(name, name)} | `{section['status']}` | {section['summary']} |")
+    lines.extend(
+        [
+            "",
+            "## 工具状态",
+            "",
+            "本报告只判断数据清洗和进入求解器之前的质量门。后续真实求解结果见 `solver_report_zh.md`。",
+            "",
+            "| 工具 | 状态 | Python 模块是否可导入 |",
+            "| --- | --- | --- |",
+        ]
+    )
     for name, status in metrics["tool_execution"].items():
         lines.append(f"| {name} | {status['status']} | {status['installed_python_module']} |")
     lines.extend(
         [
             "",
-            "## Document Gate Coverage",
+            "## 关节覆盖与跟踪",
             "",
-            "| Section | Status | Summary |",
-            "| --- | --- | --- |",
-        ]
-    )
-    for name, section in metrics["document_sections"].items():
-        lines.append(f"| {name} | {section['status']} | {section['summary']} |")
-    lines.extend(
-        [
-            "",
-            "## Joint Metrics",
-            "",
-            "| Joint | Status | Actual Range deg | Command Range deg | Coverage Ratio | qerr RMS rad | Tau Range Nm |",
+            "| 关节 | 激励状态 | 实际角度范围(deg) | 命令角度范围(deg) | 覆盖率 | 跟踪 RMS(rad) | 力矩范围(Nm) |",
             "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
         ]
     )
@@ -396,24 +417,36 @@ def _write_quality_report(output_dir: Path, metrics: dict) -> Path:
     lines.extend(
         [
             "",
-            "## Direction Reach",
+            "## 正负方向到达情况",
             "",
-            "| Joint | Direction | Status | Command Mean rad | Actual Mean rad | Mean Error rad |",
+            "| 关节 | 方向 | 状态 | 命令均值(rad) | 实际均值(rad) | 平均误差(rad) |",
             "| --- | --- | --- | ---: | ---: | ---: |",
         ]
     )
+    direction_zh = {"positive": "正向", "negative": "负向"}
     for joint in metrics["joint_metrics"]:
         for direction, reach in joint["direction_reach"].items():
             lines.append(
                 "| {joint} | {direction} | {status} | {cmd} | {actual} | {error} |".format(
                     joint=joint["joint"],
-                    direction=direction,
+                    direction=direction_zh.get(direction, direction),
                     status=reach["status"],
                     cmd=_format_optional(reach.get("cmd_mean_rad")),
                     actual=_format_optional(reach.get("actual_mean_rad")),
                     error=_format_optional(reach.get("mean_error_rad")),
                 )
             )
+    lines.extend(
+        [
+            "",
+            "## 怎么解读",
+            "",
+            "- `data_readiness_status=pass` 只表示数据文件、时间戳、覆盖和跟踪足以进入下一阶段。",
+            "- `回归矩阵条件数 / 参数物理一致性 / 预测误差` 必须看 `solver_report_zh.md`，因为这些项需要真实 Pinocchio/FIGAROH 求解。",
+            "- `控制收益` 只能通过上机 A/B 测试判断，离线后处理无法替代。",
+            "",
+        ]
+    )
     output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return output_path
 

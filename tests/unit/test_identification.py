@@ -268,7 +268,7 @@ def test_tool_handoff_makes_figaroh_the_offline_math_target(tmp_path: Path):
     handoff = (tmp_path / "processed" / "tool_handoff.md").read_text(encoding="utf-8")
     assert "FIGAROH" in handoff
     assert "LeRobot" in handoff
-    assert "does not execute" in handoff
+    assert "fixed postprocess solver stage" in handoff
     assert "tau = Y(q, dq, ddq) * pi" in handoff
 
 
@@ -571,6 +571,50 @@ def test_postprocess_writes_processed_csv_and_tool_handoff(tmp_path: Path):
     assert 'row[f"dq_proc_{index}"]' in skeleton
     assert 'row[f"ddq_proc_{index}"]' in skeleton
     assert 'row[f"tau_proc_{index}"]' in skeleton
+    quality_report = (tmp_path / "processed" / "quality_report.md").read_text(encoding="utf-8")
+    assert "参数辨识数据质量报告" in quality_report
+    assert "数据健康" in quality_report
+    assert "激励充分性" in quality_report
+
+
+def test_postprocess_writes_solver_metrics_and_chinese_report(tmp_path: Path):
+    profile = generate_gravity_sweep(dof=2, sample_hz=10.0, amplitude_rad=0.05, segment_duration_s=0.5)
+    recorder = DatasetRecorder(tmp_path)
+    runner = IdentificationRunner(FakeJointRobotIO(dof=2), sample_hz=10.0, sleep_fn=lambda _: None)
+    runner.run(profile, recorder=recorder, execute=True)
+
+    response = postprocess_dataset(
+        dataset_dir=tmp_path,
+        output_dir=tmp_path / "processed",
+        tools=("pinocchio", "figaroh"),
+        urdf_path="configs/models/X5_camera.urdf",
+        smoothing_window=3,
+    )
+
+    assert response.status.value == "completed"
+    solver_metrics_path = tmp_path / "processed" / "solver_metrics.json"
+    solver_report_path = tmp_path / "processed" / "solver_report_zh.md"
+    solver_script_path = tmp_path / "processed" / "run_solver_stage.py"
+    assert solver_metrics_path.is_file()
+    assert solver_report_path.is_file()
+    assert solver_script_path.is_file()
+    assert response.detail["solver_metrics_json"] == str(solver_metrics_path)
+    assert response.detail["solver_report_zh"] == str(solver_report_path)
+    assert response.detail["solver_script"] == str(solver_script_path)
+    with solver_metrics_path.open(encoding="utf-8") as file:
+        solver_metrics = json.load(file)
+    assert solver_metrics["schema"] == "armctrl-ident-solver-quality-v1"
+    assert solver_metrics["document_gate_mapping"]["prediction_error"]["zh"] == "预测误差"
+    assert "pinocchio" in solver_metrics["solvers"]
+    assert "figaroh" in solver_metrics["solvers"]
+    report = solver_report_path.read_text(encoding="utf-8")
+    assert "参数辨识结果质量评估指标" in report
+    assert "数据健康" in report
+    assert "激励充分性" in report
+    assert "回归矩阵条件数" in report
+    assert "参数物理一致性" in report
+    assert "预测误差" in report
+    assert "控制收益" in report
 
 
 def test_postprocess_quality_metrics_flags_unreached_negative_sweep(tmp_path: Path):
