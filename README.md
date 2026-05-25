@@ -280,10 +280,13 @@ uv run arx5ctl teleop-xbox \
 
 - `--amplitude`
   - 控制关节摆动幅度，单位弧度。
-  - 想做更保守的小范围扫描时，优先把这个值调小，例如 `0.05` 或 `0.08`。
+  - `gravity_sweep` 的现场默认值是 `0.12`。如果只是 bringup，可显式调小到 `0.05` 或 `0.08`；如果运动抖动明显，不要继续加大幅度。
 - `--duration`
   - `gravity_sweep` 下表示单段扫描时长。
   - `fourier_multisine` 下表示整段激励总时长。
+- `--dwell`
+  - `gravity_sweep` 下表示每个目标姿态的静止驻留时间。
+  - 默认 `1.0` 秒，用于降低动态项和跟踪抖动对重力项数据的污染。
 - `--harmonics`
   - 只对 `fourier_multisine` 有意义，控制傅里叶谐波数。
 - `--optimize --candidate-count N`
@@ -298,8 +301,9 @@ uv run arx5ctl ident-plan \
   --adapter fake \
   --profile gravity_sweep \
   --dof 6 \
-  --amplitude 0.05 \
-  --duration 2.0 \
+  --amplitude 0.12 \
+  --duration 6.0 \
+  --dwell 1.0 \
   --sample-hz 100 \
   --json
 ```
@@ -332,14 +336,15 @@ uv run arx5ctl ident-plan \
 真实采集：
 
 ```bash
-# 先用小范围 gravity_sweep 做实机采集
+# 先用现场默认强度 gravity_sweep 做实机采集
 uv run arx5ctl ident-run \
   --adapter sdk \
   --model X5 \
   --interface can0 \
   --profile gravity_sweep \
-  --amplitude 0.05 \
-  --duration 2.0 \
+  --amplitude 0.12 \
+  --duration 6.0 \
+  --dwell 1.0 \
   --sample-hz 100 \
   --output runs/ident-sdk \
   --execute \
@@ -374,6 +379,9 @@ uv run arx5ctl ident-run \
 再下发关节轨迹。
 这样可以把实机起始姿态先拉回辨识轨迹默认的零位基线，
 避免直接从未知姿态切入第一段轨迹。
+
+`ident-run` 执行中按 `Ctrl+C` 会请求后端进入 damping，并返回 `cancelled` 响应。
+如果机械臂仍有异常运动，继续使用硬件急停或断使能；软件中断只是第一层保护。
 
 后处理：
 

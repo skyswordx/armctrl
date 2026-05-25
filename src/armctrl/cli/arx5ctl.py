@@ -42,6 +42,9 @@ from armctrl.teleop.mapping import XboxMapper
 from armctrl.teleop.xbox import XboxDebugRunner, create_tk_dashboard, load_events, show_response_dashboard
 
 MOVE_CONFIRMATION = "I UNDERSTAND THIS WILL MOVE THE ARM"
+DEFAULT_GRAVITY_SWEEP_AMPLITUDE_RAD = 0.12
+DEFAULT_GRAVITY_SWEEP_SEGMENT_DURATION_S = 6.0
+DEFAULT_GRAVITY_SWEEP_DWELL_S = 1.0
 GRIPPER_CALIBRATION_COMMANDS = {
     "gripper-calibration-show",
     "gripper-calibration-set",
@@ -166,6 +169,7 @@ def add_identification_profile_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--sample-hz", type=float, default=100.0)
     parser.add_argument("--duration", type=float)
     parser.add_argument("--amplitude", type=float)
+    parser.add_argument("--dwell", type=float)
     parser.add_argument("--harmonics", type=int, default=5)
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument(
@@ -428,8 +432,9 @@ def build_identification_profile(args: argparse.Namespace):
         return generate_gravity_sweep(
             dof=args.dof,
             sample_hz=args.sample_hz,
-            amplitude_rad=args.amplitude if args.amplitude is not None else 0.20,
-            segment_duration_s=args.duration if args.duration is not None else 4.0,
+            amplitude_rad=args.amplitude if args.amplitude is not None else DEFAULT_GRAVITY_SWEEP_AMPLITUDE_RAD,
+            segment_duration_s=args.duration if args.duration is not None else DEFAULT_GRAVITY_SWEEP_SEGMENT_DURATION_S,
+            dwell_s=args.dwell if args.dwell is not None else DEFAULT_GRAVITY_SWEEP_DWELL_S,
         )
     if args.profile == "friction_sweep":
         return generate_friction_sweep(

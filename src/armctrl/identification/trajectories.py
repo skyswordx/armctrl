@@ -107,12 +107,28 @@ def _quintic_segment(
     return points
 
 
+def _dwell_segment(
+    q: tuple[float, ...],
+    start_t_s: float,
+    duration_s: float,
+    sample_hz: float,
+    phase: str,
+) -> list[TrajectoryPoint]:
+    if duration_s <= 0:
+        return []
+    return [
+        TrajectoryPoint(start_t_s + local_t, q, _zeros(len(q)), _zeros(len(q)), phase)
+        for local_t in _sample_times(duration_s, sample_hz)[1:]
+    ]
+
+
 def generate_gravity_sweep(
     *,
     dof: int = 6,
     sample_hz: float = 100.0,
     amplitude_rad: float = 0.20,
     segment_duration_s: float = 4.0,
+    dwell_s: float = 0.0,
     q0: tuple[float, ...] | None = None,
 ) -> ExcitationProfile:
     """生成静态/准静态重力扫描轨迹。"""
@@ -138,6 +154,16 @@ def generate_gravity_sweep(
             points.extend(segment)
             current_q = tuple(target)
             current_t = points[-1].t_s
+            dwell = _dwell_segment(
+                current_q,
+                current_t,
+                dwell_s,
+                sample_hz,
+                f"{phase}_hold",
+            )
+            if dwell:
+                points.extend(dwell)
+                current_t = points[-1].t_s
     return ExcitationProfile(
         name="gravity_sweep",
         description="静态/准静态重力扫描：一次主要移动一个关节，速度和加速度尽量小。",
@@ -147,6 +173,7 @@ def generate_gravity_sweep(
             "layer": "low",
             "amplitude_rad": amplitude_rad,
             "segment_duration_s": segment_duration_s,
+            "dwell_s": dwell_s,
             "recommended_use": "先辨识重力项和末端 payload 影响。",
         },
     )

@@ -133,6 +133,23 @@ def test_gravity_sweep_moves_one_joint_at_a_time_with_low_velocity():
         assert max(abs(velocity) for velocity in point.dq) <= 0.25
 
 
+def test_gravity_sweep_can_insert_static_dwell_samples():
+    profile = generate_gravity_sweep(
+        dof=2,
+        sample_hz=10.0,
+        amplitude_rad=0.12,
+        segment_duration_s=2.0,
+        dwell_s=0.5,
+    )
+
+    hold_points = [point for point in profile.points if point.phase.endswith("_hold")]
+
+    assert hold_points
+    assert profile.metadata["dwell_s"] == pytest.approx(0.5)
+    assert all(max(abs(value) for value in point.dq) == pytest.approx(0.0) for point in hold_points)
+    assert all(max(abs(value) for value in point.ddq) == pytest.approx(0.0) for point in hold_points)
+
+
 def test_friction_sweep_covers_positive_and_negative_velocity_per_joint():
     profile = generate_friction_sweep(dof=2, sample_hz=30.0, amplitude_rad=0.10, slow_speed_radps=0.05)
 
@@ -361,6 +378,37 @@ def test_runner_execute_aborts_if_reset_home_fails():
     assert backend.send_called is False
 
 
+def test_runner_ctrl_c_damps_and_returns_cancelled():
+    class InterruptingBackend(FakeJointRobotIO):
+        def __init__(self) -> None:
+            super().__init__(dof=2)
+            self.calls: list[str] = []
+
+        def reset_home(self) -> CommandResponse:
+            self.calls.append("reset_home")
+            return super().reset_home()
+
+        def send_joint_trajectory(self, points) -> CommandResponse:
+            self.calls.append("send_joint_trajectory")
+            return super().send_joint_trajectory(points)
+
+        def damping(self) -> CommandResponse:
+            self.calls.append("damping")
+            return super().damping()
+
+    def interrupt_sleep(_seconds: float) -> None:
+        raise KeyboardInterrupt
+
+    profile = generate_gravity_sweep(dof=2, sample_hz=10.0, amplitude_rad=0.05, segment_duration_s=0.5)
+    backend = InterruptingBackend()
+    runner = IdentificationRunner(backend=backend, sample_hz=10.0, sleep_fn=interrupt_sleep)
+
+    response = runner.run(profile, execute=True)
+
+    assert response.status.value == "cancelled"
+    assert backend.calls[-1] == "damping"
+
+
 def test_postprocess_writes_processed_csv_and_tool_handoff(tmp_path: Path):
     profile = generate_gravity_sweep(dof=2, sample_hz=10.0, amplitude_rad=0.05, segment_duration_s=0.5)
     recorder = DatasetRecorder(tmp_path)
@@ -418,6 +466,59 @@ def test_cli_ident_plan_json_outputs_summary(capsys):
     assert payload["detail"]["dof"] == 3
     assert payload["detail"]["lerobot_contract"]["schema"] == "lerobot-compatible"
     assert payload["detail"]["lerobot_contract"]["joint_names"] == ["joint_1", "joint_2", "joint_3"]
+
+
+def test_cli_ident_plan_uses_field_gravity_defaults(capsys):
+    code = main(
+        [
+            "ident-plan",
+            "--adapter",
+            "fake",
+            "--profile",
+            "gravity_sweep",
+            "--dof",
+            "6",
+            "--sample-hz",
+            "100",
+            "--json",
+        ]
+    )
+
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["detail"]["metadata"]["amplitude_rad"] == pytest.approx(0.12)
+    assert payload["detail"]["metadata"]["segment_duration_s"] == pytest.approx(6.0)
+    assert payload["detail"]["metadata"]["dwell_s"] == pytest.approx(1.0)
+    assert payload["detail"]["duration_s"] == pytest.approx(168.0)
+
+
+def test_cli_ident_plan_accepts_gravity_dwell_override(capsys):
+    code = main(
+        [
+            "ident-plan",
+            "--adapter",
+            "fake",
+            "--profile",
+            "gravity_sweep",
+            "--dof",
+            "2",
+            "--sample-hz",
+            "10",
+            "--amplitude",
+            "0.10",
+            "--duration",
+            "4.0",
+            "--dwell",
+            "0.5",
+            "--json",
+        ]
+    )
+
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["detail"]["metadata"]["amplitude_rad"] == pytest.approx(0.10)
+    assert payload["detail"]["metadata"]["segment_duration_s"] == pytest.approx(4.0)
+    assert payload["detail"]["metadata"]["dwell_s"] == pytest.approx(0.5)
 
 
 def test_cli_ident_plan_accepts_fourier_center_pose(capsys):

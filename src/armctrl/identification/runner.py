@@ -59,17 +59,30 @@ class IdentificationRunner:
         connect_response = self.backend.connect()
         if connect_response.status is not CommandStatus.COMPLETED:
             return connect_response
-        if execute:
-            if self.reset_home_before_execute:
-                # 这里把“执行前自动回零”放在 runner，而不是散落到 CLI 或具体后端里。
-                # 好处是 fake / sdk / 未来 Piper 后端都共用同一条安全语义。
-                reset_response = self.backend.reset_home()
-                if reset_response.status is not CommandStatus.COMPLETED:
-                    return reset_response
-            send_response = self.backend.send_joint_trajectory(profile.points)
-            if send_response.status is not CommandStatus.COMPLETED:
-                return send_response
-        samples = self._collect_samples(profile, execute=execute)
+        try:
+            if execute:
+                if self.reset_home_before_execute:
+                    # 这里把“执行前自动回零”放在 runner，而不是散落到 CLI 或具体后端里。
+                    # 好处是 fake / sdk / 未来 Piper 后端都共用同一条安全语义。
+                    reset_response = self.backend.reset_home()
+                    if reset_response.status is not CommandStatus.COMPLETED:
+                        return reset_response
+                send_response = self.backend.send_joint_trajectory(profile.points)
+                if send_response.status is not CommandStatus.COMPLETED:
+                    return send_response
+            samples = self._collect_samples(profile, execute=execute)
+        except KeyboardInterrupt:
+            damping_response = self.backend.damping() if execute else None
+            detail = profile.summary()
+            detail.update(
+                {
+                    "backend_name": self.backend.name,
+                    "execute": execute,
+                    "interrupted": True,
+                    "damping_after_interrupt": damping_response.to_dict() if damping_response else None,
+                }
+            )
+            return CommandResponse(CommandStatus.CANCELLED, "identification run interrupted; damping requested", detail=detail)
         manifest = None
         if recorder is not None:
             manifest = recorder.write_run(
