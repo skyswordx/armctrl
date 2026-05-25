@@ -46,6 +46,13 @@ DEFAULT_GRAVITY_SWEEP_AMPLITUDE_RAD = 0.12
 DEFAULT_GRAVITY_SWEEP_SEGMENT_DURATION_S = 6.0
 DEFAULT_GRAVITY_SWEEP_DWELL_S = 1.0
 DEFAULT_X5_GRAVITY_SWEEP_CENTER = (0.0, 0.30, 0.30, 0.0, 0.0, 0.0)
+DEFAULT_FRICTION_SWEEP_AMPLITUDE_RAD = 0.12
+DEFAULT_FRICTION_SWEEP_SLOW_SPEED_RADPS = 0.025
+DEFAULT_FRICTION_SWEEP_MEDIUM_SPEED_RADPS = 0.06
+DEFAULT_FRICTION_SWEEP_FAST_SPEED_RADPS = 0.12
+DEFAULT_FOURIER_DURATION_S = 20.0
+DEFAULT_FOURIER_AMPLITUDE_RAD = 0.08
+DEFAULT_FOURIER_HARMONICS = 5
 GRIPPER_CALIBRATION_COMMANDS = {
     "gripper-calibration-show",
     "gripper-calibration-set",
@@ -105,7 +112,13 @@ def build_parser() -> argparse.ArgumentParser:
     ident_run.add_argument("--output")
     ident_run.add_argument("--execute", action="store_true")
     ident_run.add_argument("--confirm", default="")
-    ident_run.add_argument("--no-damping-after", action="store_true")
+    ident_run.add_argument(
+        "--damping-after",
+        action="store_true",
+        help="Request damping after successful completion; Ctrl-C/fault paths always request damping.",
+    )
+    ident_run.add_argument("--no-damping-after", action="store_false", dest="damping_after", help=argparse.SUPPRESS)
+    ident_run.set_defaults(damping_after=False)
 
     ident_postprocess = subparsers.add_parser("ident-postprocess")
     ident_postprocess.add_argument("--dataset", required=True)
@@ -171,7 +184,7 @@ def add_identification_profile_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--duration", type=float)
     parser.add_argument("--amplitude", type=float)
     parser.add_argument("--dwell", type=float)
-    parser.add_argument("--harmonics", type=int, default=5)
+    parser.add_argument("--harmonics", type=int)
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument(
         "--q-center",
@@ -401,7 +414,7 @@ def dispatch_identification(args: argparse.Namespace) -> CommandResponse:
             backend,
             sample_hz=args.sample_hz,
             safety_limits=TrajectorySafetyLimits.conservative(profile.dof),
-            damping_after=not args.no_damping_after,
+            damping_after=bool(args.damping_after),
         )
         # fake 后端默认执行，真实 SDK 必须显式 --execute。
         execute = args.execute or args.adapter == AdapterKind.FAKE.value
@@ -440,26 +453,37 @@ def build_identification_profile(args: argparse.Namespace):
             q_center=q_center,
         )
     if args.profile == "friction_sweep":
+        amplitude_rad = args.amplitude if args.amplitude is not None else DEFAULT_FRICTION_SWEEP_AMPLITUDE_RAD
+        q_center = tuple(args.q_center) if args.q_center is not None else _default_gravity_sweep_center(args)
         return generate_friction_sweep(
             dof=args.dof,
             sample_hz=args.sample_hz,
-            amplitude_rad=args.amplitude if args.amplitude is not None else 0.15,
-            slow_speed_radps=max(0.02, (args.amplitude or 0.15) / max(args.duration or 2.5, 0.5)),
+            amplitude_rad=amplitude_rad,
+            slow_speed_radps=DEFAULT_FRICTION_SWEEP_SLOW_SPEED_RADPS,
+            medium_speed_radps=DEFAULT_FRICTION_SWEEP_MEDIUM_SPEED_RADPS,
+            fast_speed_radps=DEFAULT_FRICTION_SWEEP_FAST_SPEED_RADPS,
+            q0=q_center,
         )
     if args.profile == "fourier_multisine":
-        duration_s = args.duration if args.duration is not None else 12.0
+        duration_s = args.duration if args.duration is not None else DEFAULT_FOURIER_DURATION_S
         # 傅里叶轨迹加速度大致随 amplitude / duration² 增大。
         # 默认值随时长缩放，短测试不会因为默认参数直接越过安全限幅；
         # 用户显式传 --amplitude 时仍按用户值生成并交给 safety 检查。
         default_amplitude = min(0.12, 0.02 * duration_s * duration_s)
-        amplitude_rad = args.amplitude if args.amplitude is not None else default_amplitude
-        q_center = tuple(args.q_center) if args.q_center is not None else None
+        if args.amplitude is not None:
+            amplitude_rad = args.amplitude
+        elif args.duration is not None:
+            amplitude_rad = min(DEFAULT_FOURIER_AMPLITUDE_RAD, 0.02 * duration_s * duration_s)
+        else:
+            amplitude_rad = DEFAULT_FOURIER_AMPLITUDE_RAD
+        harmonics = args.harmonics if args.harmonics is not None else DEFAULT_FOURIER_HARMONICS
+        q_center = tuple(args.q_center) if args.q_center is not None else _default_gravity_sweep_center(args)
         if args.optimize:
             return optimize_fourier_multisine(
                 dof=args.dof,
                 sample_hz=args.sample_hz,
                 duration_s=duration_s,
-                harmonics=args.harmonics,
+                harmonics=harmonics,
                 amplitude_rad=amplitude_rad,
                 seed=args.seed,
                 candidate_count=args.candidate_count,
@@ -470,7 +494,7 @@ def build_identification_profile(args: argparse.Namespace):
             dof=args.dof,
             sample_hz=args.sample_hz,
             duration_s=duration_s,
-            harmonics=args.harmonics,
+            harmonics=harmonics,
             amplitude_rad=amplitude_rad,
             seed=args.seed,
             q_center=q_center,

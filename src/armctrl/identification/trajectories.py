@@ -122,6 +122,36 @@ def _dwell_segment(
     ]
 
 
+def _constant_velocity_segment(
+    start_q: tuple[float, ...],
+    end_q: tuple[float, ...],
+    joint_index: int,
+    start_t_s: float,
+    speed_radps: float,
+    sample_hz: float,
+    phase: str,
+) -> list[TrajectoryPoint]:
+    distance = end_q[joint_index] - start_q[joint_index]
+    duration_s = abs(distance) / max(abs(speed_radps), 1e-6)
+    signed_speed = math.copysign(abs(speed_radps), distance)
+    points: list[TrajectoryPoint] = []
+    for local_t in _sample_times(duration_s, sample_hz)[1:]:
+        q_values = list(start_q)
+        q_values[joint_index] = start_q[joint_index] + signed_speed * local_t
+        dq_values = [0.0] * len(start_q)
+        dq_values[joint_index] = signed_speed
+        points.append(
+            TrajectoryPoint(
+                start_t_s + local_t,
+                tuple(q_values),
+                tuple(dq_values),
+                _zeros(len(start_q)),
+                phase,
+            )
+        )
+    return points
+
+
 def generate_gravity_sweep(
     *,
     dof: int = 6,
@@ -185,9 +215,10 @@ def generate_friction_sweep(
     *,
     dof: int = 6,
     sample_hz: float = 100.0,
-    amplitude_rad: float = 0.15,
-    slow_speed_radps: float = 0.06,
-    medium_speed_radps: float = 0.12,
+    amplitude_rad: float = 0.12,
+    slow_speed_radps: float = 0.025,
+    medium_speed_radps: float = 0.06,
+    fast_speed_radps: float = 0.12,
     q0: tuple[float, ...] | None = None,
 ) -> ExcitationProfile:
     """生成摩擦辨识扫描轨迹。"""
@@ -197,23 +228,42 @@ def generate_friction_sweep(
     current_q = base
     current_t = 0.0
     for joint_index in range(dof):
-        for speed_label, speed in (("slow", slow_speed_radps), ("medium", medium_speed_radps)):
-            duration = max(0.8, amplitude_rad / max(speed, 1e-6) * 1.8)
-            for signed_amplitude in (amplitude_rad, 0.0, -amplitude_rad, 0.0):
-                target = list(base)
-                target[joint_index] = base[joint_index] + signed_amplitude
-                phase = f"friction_joint_{joint_index + 1}_{speed_label}"
-                segment = _quintic_segment(
+        for speed_label, speed in (
+            ("slow", slow_speed_radps),
+            ("medium", medium_speed_radps),
+            ("fast", fast_speed_radps),
+        ):
+            for start_offset, end_offset, direction_label in (
+                (-amplitude_rad, amplitude_rad, "positive"),
+                (amplitude_rad, -amplitude_rad, "negative"),
+            ):
+                start_target = list(base)
+                start_target[joint_index] = base[joint_index] + start_offset
+                approach = _quintic_segment(
                     current_q,
-                    tuple(target),
+                    tuple(start_target),
                     current_t,
-                    duration,
+                    max(1.0, amplitude_rad / 0.12),
                     sample_hz,
-                    phase,
+                    f"friction_joint_{joint_index + 1}_{speed_label}_{direction_label}_approach",
                     skip_first=True,
                 )
-                points.extend(segment)
-                current_q = tuple(target)
+                points.extend(approach)
+                current_q = tuple(start_target)
+                current_t = points[-1].t_s
+                end_target = list(base)
+                end_target[joint_index] = base[joint_index] + end_offset
+                plateau = _constant_velocity_segment(
+                    current_q,
+                    tuple(end_target),
+                    joint_index,
+                    current_t,
+                    speed,
+                    sample_hz,
+                    f"friction_joint_{joint_index + 1}_{speed_label}_{direction_label}_plateau",
+                )
+                points.extend(plateau)
+                current_q = tuple(end_target)
                 current_t = points[-1].t_s
     return ExcitationProfile(
         name="friction_sweep",
@@ -225,6 +275,10 @@ def generate_friction_sweep(
             "amplitude_rad": amplitude_rad,
             "slow_speed_radps": slow_speed_radps,
             "medium_speed_radps": medium_speed_radps,
+            "fast_speed_radps": fast_speed_radps,
+            "speed_levels_radps": (slow_speed_radps, medium_speed_radps, fast_speed_radps),
+            "constant_velocity_plateaus": True,
+            "q_center": base,
             "recommended_use": "估计库伦摩擦和粘性摩擦。",
         },
     )

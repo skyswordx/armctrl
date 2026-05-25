@@ -28,7 +28,7 @@ class IdentificationRunner:
         sample_hz: float = 100.0,
         safety_limits: TrajectorySafetyLimits | None = None,
         sleep_fn: Callable[[float], None] = time.sleep,
-        damping_after: bool = True,
+        damping_after: bool = False,
         reset_home_before_execute: bool = True,
         preposition_settle_s: float = 1.0,
     ) -> None:
@@ -117,7 +117,8 @@ class IdentificationRunner:
                 execute=execute,
                 urdf_path=urdf_path,
             )
-        if execute and self.damping_after:
+        damping_after_success = bool(execute and self.damping_after)
+        if damping_after_success:
             self.backend.damping()
         detail = profile.summary()
         detail.update(
@@ -125,6 +126,8 @@ class IdentificationRunner:
                 "backend_name": self.backend.name,
                 "sample_count": len(samples),
                 "execute": execute,
+                "completion_hold": bool(execute and not self.damping_after),
+                "damping_after_success": damping_after_success,
                 "reset_home_before_execute": bool(execute and self.reset_home_before_execute),
                 "preposition_before_recording": preposition_sent,
                 "preposition_settle_s": self.preposition_settle_s if preposition_sent else 0.0,

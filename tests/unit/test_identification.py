@@ -186,6 +186,23 @@ def test_friction_sweep_covers_positive_and_negative_velocity_per_joint():
         assert min(velocities) < -0.01
 
 
+def test_friction_sweep_contains_constant_velocity_plateaus():
+    profile = generate_friction_sweep(
+        dof=1,
+        sample_hz=50.0,
+        amplitude_rad=0.12,
+        slow_speed_radps=0.04,
+        medium_speed_radps=0.12,
+    )
+
+    plateau_points = [point for point in profile.points if "plateau" in point.phase]
+    plateau_velocities = {round(point.dq[0], 3) for point in plateau_points}
+
+    assert plateau_points
+    assert {0.04, -0.04, 0.12, -0.12}.issubset(plateau_velocities)
+    assert all(abs(point.ddq[0]) == pytest.approx(0.0) for point in plateau_points)
+
+
 def test_fourier_multisine_has_zero_boundary_velocity_and_passes_safety():
     profile = generate_fourier_multisine(
         dof=4,
@@ -533,6 +550,53 @@ def test_runner_ctrl_c_damps_and_returns_cancelled():
     assert backend.calls[-1] == "damping"
 
 
+def test_runner_success_holds_by_default_without_damping():
+    class TrackingBackend(FakeJointRobotIO):
+        def __init__(self) -> None:
+            super().__init__(dof=2)
+            self.damping_called = False
+
+        def damping(self) -> CommandResponse:
+            self.damping_called = True
+            return super().damping()
+
+    profile = generate_gravity_sweep(dof=2, sample_hz=10.0, amplitude_rad=0.05, segment_duration_s=0.5)
+    backend = TrackingBackend()
+    runner = IdentificationRunner(backend=backend, sample_hz=10.0, sleep_fn=lambda _: None)
+
+    response = runner.run(profile, execute=True)
+
+    assert response.status.value == "completed"
+    assert backend.damping_called is False
+    assert response.detail["completion_hold"] is True
+
+
+def test_runner_success_can_request_damping_after_completion():
+    class TrackingBackend(FakeJointRobotIO):
+        def __init__(self) -> None:
+            super().__init__(dof=2)
+            self.damping_called = False
+
+        def damping(self) -> CommandResponse:
+            self.damping_called = True
+            return super().damping()
+
+    profile = generate_gravity_sweep(dof=2, sample_hz=10.0, amplitude_rad=0.05, segment_duration_s=0.5)
+    backend = TrackingBackend()
+    runner = IdentificationRunner(
+        backend=backend,
+        sample_hz=10.0,
+        sleep_fn=lambda _: None,
+        damping_after=True,
+    )
+
+    response = runner.run(profile, execute=True)
+
+    assert response.status.value == "completed"
+    assert backend.damping_called is True
+    assert response.detail["completion_hold"] is False
+
+
 def test_postprocess_writes_processed_csv_and_tool_handoff(tmp_path: Path):
     profile = generate_gravity_sweep(dof=2, sample_hz=10.0, amplitude_rad=0.05, segment_duration_s=0.5)
     recorder = DatasetRecorder(tmp_path)
@@ -783,6 +847,52 @@ def test_cli_ident_plan_accepts_gravity_dwell_override(capsys):
     assert payload["detail"]["metadata"]["dwell_s"] == pytest.approx(0.5)
 
 
+def test_cli_ident_plan_uses_field_friction_defaults(capsys):
+    code = main(
+        [
+            "ident-plan",
+            "--adapter",
+            "fake",
+            "--profile",
+            "friction_sweep",
+            "--dof",
+            "6",
+            "--json",
+        ]
+    )
+
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    metadata = payload["detail"]["metadata"]
+    assert metadata["amplitude_rad"] == pytest.approx(0.12)
+    assert metadata["speed_levels_radps"] == pytest.approx((0.025, 0.06, 0.12))
+    assert metadata["constant_velocity_plateaus"] is True
+    assert metadata["q_center"] == pytest.approx((0.0, 0.30, 0.30, 0.0, 0.0, 0.0))
+
+
+def test_cli_ident_plan_uses_field_fourier_defaults(capsys):
+    code = main(
+        [
+            "ident-plan",
+            "--adapter",
+            "fake",
+            "--profile",
+            "fourier_multisine",
+            "--dof",
+            "6",
+            "--json",
+        ]
+    )
+
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    metadata = payload["detail"]["metadata"]
+    assert metadata["duration_s"] == pytest.approx(20.0)
+    assert metadata["amplitude_rad"] == pytest.approx(0.08)
+    assert metadata["harmonics"] == 5
+    assert metadata["q_center"] == pytest.approx((0.0, 0.30, 0.30, 0.0, 0.0, 0.0))
+
+
 def test_cli_ident_plan_accepts_fourier_center_pose(capsys):
     code = main(
         [
@@ -873,6 +983,59 @@ def test_cli_ident_run_fake_writes_dataset(tmp_path: Path, capsys):
     assert (output_dir / "raw_samples.csv").is_file()
     assert (output_dir / "manifest.json").is_file()
     assert (output_dir / "lerobot_contract.json").is_file()
+
+
+def test_cli_ident_run_defaults_to_hold_after_success(tmp_path: Path, capsys):
+    code = main(
+        [
+            "ident-run",
+            "--adapter",
+            "fake",
+            "--profile",
+            "gravity_sweep",
+            "--dof",
+            "2",
+            "--sample-hz",
+            "10",
+            "--duration",
+            "0.5",
+            "--output",
+            str(tmp_path / "ident-sdk"),
+            "--json",
+        ]
+    )
+
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["detail"]["completion_hold"] is True
+    assert payload["detail"]["damping_after_success"] is False
+
+
+def test_cli_ident_run_accepts_explicit_damping_after_success(tmp_path: Path, capsys):
+    code = main(
+        [
+            "ident-run",
+            "--adapter",
+            "fake",
+            "--profile",
+            "gravity_sweep",
+            "--dof",
+            "2",
+            "--sample-hz",
+            "10",
+            "--duration",
+            "0.5",
+            "--output",
+            str(tmp_path / "ident-sdk"),
+            "--damping-after",
+            "--json",
+        ]
+    )
+
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["detail"]["completion_hold"] is False
+    assert payload["detail"]["damping_after_success"] is True
 
 
 def test_cli_ident_plan_output_directory_gets_timestamp_suffix(tmp_path: Path, capsys, monkeypatch: pytest.MonkeyPatch):
