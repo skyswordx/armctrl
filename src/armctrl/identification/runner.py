@@ -30,16 +30,18 @@ class IdentificationRunner:
         sleep_fn: Callable[[float], None] = time.sleep,
         damping_after: bool = True,
         reset_home_before_execute: bool = True,
+        preposition_settle_s: float = 1.0,
     ) -> None:
         self.backend = backend
         self.sample_hz = float(sample_hz)
         self.safety_limits = safety_limits
         self.sleep_fn = sleep_fn
         self.damping_after = damping_after
-        # 当前 CLI 生成的辨识轨迹默认都以 q0=0 为基线。
+        # 当前辨识轨迹可能以非零安全中心为基线。
         # 如果实机起始姿态和这条基线偏差很大，直接下发第一段轨迹会有明显风险。
         # 因此 runner 在真实执行前默认先调用一次后端的 `reset_home()`。
         self.reset_home_before_execute = reset_home_before_execute
+        self.preposition_settle_s = float(preposition_settle_s)
 
     def run(
         self,
@@ -60,6 +62,7 @@ class IdentificationRunner:
         connect_response = self.backend.connect()
         if connect_response.status is not CommandStatus.COMPLETED:
             return connect_response
+        preposition_sent = False
         try:
             if execute:
                 if self.reset_home_before_execute:
@@ -68,6 +71,10 @@ class IdentificationRunner:
                     reset_response = self.backend.reset_home()
                     if reset_response.status is not CommandStatus.COMPLETED:
                         return reset_response
+                preposition_response = self._preposition_before_recording(profile)
+                if preposition_response.status is not CommandStatus.COMPLETED:
+                    return preposition_response
+                preposition_sent = bool(preposition_response.detail.get("preposition_sent", False))
                 send_response = self._begin_execution(profile)
                 if send_response.status is not CommandStatus.COMPLETED:
                     return send_response
@@ -119,6 +126,8 @@ class IdentificationRunner:
                 "sample_count": len(samples),
                 "execute": execute,
                 "reset_home_before_execute": bool(execute and self.reset_home_before_execute),
+                "preposition_before_recording": preposition_sent,
+                "preposition_settle_s": self.preposition_settle_s if preposition_sent else 0.0,
                 "output_dir": str(recorder.output_dir) if recorder else None,
                 "manifest": manifest.to_dict() if manifest else None,
             }
@@ -136,6 +145,39 @@ class IdentificationRunner:
         if not callable(send_point):
             return None
         return send_point(point)
+
+    def _preposition_before_recording(self, profile: ExcitationProfile) -> CommandResponse:
+        first = profile.points[0]
+        if not any(abs(value) > 1e-9 for value in first.q):
+            return CommandResponse(
+                CommandStatus.COMPLETED,
+                "identification preposition skipped for zero start",
+                detail={"preposition_sent": False},
+            )
+        preposition = type(first)(
+            t_s=0.0,
+            q=first.q,
+            dq=tuple(0.0 for _ in first.q),
+            ddq=tuple(0.0 for _ in first.q),
+            phase="preposition_center",
+        )
+        send_point = getattr(self.backend, "send_joint_command", None)
+        if callable(send_point):
+            begin_response = self._begin_execution(profile)
+            if begin_response.status is not CommandStatus.COMPLETED:
+                return begin_response
+            send_response = send_point(preposition)
+        else:
+            send_response = self.backend.send_joint_trajectory((preposition,))
+        if send_response.status is not CommandStatus.COMPLETED:
+            return send_response
+        if self.preposition_settle_s > 0:
+            self.sleep_fn(self.preposition_settle_s)
+        return CommandResponse(
+            CommandStatus.COMPLETED,
+            "identification preposition completed",
+            detail={"preposition_sent": True},
+        )
 
     def _collect_samples(self, profile: ExcitationProfile, *, execute: bool) -> list[JointSample]:
         samples: list[JointSample] = []

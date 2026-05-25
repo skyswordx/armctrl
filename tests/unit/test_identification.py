@@ -420,6 +420,61 @@ def test_runner_streams_points_when_backend_supports_incremental_commands():
     ]
 
 
+def test_runner_prepositions_nonzero_start_before_recording():
+    class StreamingBackend(FakeJointRobotIO):
+        def __init__(self) -> None:
+            super().__init__(dof=2)
+            self.calls: list[str] = []
+
+        def connect(self) -> CommandResponse:
+            self.calls.append("connect")
+            return super().connect()
+
+        def reset_home(self) -> CommandResponse:
+            self.calls.append("reset_home")
+            return super().reset_home()
+
+        def begin_joint_trajectory(self, points) -> CommandResponse:
+            self.calls.append(f"begin:{len(points)}")
+            return CommandResponse(CommandStatus.COMPLETED, "stream prepared")
+
+        def send_joint_command(self, point) -> CommandResponse:
+            self.calls.append(f"send:{point.phase}:{point.t_s:.1f}:{point.q[1]:.2f}")
+            self._last_command = point
+            return CommandResponse(CommandStatus.COMPLETED, "point sent")
+
+    sleeps: list[float] = []
+    profile = generate_gravity_sweep(
+        dof=2,
+        sample_hz=2.0,
+        amplitude_rad=0.05,
+        segment_duration_s=0.5,
+        q_center=(0.0, 0.30),
+    )
+    backend = StreamingBackend()
+    runner = IdentificationRunner(
+        backend=backend,
+        sample_hz=2.0,
+        sleep_fn=sleeps.append,
+        preposition_settle_s=0.75,
+    )
+
+    response = runner.run(profile, execute=True)
+
+    assert response.status.value == "completed"
+    assert backend.calls[:5] == [
+        "connect",
+        "reset_home",
+        f"begin:{len(profile.points)}",
+        "send:preposition_center:0.0:0.30",
+        f"begin:{len(profile.points)}",
+    ]
+    assert sleeps[0] == pytest.approx(0.75)
+    assert response.detail["preposition_before_recording"] is True
+    recorded_sends = backend.calls[5:]
+    assert recorded_sends[0].startswith("send:gravity_start:0.0:0.30")
+
+
 def test_runner_execute_aborts_if_reset_home_fails():
     class FailingResetBackend(FakeJointRobotIO):
         def __init__(self) -> None:
