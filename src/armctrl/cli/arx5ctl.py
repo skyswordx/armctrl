@@ -28,7 +28,12 @@ from armctrl.identification.optimization import optimize_fourier_multisine
 from armctrl.identification.postprocess import postprocess_dataset
 from armctrl.identification.recorder import DatasetRecorder
 from armctrl.identification.runner import IdentificationRunner
-from armctrl.identification.safety import TrajectorySafetyLimits, validate_trajectory
+from armctrl.identification.safety import (
+    TrajectorySafetyLimits,
+    model_coordinate_contract,
+    model_safety_limits,
+    validate_trajectory,
+)
 from armctrl.identification.solver import pinocchio_regressor_scorer
 from armctrl.identification.trajectories import (
     generate_fourier_multisine,
@@ -46,13 +51,14 @@ MOVE_CONFIRMATION = "I UNDERSTAND THIS WILL MOVE THE ARM"
 DEFAULT_GRAVITY_SWEEP_AMPLITUDE_RAD = 0.55
 DEFAULT_GRAVITY_SWEEP_SEGMENT_DURATION_S = 12.0
 DEFAULT_GRAVITY_SWEEP_DWELL_S = 1.0
-DEFAULT_X5_GRAVITY_SWEEP_CENTER = (0.0, 0.30, 0.30, 0.0, 0.0, 0.0)
+DEFAULT_X5_GRAVITY_SWEEP_CENTER = (0.0, 0.80, 0.85, 0.0, 0.0, 0.0)
 DEFAULT_FRICTION_SWEEP_AMPLITUDE_RAD = 0.12
 DEFAULT_FRICTION_SWEEP_SLOW_SPEED_RADPS = 0.025
 DEFAULT_FRICTION_SWEEP_MEDIUM_SPEED_RADPS = 0.06
 DEFAULT_FRICTION_SWEEP_FAST_SPEED_RADPS = 0.12
 DEFAULT_FOURIER_DURATION_S = 40.0
 DEFAULT_FOURIER_AMPLITUDE_RAD = 1.3
+DEFAULT_X5_FOURIER_AMPLITUDE_RAD = 0.75
 DEFAULT_FOURIER_HARMONICS = 5
 GRIPPER_CALIBRATION_COMMANDS = {
     "gripper-calibration-show",
@@ -390,9 +396,10 @@ def dispatch_identification(args: argparse.Namespace) -> CommandResponse:
     # 这样可以直接使用 SDK 的 Arx5JointController 和 set_joint_traj。
     if args.command == "ident-plan":
         profile = build_identification_profile(args)
-        validation = validate_trajectory(profile, TrajectorySafetyLimits.conservative(profile.dof))
+        validation = validate_trajectory(profile, model_safety_limits(args.model, profile.dof))
         detail = profile.summary()
         detail["lerobot_contract"] = build_lerobot_contract(dof=profile.dof, gripper=True)
+        detail["coordinate_contract"] = model_coordinate_contract(args.model, profile.dof)
         if args.output:
             output_dir = timestamped_output_dir(args.output)
             path = DatasetRecorder(output_dir).write_trajectory(profile)
@@ -424,7 +431,7 @@ def dispatch_identification(args: argparse.Namespace) -> CommandResponse:
         runner = IdentificationRunner(
             backend,
             sample_hz=args.sample_hz,
-            safety_limits=TrajectorySafetyLimits.conservative(profile.dof),
+            safety_limits=model_safety_limits(args.model, profile.dof),
             damping_after=bool(args.damping_after),
         )
         # fake 后端默认执行，真实 SDK 必须显式 --execute。
@@ -484,11 +491,11 @@ def build_identification_profile(args: argparse.Namespace):
         if args.amplitude is not None:
             amplitude_rad = args.amplitude
         elif args.duration is not None:
-            amplitude_rad = min(DEFAULT_FOURIER_AMPLITUDE_RAD, 0.02 * duration_s * duration_s)
+            amplitude_rad = min(_default_fourier_amplitude(args), 0.02 * duration_s * duration_s)
         else:
-            amplitude_rad = DEFAULT_FOURIER_AMPLITUDE_RAD
+            amplitude_rad = _default_fourier_amplitude(args)
         harmonics = args.harmonics if args.harmonics is not None else DEFAULT_FOURIER_HARMONICS
-        q_center = tuple(args.q_center) if args.q_center is not None else _default_gravity_sweep_center(args)
+        q_center = tuple(args.q_center) if args.q_center is not None else _default_fourier_center(args)
         if args.optimize:
             scorer = (
                 pinocchio_regressor_scorer(urdf_path=args.urdf_path, dof=args.dof)
@@ -503,7 +510,7 @@ def build_identification_profile(args: argparse.Namespace):
                 amplitude_rad=amplitude_rad,
                 seed=args.seed,
                 candidate_count=args.candidate_count,
-                safety_limits=TrajectorySafetyLimits.conservative(args.dof),
+                safety_limits=model_safety_limits(args.model, args.dof),
                 q_center=q_center,
                 scorer=scorer,
             )
@@ -523,6 +530,18 @@ def _default_gravity_sweep_center(args: argparse.Namespace) -> tuple[float, ...]
     if args.dof == 6 and getattr(args, "model", "X5") == "X5":
         return DEFAULT_X5_GRAVITY_SWEEP_CENTER
     return None
+
+
+def _default_fourier_center(args: argparse.Namespace) -> tuple[float, ...] | None:
+    if args.dof == 6 and getattr(args, "model", "X5") == "X5":
+        return (0.0, 1.20, 1.20, 0.0, 0.0, 0.0)
+    return _default_gravity_sweep_center(args)
+
+
+def _default_fourier_amplitude(args: argparse.Namespace) -> float:
+    if args.dof == 6 and getattr(args, "model", "X5") == "X5":
+        return DEFAULT_X5_FOURIER_AMPLITUDE_RAD
+    return DEFAULT_FOURIER_AMPLITUDE_RAD
 
 
 def default_identification_output_dir(profile_name: str) -> str:

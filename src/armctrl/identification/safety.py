@@ -44,6 +44,53 @@ class TrajectorySafetyLimits:
             raise ValueError("all safety limit vectors must use the same dof")
 
 
+X5_URDF_SAFETY_LIMITS = TrajectorySafetyLimits(
+    joint_min=(-1.5, 0.10, 0.10, -1.20, -1.20, -1.20),
+    joint_max=(1.5, 2.75, 2.75, 1.20, 1.20, 1.20),
+    velocity_max=(0.8, 0.55, 0.55, 0.8, 0.8, 0.8),
+    acceleration_max=(5.0, 3.0, 3.0, 5.0, 5.0, 5.0),
+)
+
+
+X5_COORDINATE_CONTRACT = {
+    "source": "official_x5_urdf_and_sdk_joint_space",
+    "sdk_to_urdf_joint_order": "identity",
+    "sdk_to_urdf_sign": [1, 1, 1, 1, 1, 1],
+    "sdk_to_urdf_offset_rad": [0, 0, 0, 0, 0, 0],
+    "note": (
+        "The X5 SDK joint position convention is treated as identical to the official X5 URDF joint order, "
+        "sign, and zero offset. Keep this contract explicit so calibration checks can update it if hardware "
+        "evidence ever contradicts the assumption."
+    ),
+}
+
+
+def model_safety_limits(model: str | None, dof: int) -> TrajectorySafetyLimits:
+    if model == "X5" and dof == 6:
+        return TrajectorySafetyLimits(
+            joint_min=X5_URDF_SAFETY_LIMITS.joint_min[:dof],
+            joint_max=X5_URDF_SAFETY_LIMITS.joint_max[:dof],
+            velocity_max=X5_URDF_SAFETY_LIMITS.velocity_max[:dof],
+            acceleration_max=X5_URDF_SAFETY_LIMITS.acceleration_max[:dof],
+        )
+    return TrajectorySafetyLimits.conservative(dof)
+
+
+def model_coordinate_contract(model: str | None, dof: int) -> dict:
+    if model == "X5" and dof == 6:
+        contract = dict(X5_COORDINATE_CONTRACT)
+        contract["sdk_to_urdf_sign"] = contract["sdk_to_urdf_sign"][:dof]
+        contract["sdk_to_urdf_offset_rad"] = contract["sdk_to_urdf_offset_rad"][:dof]
+        return contract
+    return {
+        "source": "generic_joint_space",
+        "sdk_to_urdf_joint_order": "unknown",
+        "sdk_to_urdf_sign": [1 for _ in range(dof)],
+        "sdk_to_urdf_offset_rad": [0 for _ in range(dof)],
+        "note": "No model-specific SDK/URDF coordinate contract is configured.",
+    }
+
+
 def validate_trajectory(profile: ExcitationProfile, limits: TrajectorySafetyLimits | None = None) -> ValidationResult:
     """验证轨迹是否满足软件层安全限幅。"""
 

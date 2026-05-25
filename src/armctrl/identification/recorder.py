@@ -14,6 +14,7 @@ from armctrl.identification.models import (
     TrajectoryPoint,
     vector_column_names,
 )
+from armctrl.identification.safety import model_coordinate_contract
 
 
 class DatasetRecorder:
@@ -71,6 +72,7 @@ class DatasetRecorder:
                 "tau_cmd": vector_column_names("tau_cmd", profile.dof),
             },
             lerobot_contract=build_lerobot_contract(dof=profile.dof, gripper=True),
+            coordinate_contract=model_coordinate_contract(model, profile.dof),
             profile_metadata=profile.metadata,
             notes=[
                 "tau_meas comes from the backend torque estimate.",

@@ -22,7 +22,7 @@ from armctrl.identification.optimization import ExcitationScore, optimize_fourie
 from armctrl.identification.postprocess import _zero_phase_moving_average, postprocess_dataset
 from armctrl.identification.recorder import DatasetRecorder
 from armctrl.identification.runner import IdentificationRunner
-from armctrl.identification.safety import TrajectorySafetyLimits, validate_trajectory
+from armctrl.identification.safety import TrajectorySafetyLimits, model_safety_limits, validate_trajectory
 from armctrl.identification.solver import (
     _append_joint_affine_friction_columns,
     _base_parameter_subset_from_regressor,
@@ -251,6 +251,24 @@ def test_fourier_multisine_uses_explicit_center_pose():
     assert profile.points[-1].q == pytest.approx((0.6, 0.7, 0.2), abs=1e-12)
 
 
+def test_x5_model_safety_rejects_joint2_negative_urdf_direction():
+    profile = generate_fourier_multisine(
+        dof=6,
+        sample_hz=20.0,
+        duration_s=4.0,
+        harmonics=3,
+        amplitude_rad=1.0,
+        seed=10,
+        q_center=(0.0, 0.30, 0.30, 0.0, 0.0, 0.0),
+    )
+
+    result = validate_trajectory(profile, model_safety_limits("X5", 6))
+
+    assert not result.allowed
+    assert result.error is not None
+    assert result.error.detail["joint_index"] in {1, 2}
+
+
 def test_dataset_manifest_exports_lerobot_contract(tmp_path: Path):
     profile = generate_gravity_sweep(dof=2, sample_hz=10.0, amplitude_rad=0.05, segment_duration_s=0.5)
     recorder = DatasetRecorder(tmp_path)
@@ -269,6 +287,7 @@ def test_dataset_manifest_exports_lerobot_contract(tmp_path: Path):
     assert manifest.lerobot_contract["action_features"]["joint_2.pos"]["unit"] == "rad"
     assert manifest.lerobot_contract["column_map"]["observation"]["q_1"] == "joint_1.pos"
     assert manifest.lerobot_contract["column_map"]["action"]["q_cmd_2"] == "joint_2.pos"
+    assert manifest.coordinate_contract["sdk_to_urdf_joint_order"] == "unknown"
     with (tmp_path / "lerobot_contract.json").open(encoding="utf-8") as file:
         assert json.load(file) == manifest.lerobot_contract
 
@@ -1143,6 +1162,79 @@ def test_postprocess_quality_metrics_flags_small_fourier_absolute_range(tmp_path
     assert quality["joint_metrics"][0]["absolute_range_status"] == "fail"
 
 
+def test_postprocess_quality_metrics_flags_planned_x5_limit_violation(tmp_path: Path):
+    dof = 6
+    raw_path = tmp_path / "raw_samples.csv"
+    fieldnames = ["t_s", "phase"]
+    for prefix in ("q", "dq", "tau_meas", "q_cmd", "dq_cmd", "ddq_cmd", "tau_cmd"):
+        fieldnames.extend(f"{prefix}_{joint}" for joint in range(1, dof + 1))
+    rows = [
+        {
+            "t_s": index * 0.1,
+            "phase": "fourier_multisine",
+            **{f"q_{joint}": 0.3 if joint in (2, 3) else 0.0 for joint in range(1, dof + 1)},
+            **{f"dq_{joint}": 0.0 for joint in range(1, dof + 1)},
+            **{f"tau_meas_{joint}": 0.0 for joint in range(1, dof + 1)},
+            **{f"q_cmd_{joint}": 0.3 if joint in (2, 3) else 0.0 for joint in range(1, dof + 1)},
+            **{f"dq_cmd_{joint}": 0.0 for joint in range(1, dof + 1)},
+            **{f"ddq_cmd_{joint}": 0.0 for joint in range(1, dof + 1)},
+            **{f"tau_cmd_{joint}": 0.0 for joint in range(1, dof + 1)},
+        }
+        for index in range(5)
+    ]
+    with raw_path.open("w", encoding="utf-8", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    planned_path = tmp_path / "planned_trajectory.csv"
+    planned_fieldnames = ["t_s", "phase"]
+    for prefix in ("q_cmd", "dq_cmd", "ddq_cmd"):
+        planned_fieldnames.extend(f"{prefix}_{joint}" for joint in range(1, dof + 1))
+    with planned_path.open("w", encoding="utf-8", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=planned_fieldnames)
+        writer.writeheader()
+        writer.writerow(
+            {
+                "t_s": 0.0,
+                "phase": "fourier_multisine",
+                **{f"q_cmd_{joint}": -0.4 if joint == 2 else 0.3 if joint == 3 else 0.0 for joint in range(1, dof + 1)},
+                **{f"dq_cmd_{joint}": 1.2 if joint == 4 else 0.0 for joint in range(1, dof + 1)},
+                **{f"ddq_cmd_{joint}": 3.5 if joint == 2 else 0.0 for joint in range(1, dof + 1)},
+            }
+        )
+    (tmp_path / "manifest.json").write_text(
+        json.dumps(
+            {
+                "dof": dof,
+                "model": "X5",
+                "duration_s": 0.4,
+                "sample_hz": 10.0,
+                "profile_name": "fourier_multisine",
+                "profile_metadata": {},
+                "raw_samples": "raw_samples.csv",
+                "planned_trajectory": "planned_trajectory.csv",
+                "lerobot_contract": {"schema": "lerobot-compatible"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    response = postprocess_dataset(
+        dataset_dir=tmp_path,
+        output_dir=tmp_path / "processed",
+        tools=("pinocchio",),
+        smoothing_window=1,
+    )
+
+    assert response.status.value == "completed"
+    planned_limits = response.detail["quality_metrics"]["planned_trajectory_limits"]
+    assert planned_limits["status"] == "fail"
+    assert planned_limits["coordinate_contract"]["sdk_to_urdf_joint_order"] == "identity"
+    assert planned_limits["violations"][0]["kind"] == "position"
+    assert planned_limits["violations"][0]["joint"] == 2
+    assert {item["kind"] for item in planned_limits["violations"]} == {"position", "velocity", "acceleration"}
+
+
 def test_cli_ident_plan_json_outputs_summary(capsys):
     code = main(
         [
@@ -1168,6 +1260,7 @@ def test_cli_ident_plan_json_outputs_summary(capsys):
     assert payload["detail"]["dof"] == 3
     assert payload["detail"]["lerobot_contract"]["schema"] == "lerobot-compatible"
     assert payload["detail"]["lerobot_contract"]["joint_names"] == ["joint_1", "joint_2", "joint_3"]
+    assert payload["detail"]["coordinate_contract"]["sdk_to_urdf_joint_order"] == "unknown"
 
 
 def test_cli_ident_plan_uses_field_gravity_defaults(capsys):
@@ -1191,7 +1284,7 @@ def test_cli_ident_plan_uses_field_gravity_defaults(capsys):
     assert payload["detail"]["metadata"]["amplitude_rad"] == pytest.approx(0.55)
     assert payload["detail"]["metadata"]["segment_duration_s"] == pytest.approx(12.0)
     assert payload["detail"]["metadata"]["dwell_s"] == pytest.approx(1.0)
-    assert payload["detail"]["metadata"]["q_center"] == pytest.approx((0.0, 0.30, 0.30, 0.0, 0.0, 0.0))
+    assert payload["detail"]["metadata"]["q_center"] == pytest.approx((0.0, 0.80, 0.85, 0.0, 0.0, 0.0))
     assert payload["detail"]["duration_s"] == pytest.approx(312.0)
 
 
@@ -1244,7 +1337,7 @@ def test_cli_ident_plan_uses_field_friction_defaults(capsys):
     assert metadata["amplitude_rad"] == pytest.approx(0.12)
     assert metadata["speed_levels_radps"] == pytest.approx((0.025, 0.06, 0.12))
     assert metadata["constant_velocity_plateaus"] is True
-    assert metadata["q_center"] == pytest.approx((0.0, 0.30, 0.30, 0.0, 0.0, 0.0))
+    assert metadata["q_center"] == pytest.approx((0.0, 0.80, 0.85, 0.0, 0.0, 0.0))
 
 
 def test_cli_ident_plan_uses_field_fourier_defaults(capsys):
@@ -1265,10 +1358,10 @@ def test_cli_ident_plan_uses_field_fourier_defaults(capsys):
     payload = json.loads(capsys.readouterr().out)
     metadata = payload["detail"]["metadata"]
     assert metadata["duration_s"] == pytest.approx(40.0)
-    assert metadata["amplitude_rad"] == pytest.approx(1.3)
+    assert metadata["amplitude_rad"] == pytest.approx(0.75)
     assert metadata["harmonics"] == 5
-    assert metadata["q_center"] == pytest.approx((0.0, 0.30, 0.30, 0.0, 0.0, 0.0))
-    assert min(payload["detail"]["planned_joint_ranges_deg"]) >= 60.0
+    assert metadata["q_center"] == pytest.approx((0.0, 1.20, 1.20, 0.0, 0.0, 0.0))
+    assert min(payload["detail"]["planned_joint_ranges_deg"]) >= 35.0
 
 
 def test_cli_ident_plan_accepts_fourier_center_pose(capsys):

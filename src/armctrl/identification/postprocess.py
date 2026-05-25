@@ -18,6 +18,7 @@ import math
 import statistics
 from pathlib import Path
 
+from armctrl.identification.safety import model_coordinate_contract, model_safety_limits
 from armctrl.identification.solver import solve_processed_dataset
 from armctrl.identification.tools import selected_tools, write_tool_handoff
 from armctrl.protocol.enums import CommandStatus, ErrorCode
@@ -60,6 +61,7 @@ def postprocess_dataset(
         quality_metrics = _build_quality_metrics(
             manifest,
             rows,
+            dataset_dir=dataset,
             tools=tools,
             preprocessing=_preprocessing_metadata(filter_mode=filter_mode, smoothing_window=smoothing_window),
         )
@@ -217,6 +219,7 @@ def _build_quality_metrics(
     manifest: dict,
     rows: list[dict[str, str]],
     *,
+    dataset_dir: Path | None = None,
     tools: tuple[str, ...],
     preprocessing: dict | None = None,
 ) -> dict:
@@ -231,6 +234,7 @@ def _build_quality_metrics(
         profile_metadata["dynamic_min_actual_range_deg"] = min_actual_range_deg
     expected_sample_count = _expected_sample_count(manifest)
     data_health = _data_health(rows, dof=dof, times=times, expected_sample_count=expected_sample_count)
+    planned_limits = _planned_trajectory_limits(manifest, dataset_dir=dataset_dir, dof=dof)
     joint_metrics = [
         _joint_quality(
             rows,
@@ -270,13 +274,15 @@ def _build_quality_metrics(
             "summary": "Requires an on-robot A/B test against default or previous gravity compensation parameters.",
         },
     }
-    readiness_inputs = [data_health["status"], excitation_status]
+    planned_readiness = "fail" if planned_limits["status"] == "fail" else "pass"
+    readiness_inputs = [data_health["status"], excitation_status, planned_readiness]
     readiness = "pass" if all(status == "pass" for status in readiness_inputs) else "fail"
     return {
         "schema": "armctrl-ident-quality-v1",
         "profile_name": profile_name,
         "profile_metadata": profile_metadata,
         "preprocessing": preprocessing or _preprocessing_metadata(filter_mode="moving_average", smoothing_window=5),
+        "planned_trajectory_limits": planned_limits,
         "sample_count": len(rows),
         "expected_sample_count": expected_sample_count,
         "dof": dof,
@@ -305,6 +311,99 @@ def _profile_min_actual_range_deg(profile_name: str | None) -> float | None:
     if profile_name == "fourier_multisine":
         return 60.0
     return None
+
+
+def _planned_trajectory_limits(manifest: dict, *, dataset_dir: Path | None, dof: int) -> dict:
+    model = manifest.get("model")
+    contract = model_coordinate_contract(model, dof)
+    limits = model_safety_limits(model, dof)
+    planned_name = manifest.get("planned_trajectory")
+    if dataset_dir is None or not planned_name:
+        return {
+            "status": "not_evaluated",
+            "reason": "manifest does not reference planned_trajectory",
+            "model": model,
+            "coordinate_contract": contract,
+        }
+    planned_path = dataset_dir / planned_name
+    if not planned_path.is_file():
+        return {
+            "status": "not_evaluated",
+            "reason": f"planned trajectory not found: {planned_path}",
+            "model": model,
+            "coordinate_contract": contract,
+        }
+    violations: list[dict] = []
+    ranges = [
+        {"joint": joint, "min_rad": math.inf, "max_rad": -math.inf}
+        for joint in range(1, dof + 1)
+    ]
+    limit_specs = (
+        ("position", "q_cmd", limits.joint_min, limits.joint_max, "rad"),
+        (
+            "velocity",
+            "dq_cmd",
+            tuple(-value for value in limits.velocity_max),
+            limits.velocity_max,
+            "rad/s",
+        ),
+        (
+            "acceleration",
+            "ddq_cmd",
+            tuple(-value for value in limits.acceleration_max),
+            limits.acceleration_max,
+            "rad/s^2",
+        ),
+    )
+    try:
+        planned_rows = _load_rows(planned_path)
+        for row_index, row in enumerate(planned_rows):
+            for joint in range(1, dof + 1):
+                position = float(row[f"q_cmd_{joint}"])
+                ranges[joint - 1]["min_rad"] = min(ranges[joint - 1]["min_rad"], position)
+                ranges[joint - 1]["max_rad"] = max(ranges[joint - 1]["max_rad"], position)
+                for kind, prefix, lower_values, upper_values, unit in limit_specs:
+                    value = float(row[f"{prefix}_{joint}"])
+                    lower = lower_values[joint - 1]
+                    upper = upper_values[joint - 1]
+                    if value < lower or value > upper:
+                        violations.append(
+                            {
+                                "row_index": row_index,
+                                "joint": joint,
+                                "kind": kind,
+                                "column": f"{prefix}_{joint}",
+                                "value": value,
+                                "lower": lower,
+                                "upper": upper,
+                                "unit": unit,
+                            }
+                        )
+        for item in ranges:
+            if math.isinf(item["min_rad"]):
+                item["min_rad"] = None
+                item["max_rad"] = None
+            else:
+                item["range_deg"] = (item["max_rad"] - item["min_rad"]) * 180.0 / math.pi
+        return {
+            "status": "fail" if violations else "pass",
+            "model": model,
+            "coordinate_contract": contract,
+            "joint_min": list(limits.joint_min),
+            "joint_max": list(limits.joint_max),
+            "velocity_max": list(limits.velocity_max),
+            "acceleration_max": list(limits.acceleration_max),
+            "ranges": ranges,
+            "violation_count": len(violations),
+            "violations": violations[:20],
+        }
+    except Exception as exc:
+        return {
+            "status": "not_evaluated",
+            "reason": str(exc),
+            "model": model,
+            "coordinate_contract": contract,
+        }
 
 
 def _data_health(rows: list[dict[str, str]], *, dof: int, times: list[float], expected_sample_count: int | None) -> dict:
@@ -467,6 +566,13 @@ def _write_quality_report(output_dir: Path, metrics: dict) -> Path:
     }
     for name, section in metrics["document_sections"].items():
         lines.append(f"| {zh_sections.get(name, name)} | `{section['status']}` | {section['summary']} |")
+    planned_limits = metrics.get("planned_trajectory_limits", {})
+    lines.append(
+        "| Planned URDF/模型限位 | `{status}` | planned_trajectory.csv 是否越过模型安全范围；SDK/URDF 坐标契约: {contract} |".format(
+            status=planned_limits.get("status", "not_evaluated"),
+            contract=planned_limits.get("coordinate_contract", {}).get("sdk_to_urdf_joint_order", "unknown"),
+        )
+    )
     lines.extend(
         [
             "",
@@ -501,6 +607,38 @@ def _write_quality_report(output_dir: Path, metrics: dict) -> Path:
                 tau=joint["tau_range_nm"],
             )
         )
+    if planned_limits:
+        lines.extend(
+            [
+                "",
+                "## Planned 轨迹模型限位检查",
+                "",
+                f"- 状态: `{planned_limits.get('status')}`",
+                f"- 模型: `{planned_limits.get('model')}`",
+                f"- SDK/URDF 坐标契约: `{planned_limits.get('coordinate_contract', {}).get('sdk_to_urdf_joint_order', 'unknown')}`",
+            ]
+        )
+        if planned_limits.get("violations"):
+            lines.extend(
+                [
+                    "",
+                    "| 行号 | 关节 | 类型 | 列 | 数值 | 下限 | 上限 | 单位 |",
+                    "| ---: | ---: | --- | --- | ---: | ---: | ---: | --- |",
+                ]
+            )
+            for item in planned_limits["violations"][:10]:
+                lines.append(
+                    "| {row} | {joint} | {kind} | `{column}` | {value:.6f} | {lower:.6f} | {upper:.6f} | {unit} |".format(
+                        row=item["row_index"],
+                        joint=item["joint"],
+                        kind=item["kind"],
+                        column=item["column"],
+                        value=item["value"],
+                        lower=item["lower"],
+                        upper=item["upper"],
+                        unit=item["unit"],
+                    )
+                )
     lines.extend(
         [
             "",
