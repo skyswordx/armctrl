@@ -58,6 +58,7 @@ def solve_processed_dataset(
         "dof": int(dof),
         "document_gate_mapping": DOCUMENT_GATE_MAPPING,
         "input_quality": {
+            "profile_name": quality_metrics.get("profile_name"),
             "data_readiness_status": quality_metrics.get("data_readiness_status"),
             "data_health_status": quality_metrics.get("document_sections", {})
             .get("data_health", {})
@@ -412,6 +413,7 @@ def _render_chinese_solver_report(metrics: dict[str, Any]) -> str:
     ]
     input_quality = metrics["input_quality"]
     lines.append(f"| 数据健康 | `{input_quality.get('data_health_status')}` | 先看 CSV、时间戳、数值和采样是否可靠。 |")
+    lines.append(f"| 轨迹类型 | `{input_quality.get('profile_name')}` | friction_sweep 主要用于摩擦项；fourier_multisine 才是完整动力学参数的主激励。 |")
     lines.append(f"| 激励充分性 | `{input_quality.get('excitation_status')}` | 先看关节覆盖和实际跟踪，再看真实回归矩阵 rank。 |")
     pinocchio = metrics["solvers"].get("pinocchio", {})
     if pinocchio.get("status") == "completed":

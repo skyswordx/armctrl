@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import asdict, dataclass, field
 from typing import Any
@@ -80,6 +81,13 @@ class ExcitationProfile:
     def summary(self) -> dict[str, Any]:
         # summary 是 CLI、manifest 和测试共同使用的轻量摘要。
         # 不放完整点列，避免 JSON 响应过大。
+        planned_joint_ranges_rad = []
+        planned_joint_ranges_deg = []
+        for joint_index in range(self.dof):
+            values = [point.q[joint_index] for point in self.points]
+            range_rad = max(values) - min(values)
+            planned_joint_ranges_rad.append(range_rad)
+            planned_joint_ranges_deg.append(math.degrees(range_rad))
         return {
             "profile_name": self.name,
             "description": self.description,
@@ -87,6 +95,8 @@ class ExcitationProfile:
             "sample_hz": self.sample_hz,
             "duration_s": self.duration_s,
             "point_count": len(self.points),
+            "planned_joint_ranges_rad": planned_joint_ranges_rad,
+            "planned_joint_ranges_deg": planned_joint_ranges_deg,
             "metadata": self.metadata,
         }
 

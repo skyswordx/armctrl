@@ -729,6 +729,7 @@ def test_postprocess_writes_solver_metrics_and_chinese_report(tmp_path: Path):
         solver_metrics = json.load(file)
     assert solver_metrics["schema"] == "armctrl-ident-solver-quality-v1"
     assert solver_metrics["document_gate_mapping"]["prediction_error"]["zh"] == "预测误差"
+    assert solver_metrics["input_quality"]["profile_name"] == "gravity_sweep"
     assert "pinocchio" in solver_metrics["solvers"]
     assert "figaroh" in solver_metrics["solvers"]
     pinocchio = solver_metrics["solvers"]["pinocchio"]
@@ -912,6 +913,83 @@ def test_postprocess_quality_metrics_flags_small_gravity_absolute_range(tmp_path
     assert "absolute angle range" in report
 
 
+def test_postprocess_quality_metrics_flags_small_fourier_absolute_range(tmp_path: Path):
+    raw_path = tmp_path / "raw_samples.csv"
+    fieldnames = [
+        "t_s",
+        "phase",
+        "q_1",
+        "q_2",
+        "dq_1",
+        "dq_2",
+        "tau_meas_1",
+        "tau_meas_2",
+        "q_cmd_1",
+        "q_cmd_2",
+        "dq_cmd_1",
+        "dq_cmd_2",
+        "ddq_cmd_1",
+        "ddq_cmd_2",
+        "tau_cmd_1",
+        "tau_cmd_2",
+    ]
+    rows = []
+    values = [-0.09, -0.045, 0.0, 0.045, 0.09]
+    for index, value in enumerate(values):
+        rows.append(
+            {
+                "t_s": index * 0.25,
+                "phase": "fourier_multisine",
+                "q_1": value,
+                "q_2": 0.3 + value,
+                "dq_1": 0.01,
+                "dq_2": -0.01,
+                "tau_meas_1": value,
+                "tau_meas_2": 1.0 + value,
+                "q_cmd_1": value,
+                "q_cmd_2": 0.3 + value,
+                "dq_cmd_1": 0.01,
+                "dq_cmd_2": -0.01,
+                "ddq_cmd_1": 0.01,
+                "ddq_cmd_2": -0.01,
+                "tau_cmd_1": 0.0,
+                "tau_cmd_2": 0.0,
+            }
+        )
+    with raw_path.open("w", encoding="utf-8", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    (tmp_path / "manifest.json").write_text(
+        json.dumps(
+            {
+                "dof": 2,
+                "duration_s": 1.0,
+                "sample_hz": 4.0,
+                "profile_name": "fourier_multisine",
+                "profile_metadata": {"amplitude_rad": 0.09},
+                "raw_samples": "raw_samples.csv",
+                "lerobot_contract": {"schema": "lerobot-compatible"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    response = postprocess_dataset(
+        dataset_dir=tmp_path,
+        output_dir=tmp_path / "processed",
+        tools=("pinocchio",),
+        smoothing_window=1,
+    )
+
+    assert response.status.value == "completed"
+    quality = response.detail["quality_metrics"]
+    assert quality["data_readiness_status"] == "fail"
+    assert quality["document_sections"]["excitation"]["status"] == "fail"
+    assert quality["profile_metadata"]["dynamic_min_actual_range_deg"] == pytest.approx(60.0)
+    assert quality["joint_metrics"][0]["absolute_range_status"] == "fail"
+
+
 def test_cli_ident_plan_json_outputs_summary(capsys):
     code = main(
         [
@@ -1033,10 +1111,11 @@ def test_cli_ident_plan_uses_field_fourier_defaults(capsys):
     assert code == 0
     payload = json.loads(capsys.readouterr().out)
     metadata = payload["detail"]["metadata"]
-    assert metadata["duration_s"] == pytest.approx(20.0)
-    assert metadata["amplitude_rad"] == pytest.approx(0.08)
+    assert metadata["duration_s"] == pytest.approx(40.0)
+    assert metadata["amplitude_rad"] == pytest.approx(1.3)
     assert metadata["harmonics"] == 5
     assert metadata["q_center"] == pytest.approx((0.0, 0.30, 0.30, 0.0, 0.0, 0.0))
+    assert min(payload["detail"]["planned_joint_ranges_deg"]) >= 60.0
 
 
 def test_cli_ident_plan_accepts_fourier_center_pose(capsys):

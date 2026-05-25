@@ -50,8 +50,8 @@ DEFAULT_FRICTION_SWEEP_AMPLITUDE_RAD = 0.12
 DEFAULT_FRICTION_SWEEP_SLOW_SPEED_RADPS = 0.025
 DEFAULT_FRICTION_SWEEP_MEDIUM_SPEED_RADPS = 0.06
 DEFAULT_FRICTION_SWEEP_FAST_SPEED_RADPS = 0.12
-DEFAULT_FOURIER_DURATION_S = 20.0
-DEFAULT_FOURIER_AMPLITUDE_RAD = 0.08
+DEFAULT_FOURIER_DURATION_S = 40.0
+DEFAULT_FOURIER_AMPLITUDE_RAD = 1.3
 DEFAULT_FOURIER_HARMONICS = 5
 GRIPPER_CALIBRATION_COMMANDS = {
     "gripper-calibration-show",
@@ -469,7 +469,6 @@ def build_identification_profile(args: argparse.Namespace):
         # 傅里叶轨迹加速度大致随 amplitude / duration² 增大。
         # 默认值随时长缩放，短测试不会因为默认参数直接越过安全限幅；
         # 用户显式传 --amplitude 时仍按用户值生成并交给 safety 检查。
-        default_amplitude = min(0.12, 0.02 * duration_s * duration_s)
         if args.amplitude is not None:
             amplitude_rad = args.amplitude
         elif args.duration is not None:

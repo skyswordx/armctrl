@@ -172,15 +172,18 @@ def _build_quality_metrics(manifest: dict, rows: list[dict[str, str]], *, tools:
     times = _float_column(rows, "t_s")
     profile_name = manifest.get("profile_name")
     profile_metadata = dict(manifest.get("profile_metadata", {}))
-    gravity_min_actual_range_deg = 30.0 if profile_name == "gravity_sweep" else 8.0
-    profile_metadata["gravity_min_actual_range_deg"] = gravity_min_actual_range_deg
+    min_actual_range_deg = _profile_min_actual_range_deg(profile_name)
+    if profile_name == "gravity_sweep":
+        profile_metadata["gravity_min_actual_range_deg"] = min_actual_range_deg
+    if profile_name == "fourier_multisine":
+        profile_metadata["dynamic_min_actual_range_deg"] = min_actual_range_deg
     expected_sample_count = _expected_sample_count(manifest)
     data_health = _data_health(rows, dof=dof, times=times, expected_sample_count=expected_sample_count)
     joint_metrics = [
         _joint_quality(
             rows,
             joint=joint,
-            min_actual_range_deg=gravity_min_actual_range_deg if profile_name == "gravity_sweep" else None,
+            min_actual_range_deg=min_actual_range_deg,
         )
         for joint in range(1, dof + 1)
     ]
@@ -194,8 +197,8 @@ def _build_quality_metrics(manifest: dict, rows: list[dict[str, str]], *, tools:
         "excitation": {
             "status": excitation_status,
             "summary": (
-                "Joint tracking plus absolute angle range checks. For gravity_sweep, high command coverage alone can be "
-                "misleading when the absolute angle range is too small for sin/cos excitation."
+                "Joint tracking plus absolute angle range checks. For gravity_sweep/fourier_multisine, high command "
+                "coverage alone can be misleading when the absolute angle range is too small for sin/cos excitation."
             ),
         },
         "regressor_condition": {
@@ -227,7 +230,7 @@ def _build_quality_metrics(manifest: dict, rows: list[dict[str, str]], *, tools:
         "thresholds": {
             "min_coverage_ratio": 0.8,
             "max_platform_mean_error_rad": 0.02,
-            "gravity_min_actual_range_deg": gravity_min_actual_range_deg,
+            "min_actual_range_deg": min_actual_range_deg,
             "max_sample_count_error_ratio": 0.05,
         },
         "data_health": data_health,
@@ -241,6 +244,14 @@ def _build_quality_metrics(manifest: dict, rows: list[dict[str, str]], *, tools:
             "a later offline solver stage consumes these artifacts."
         ),
     }
+
+
+def _profile_min_actual_range_deg(profile_name: str | None) -> float | None:
+    if profile_name == "gravity_sweep":
+        return 30.0
+    if profile_name == "fourier_multisine":
+        return 60.0
+    return None
 
 
 def _data_health(rows: list[dict[str, str]], *, dof: int, times: list[float], expected_sample_count: int | None) -> dict:
