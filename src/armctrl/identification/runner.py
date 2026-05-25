@@ -120,6 +120,17 @@ class IdentificationRunner:
         damping_after_success = bool(execute and self.damping_after)
         if damping_after_success:
             self.backend.damping()
+        completion_hold_response = None
+        completion_hold_interrupted = False
+        damping_after_hold_interrupt = None
+        if execute and not self.damping_after:
+            hold = getattr(self.backend, "hold_joint_position_until_cancelled", None)
+            if callable(hold):
+                try:
+                    completion_hold_response = hold(profile.points[-1], self.sleep_fn, self.sample_hz)
+                except KeyboardInterrupt:
+                    completion_hold_interrupted = True
+                    damping_after_hold_interrupt = self.backend.damping()
         detail = profile.summary()
         detail.update(
             {
@@ -127,6 +138,11 @@ class IdentificationRunner:
                 "sample_count": len(samples),
                 "execute": execute,
                 "completion_hold": bool(execute and not self.damping_after),
+                "completion_hold_response": completion_hold_response.to_dict() if completion_hold_response else None,
+                "completion_hold_interrupted": completion_hold_interrupted,
+                "damping_after_hold_interrupt": damping_after_hold_interrupt.to_dict()
+                if damping_after_hold_interrupt
+                else None,
                 "damping_after_success": damping_after_success,
                 "reset_home_before_execute": bool(execute and self.reset_home_before_execute),
                 "preposition_before_recording": preposition_sent,

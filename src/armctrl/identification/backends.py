@@ -48,6 +48,14 @@ class JointRobotIO(Protocol):
     def damping(self) -> CommandResponse:
         ...
 
+    def hold_joint_position_until_cancelled(
+        self,
+        point: TrajectoryPoint,
+        sleep_fn: Callable[[float], None],
+        update_hz: float,
+    ) -> CommandResponse:
+        ...
+
 
 class FakeJointRobotIO:
     """无硬件辨识后端。
@@ -105,6 +113,19 @@ class FakeJointRobotIO:
 
     def damping(self) -> CommandResponse:
         return CommandResponse(CommandStatus.COMPLETED, "fake joint backend damping")
+
+    def hold_joint_position_until_cancelled(
+        self,
+        point: TrajectoryPoint,
+        sleep_fn: Callable[[float], None],
+        update_hz: float,
+    ) -> CommandResponse:
+        self._last_command = point
+        return CommandResponse(
+            CommandStatus.COMPLETED,
+            "fake joint backend hold completed",
+            detail={"hold_cycles": 0, "update_hz": float(update_hz), "q": point.q},
+        )
 
 
 class Arx5JointRobotIO:
@@ -349,6 +370,28 @@ class Arx5JointRobotIO:
         except Exception as exc:
             error = ArmctrlError(ErrorCode.SDK_ERROR, str(exc))
             return CommandResponse(CommandStatus.FAULTED, "sdk joint damping failed", error=error)
+
+    def hold_joint_position_until_cancelled(
+        self,
+        point: TrajectoryPoint,
+        sleep_fn: Callable[[float], None],
+        update_hz: float,
+    ) -> CommandResponse:
+        controller = self._require_controller()
+        period_s = 1.0 / max(float(update_hz), 1.0)
+        controller_dt = float(getattr(controller.get_controller_config(), "controller_dt", 0.002))
+        lookahead_s = max(0.04, controller_dt * 5.0)
+        hold_cycles = 0
+        while True:
+            timestamp = float(controller.get_timestamp()) + lookahead_s
+            joint_state = self._joint_state_from_vectors(
+                q=point.q,
+                dq=tuple(0.0 for _ in range(self.dof)),
+                timestamp=timestamp,
+            )
+            controller.set_joint_cmd(joint_state)
+            hold_cycles += 1
+            sleep_fn(period_s)
 
 
 def build_joint_backend(

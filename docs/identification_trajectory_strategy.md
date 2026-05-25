@@ -9,6 +9,8 @@
 
 辨识采集正常完成后默认保持 hold，不再自动进入 damping。原因是 Fourier 轨迹本身会回到中心位且末端速度、加速度为零；如果成功结束后立刻 `set_to_damping()`，机械臂会失去主动保持力矩，表现为从中立位置塌下去。
 
+实现上不是简单“不调用 damping”，而是在采集数据和 manifest 写盘后，继续按最终姿态周期性下发零速关节命令。因此命令会停在 hold 状态里，直到操作者按 Ctrl-C。按 Ctrl-C 后会请求 damping 并退出；这时数据已经保存。
+
 Ctrl-C 和故障路径仍然请求 damping。这两个路径代表人工急停或异常，优先让控制器离开持续运动状态。
 
 需要恢复旧行为时，在 `ident-run` 里显式加：
@@ -53,7 +55,7 @@ Ctrl-C 和故障路径仍然请求 damping。这两个路径代表人工急停�
 
 ## 下一轮推荐执行顺序
 
-先跑 gravity，再跑 friction，最后跑 fourier。每条 `ident-run` 正常结束后会保持 hold；确认机械臂安全后再手动 damping，或者在命令里显式加 `--damping-after` 恢复旧行为。
+先跑 gravity，再跑 friction，最后跑 fourier。每条 `ident-run` 正常结束后会保持 hold；确认机械臂稳定在最终姿态后按 Ctrl-C 退出 hold，程序会请求 damping。或者在命令里显式加 `--damping-after` 恢复旧行为。
 
 ```bash
 uv run arx5ctl ident-run --adapter sdk --model X5 --interface can0 \

@@ -373,6 +373,30 @@ def test_sdk_joint_backend_streams_joint_commands_from_current_state():
     assert backend._controller.joint_cmds[2].timestamp == pytest.approx(10.3)
 
 
+def test_sdk_joint_backend_completion_hold_refreshes_future_command():
+    backend = Arx5JointRobotIO(model="X5", interface="can0", resume_gain_duration_s=0.006, sleep_fn=lambda _: None)
+    backend._sdk = _FakeIdentSDK()
+    backend._controller = _FakeIdentController()
+    backend.dof = 2
+    sleeps: list[float] = []
+
+    def interrupting_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        backend.hold_joint_position_until_cancelled(
+            TrajectoryPoint(1.0, (0.2, -0.1), (0.0, 0.0), (0.0, 0.0), "hold"),
+            interrupting_sleep,
+            update_hz=50.0,
+        )
+
+    assert sleeps == pytest.approx([0.02])
+    assert backend._controller.joint_cmds[-1].pos() == pytest.approx((0.2, -0.1))
+    assert backend._controller.joint_cmds[-1].vel() == pytest.approx((0.0, 0.0))
+    assert backend._controller.joint_cmds[-1].timestamp > backend._controller.get_timestamp()
+
+
 def test_runner_execute_resets_home_before_sending_trajectory():
     class RecordingBackend(FakeJointRobotIO):
         def __init__(self) -> None:
@@ -555,10 +579,19 @@ def test_runner_success_holds_by_default_without_damping():
         def __init__(self) -> None:
             super().__init__(dof=2)
             self.damping_called = False
+            self.hold_calls = 0
 
         def damping(self) -> CommandResponse:
             self.damping_called = True
             return super().damping()
+
+        def hold_joint_position_until_cancelled(self, point, sleep_fn, update_hz: float) -> CommandResponse:
+            self.hold_calls += 1
+            return CommandResponse(
+                CommandStatus.COMPLETED,
+                "hold exited immediately for test",
+                detail={"hold_cycles": 1, "update_hz": update_hz, "q": point.q},
+            )
 
     profile = generate_gravity_sweep(dof=2, sample_hz=10.0, amplitude_rad=0.05, segment_duration_s=0.5)
     backend = TrackingBackend()
@@ -568,7 +601,9 @@ def test_runner_success_holds_by_default_without_damping():
 
     assert response.status.value == "completed"
     assert backend.damping_called is False
+    assert backend.hold_calls == 1
     assert response.detail["completion_hold"] is True
+    assert response.detail["completion_hold_response"]["detail"]["q"] == pytest.approx(profile.points[-1].q)
 
 
 def test_runner_success_can_request_damping_after_completion():
@@ -595,6 +630,31 @@ def test_runner_success_can_request_damping_after_completion():
     assert response.status.value == "completed"
     assert backend.damping_called is True
     assert response.detail["completion_hold"] is False
+
+
+def test_runner_completion_hold_ctrl_c_damps_and_returns_completed():
+    class InterruptingHoldBackend(FakeJointRobotIO):
+        def __init__(self) -> None:
+            super().__init__(dof=2)
+            self.damping_called = False
+
+        def hold_joint_position_until_cancelled(self, point, sleep_fn, update_hz: float) -> CommandResponse:
+            raise KeyboardInterrupt
+
+        def damping(self) -> CommandResponse:
+            self.damping_called = True
+            return super().damping()
+
+    profile = generate_gravity_sweep(dof=2, sample_hz=10.0, amplitude_rad=0.05, segment_duration_s=0.5)
+    backend = InterruptingHoldBackend()
+    runner = IdentificationRunner(backend=backend, sample_hz=10.0, sleep_fn=lambda _: None)
+
+    response = runner.run(profile, execute=True)
+
+    assert response.status.value == "completed"
+    assert backend.damping_called is True
+    assert response.detail["completion_hold_interrupted"] is True
+    assert response.detail["damping_after_hold_interrupt"]["status"] == "completed"
 
 
 def test_postprocess_writes_processed_csv_and_tool_handoff(tmp_path: Path):
