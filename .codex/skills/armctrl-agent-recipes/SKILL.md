@@ -30,6 +30,20 @@ uv run armctrl recipe execute <name> --json
 At this stage `recipe execute` is expected to return `rejected` unless a
 tested hardware backend has been added.
 
+Inspect executor status:
+
+```bash
+uv run armctrl recipe status --json
+```
+
+Cancel an active recipe session:
+
+```bash
+uv run armctrl recipe cancel --json
+```
+
+At this stage cancel is expected to be safe when no hardware session exists.
+
 ## Hard Boundaries
 
 - Do not call raw SDK motion methods.
@@ -44,5 +58,7 @@ tested hardware backend has been added.
 2. Choose one listed recipe by name.
 3. Run `uv run armctrl recipe plan <name> --json`.
 4. Report the plan and safety gate to the user.
-5. Only consider `recipe execute` when the user explicitly asks for execution
+5. Run `uv run armctrl recipe status --json` before any execution discussion.
+6. Only consider `recipe execute` when the user explicitly asks for execution
    and the command returns an allowed safety decision.
+7. Use `uv run armctrl recipe cancel --json` for cleanup/status recovery only.

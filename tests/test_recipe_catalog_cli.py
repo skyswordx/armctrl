@@ -95,3 +95,37 @@ def test_cli_execute_rejects_without_backend() -> None:
     assert payload["recipe"]["name"] == "home"
     assert payload["safety"]["allowed"] is False
     assert payload["safety"]["required_backend"] == "arx5-interface"
+    assert payload["executor"]["status"] == "blocked"
+    assert payload["executor"]["safety_gate_required"] is True
+
+
+def test_cli_recipe_status_reports_no_hardware_session() -> None:
+    completed = subprocess.run(
+        [sys.executable, "-m", "armctrl.cli", "recipe", "status", "--json"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+
+    assert payload["status"] == "ok"
+    assert payload["schema"] == "armctrl.recipe_executor_status.v1"
+    assert payload["executor"]["state"] == "idle"
+    assert payload["executor"]["hardware_backend"] == "not_configured"
+
+
+def test_cli_recipe_cancel_is_safe_when_no_hardware_session() -> None:
+    completed = subprocess.run(
+        [sys.executable, "-m", "armctrl.cli", "recipe", "cancel", "--json"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+
+    assert payload["status"] == "ok"
+    assert payload["schema"] == "armctrl.recipe_executor_cancel.v1"
+    assert payload["executor"]["state"] == "idle"
+    assert payload["executor"]["action"] == "no_active_session"

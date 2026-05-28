@@ -24,6 +24,7 @@
 - 新增 `sysid import-evidence`，把 FIGAROH/外部物理一致性和基础参数证据导入 solver metrics，供参数包质量门消费。
 - 新增 `sysid adapt-figaroh-evidence`，把 FIGAROH-style report 规范化为 `armctrl.external_solver_evidence.v1`。
 - 新增 `online-id audit`，以 append-only JSONL 记录 shadow 在线辨识更新窗口、残差变化、饱和检查、回滚目标和人工确认要求。
+- 新增 `recipe status` / `recipe cancel` 和显式 recipe command executor gate，Agent skill 只能通过受限 recipe CLI 触达动作。
 - 新增在线辨识 shadow-mode policy，限制在线更新只覆盖 torque bias、摩擦项和小幅 gravity residual。
 - 新增项目内 Codex skill: `.codex/skills/armctrl-agent-recipes/SKILL.md`，限制 Agent 只能通过 recipe CLI 查看和规划动作。
 

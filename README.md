@@ -43,11 +43,15 @@ connect to hardware:
 ```bash
 uv run armctrl recipe list --json
 uv run armctrl recipe plan home --json
+uv run armctrl recipe status --json
 uv run armctrl recipe execute home --json
+uv run armctrl recipe cancel --json
 ```
 
 `recipe execute` currently returns a structured `rejected` response until an
-execution backend is rebuilt and verified.
+execution backend is rebuilt and verified. `recipe status` and `recipe cancel`
+are safe with no configured hardware session and expose the command executor
+boundary Agents must use.
 
 ## SysID Preview
 

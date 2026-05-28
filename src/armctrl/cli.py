@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Sequence
 
 from armctrl.recipes import RecipeCatalog
+from armctrl.recipe_executor import RecipeExecutor
 from armctrl.online_id import (
     OnlineAuditRequest,
     OnlineIdentificationAuditor,
@@ -40,6 +41,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     execute_parser = recipe_subparsers.add_parser("execute")
     execute_parser.add_argument("name")
     execute_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    status_parser = recipe_subparsers.add_parser("status")
+    status_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    cancel_parser = recipe_subparsers.add_parser("cancel")
+    cancel_parser.add_argument("--json", action="store_true", dest="as_json")
 
     sysid_parser = subparsers.add_parser("sysid")
     sysid_subparsers = sysid_parser.add_subparsers(dest="sysid_command", required=True)
@@ -147,15 +154,35 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "recipe" and args.recipe_command == "execute":
         recipe = catalog.get(args.name)
         safety = SafetyGate().evaluate(recipe, plan_only=False)
+        executor = RecipeExecutor().evaluate(safety)
         payload = {
             "status": "rejected",
             "schema": "armctrl.recipe_execution.v1",
             "recipe": recipe.to_json(),
             "safety": safety.to_json(),
+            "executor": executor.to_json(),
             "steps": [step.to_json() for step in recipe.steps],
         }
         _emit(payload, as_json=args.as_json)
         return 3
+
+    if args.command == "recipe" and args.recipe_command == "status":
+        executor = RecipeExecutor().status()
+        payload = {
+            "status": "ok",
+            "schema": "armctrl.recipe_executor_status.v1",
+            "executor": executor.to_json(),
+        }
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "recipe" and args.recipe_command == "cancel":
+        executor = RecipeExecutor().cancel()
+        payload = {
+            "status": "ok",
+            "schema": "armctrl.recipe_executor_cancel.v1",
+            "executor": executor.to_json(),
+        }
+        return _emit(payload, as_json=args.as_json)
 
     if args.command == "sysid" and args.sysid_command == "plan":
         planner = SysIdPlanner.default()
