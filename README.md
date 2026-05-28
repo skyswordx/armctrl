@@ -79,6 +79,23 @@ checks are evaluated from `--urdf-path`; workspace clearance currently uses a
 conservative joint2 clearance proxy from `--safe-config`. A full FK/table
 collision model is still pending before hardware execution can be enabled.
 
+Run the fake data path:
+
+```bash
+uv run armctrl sysid run gravity_sweep \
+  --adapter fake \
+  --dof 6 \
+  --sample-hz 100 \
+  --duration 10 \
+  --amplitude 0.1 \
+  --q-center 0 0.3 0.3 0 0 0 \
+  --output runs/ident-fake \
+  --json
+```
+
+The fake runner writes `raw_samples.csv` and a run `manifest.json`. SDK/hardware
+runner support is still rejected in the clean rebuild.
+
 ## Online Identification Policy
 
 Online identification is currently a shadow-mode policy contract. It allows

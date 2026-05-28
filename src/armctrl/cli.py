@@ -10,6 +10,7 @@ from armctrl.recipes import RecipeCatalog
 from armctrl.online_id import OnlineIdentificationPolicy
 from armctrl.safety import SafetyGate
 from armctrl.sysid import SysIdPlanner, SysIdPlanRequest
+from armctrl.sysid_run import FakeSysIdRunner
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -45,6 +46,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     sysid_plan_parser.add_argument("--safe-config", default="configs/x5.safe.yaml")
     sysid_plan_parser.add_argument("--output")
     sysid_plan_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    sysid_run_parser = sysid_subparsers.add_parser("run")
+    sysid_run_parser.add_argument("profile")
+    sysid_run_parser.add_argument("--adapter", default="fake")
+    sysid_run_parser.add_argument("--dof", type=int, default=6)
+    sysid_run_parser.add_argument("--sample-hz", type=float, default=100.0)
+    sysid_run_parser.add_argument("--duration", type=float, default=10.0)
+    sysid_run_parser.add_argument("--amplitude", type=float, default=0.1)
+    sysid_run_parser.add_argument("--q-center", nargs="+", type=float)
+    sysid_run_parser.add_argument("--urdf-path", default="configs/models/X5_camera.urdf")
+    sysid_run_parser.add_argument("--safe-config", default="configs/x5.safe.yaml")
+    sysid_run_parser.add_argument("--output", required=True)
+    sysid_run_parser.add_argument("--json", action="store_true", dest="as_json")
 
     online_parser = subparsers.add_parser("online-id")
     online_subparsers = online_parser.add_subparsers(
@@ -118,6 +132,35 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             plan = planner.plan(args.profile, execute=False)
         payload = {"status": "ok", **plan.to_json()}
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "sysid" and args.sysid_command == "run":
+        if args.adapter != "fake":
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.sysid_run.v1",
+                "adapter": args.adapter,
+                "reason": "only fake sysid runner is implemented in clean rebuild",
+            }
+            _emit(payload, as_json=args.as_json)
+            return 3
+        q_center = tuple(args.q_center or [0.0] * args.dof)
+        if len(q_center) != args.dof:
+            parser.error("--q-center length must match --dof")
+        result = FakeSysIdRunner().run(
+            SysIdPlanRequest(
+                profile_name=args.profile,
+                dof=args.dof,
+                sample_hz=args.sample_hz,
+                duration_s=args.duration,
+                amplitude_rad=args.amplitude,
+                q_center=q_center,
+                urdf_path=args.urdf_path,
+                safe_config_path=args.safe_config,
+                output_dir=Path(args.output),
+            )
+        )
+        payload = {"status": "ok", **result.to_json()}
         return _emit(payload, as_json=args.as_json)
 
     if args.command == "online-id" and args.online_command == "policy":

@@ -147,7 +147,7 @@ class SysIdPlanner:
             and workspace_decision.status == "pass"
         )
 
-        rows = _trajectory_rows(request)
+        rows = trajectory_rows(request)
         with trajectory_path.open("w", newline="", encoding="utf-8") as file:
             writer = csv.DictWriter(file, fieldnames=list(rows[0]))
             writer.writeheader()
@@ -219,7 +219,7 @@ class SysIdPlanner:
         )
 
 
-def _trajectory_rows(request: SysIdPlanRequest) -> list[dict[str, str]]:
+def trajectory_rows(request: SysIdPlanRequest) -> list[dict[str, str]]:
     sample_count = int(round(request.duration_s * request.sample_hz)) + 1
     rows: list[dict[str, str]] = []
     for sample_index in range(sample_count):
