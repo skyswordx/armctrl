@@ -18,7 +18,7 @@ from armctrl.online_id import (
 from armctrl.safety import SafetyGate
 from armctrl.sysid import SysIdPlanner, SysIdPlanRequest
 from armctrl.sysid_evidence import SysIdEvidenceImporter
-from armctrl.sysid_figaroh_adapter import FigarohEvidenceAdapter
+from armctrl.sysid_figaroh_adapter import FigarohEvidenceAdapter, FigarohHandoffWriter
 from armctrl.sysid_package import SysIdPackager
 from armctrl.sysid_postprocess import SysIdPostprocessor, SysIdPostprocessResult
 from armctrl.sysid_run import FakeSysIdRunner, SdkSysIdRunnerGate
@@ -103,6 +103,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     sysid_figaroh_adapter_parser.add_argument("--input", required=True)
     sysid_figaroh_adapter_parser.add_argument("--output", required=True)
     sysid_figaroh_adapter_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+    )
+
+    sysid_figaroh_handoff_parser = sysid_subparsers.add_parser("figaroh-handoff")
+    sysid_figaroh_handoff_parser.add_argument("--dataset", required=True)
+    sysid_figaroh_handoff_parser.add_argument("--output", required=True)
+    sysid_figaroh_handoff_parser.add_argument(
         "--json",
         action="store_true",
         dest="as_json",
@@ -298,6 +307,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "sysid" and args.sysid_command == "adapt-figaroh-evidence":
         result = FigarohEvidenceAdapter().run(Path(args.input), Path(args.output))
+        payload = {"status": "ok", **result.to_json()}
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "sysid" and args.sysid_command == "figaroh-handoff":
+        result = FigarohHandoffWriter().run(Path(args.dataset), Path(args.output))
         payload = {"status": "ok", **result.to_json()}
         return _emit(payload, as_json=args.as_json)
 

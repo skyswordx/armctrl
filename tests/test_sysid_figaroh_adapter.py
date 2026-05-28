@@ -158,3 +158,78 @@ def test_adapted_figaroh_evidence_can_be_imported_into_solver_metrics(
 
     assert metrics["physical_consistency"]["status"] == "pass"
     assert metrics["figaroh_base_parameters"]["parameter_count"] == 36
+
+
+def test_cli_sysid_figaroh_handoff_writes_external_tool_package(
+    tmp_path: Path,
+) -> None:
+    dataset_dir = tmp_path / "ident-run"
+    handoff_dir = tmp_path / "figaroh-handoff"
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "sysid",
+            "run",
+            "gravity_sweep",
+            "--adapter",
+            "fake",
+            "--output",
+            str(dataset_dir),
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "sysid",
+            "postprocess",
+            "--dataset",
+            str(dataset_dir),
+            "--solve",
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "sysid",
+            "figaroh-handoff",
+            "--dataset",
+            str(dataset_dir),
+            "--output",
+            str(handoff_dir),
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+    handoff = json.loads((handoff_dir / "figaroh_handoff.json").read_text(encoding="utf-8"))
+
+    assert payload["status"] == "ok"
+    assert payload["schema"] == "armctrl.figaroh_handoff.v1"
+    assert payload["artifacts"]["figaroh_handoff"] == str(handoff_dir / "figaroh_handoff.json")
+    assert handoff["dataset"]["processed_samples"].endswith("processed_samples.csv")
+    assert handoff["dataset"]["solver_metrics"].endswith("solver_metrics.json")
+    assert handoff["model"]["urdf_path"] == "configs/models/X5_camera.urdf"
+    assert handoff["expected_outputs"]["report_schema"] == "figaroh.identification.report.v1"
+    assert handoff["armctrl_import_command"][0:3] == [
+        "armctrl",
+        "sysid",
+        "adapt-figaroh-evidence",
+    ]

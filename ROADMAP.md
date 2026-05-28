@@ -45,8 +45,9 @@ Release readiness: `contracts_complete_hardware_pending`.
 - [x] `sysid solve` 用 Pinocchio regressor 做 least-squares 回代并输出 prediction RMSE；缺依赖时结构化降级。
 - [x] `sysid solve` 固定输出基础参数和物理一致性 gate 字段，缺外部证据时标为 `not_evaluated`。
 - [x] FIGAROH/外部工具证据可通过 `sysid import-evidence` 导入，并被 package gate 消费。
+- [x] `sysid figaroh-handoff` 为外部 FIGAROH 运行生成 processed 数据、URDF 和导入命令清单。
 - [x] `sysid adapt-figaroh-evidence` 将 FIGAROH-style report 规范化为 armctrl external evidence。
-- [ ] 本地不重写 FIGAROH 最优轨迹或物理一致性内部实现，只继续补官方工具输出适配器。
+- [x] 本地不重写 FIGAROH 最优轨迹或物理一致性内部实现，只继续补官方工具 handoff 和输出适配器。
 - [x] `sysid package` 只有质量门通过时才生成候选参数包，否则结构化拒绝。
 - [x] 候选参数包加入版本号、签名、回滚目标和上线 A/B 验证记录。
 

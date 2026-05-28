@@ -190,6 +190,11 @@ before activation on hardware.
 Import external solver evidence from FIGAROH or manual review:
 
 ```bash
+uv run armctrl sysid figaroh-handoff \
+  --dataset runs/ident-fake \
+  --output runs/ident-fake/figaroh-handoff \
+  --json
+
 uv run armctrl sysid adapt-figaroh-evidence \
   --input figaroh-report.json \
   --output figaroh-evidence.json \
@@ -201,10 +206,11 @@ uv run armctrl sysid import-evidence \
   --json
 ```
 
-The evidence file must use schema `armctrl.external_solver_evidence.v1` and
-include `physical_consistency` plus `figaroh_base_parameters`. This keeps
-FIGAROH-owned checks outside `armctrl` while still making package gates
-machine-readable.
+`figaroh-handoff` writes `figaroh_handoff.json` with processed data paths, URDF
+metadata, required FIGAROH outputs, and the import command to run afterward. The
+evidence file must use schema `armctrl.external_solver_evidence.v1` and include
+`physical_consistency` plus `figaroh_base_parameters`. This keeps FIGAROH-owned
+checks outside `armctrl` while still making package gates machine-readable.
 
 ## Online Identification Policy
 
