@@ -29,6 +29,7 @@
 - [x] `ident-plan` / `sysid plan --output` 评估 URDF joint limit 并在 stdout/manifest 标注 pass/fail。
 - [x] `ident-plan` / `sysid plan --output` 评估第一版 workspace/table clearance proxy 并在 stdout/manifest 标注 pass/fail。
 - [x] `ident-run` / `sysid run --adapter fake` 生成 `raw_samples.csv` 和 run manifest。
+- [x] `ident-postprocess` / `sysid postprocess` 输出清洗数据、质量指标和 Markdown 报告。
 - [ ] `ident-plan` 在实机运动前使用完整 FK/table collision model 拒绝不安全 planned trajectory。
 - [ ] `ident-run` 使用 ARX5 SDK 采集 gravity、friction、Fourier profile，并有 hold、damping、Ctrl-C 落态。
 - [ ] `ident-run` 采集 gravity、friction、Fourier profile，并有 hold、damping、Ctrl-C 落态。

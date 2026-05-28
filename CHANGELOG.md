@@ -15,6 +15,7 @@
 - 新增轻量 URDF joint limit 检查，`sysid plan --output` 会在 stdout 和 manifest 中记录 pass/fail。
 - 新增 workspace/table clearance 的第一版保守 proxy 检查，读取 `configs/x5.safe.yaml` 并在 stdout/manifest 中记录 pass/fail。
 - 新增 `sysid run --adapter fake`，可生成 `raw_samples.csv` 和 run manifest，用于恢复无硬件数据链路。
+- 新增 `sysid postprocess`，从 fake/raw dataset 生成 `processed_samples.csv`、`quality_metrics.json` 和 `quality_report.md`。
 - 新增在线辨识 shadow-mode policy，限制在线更新只覆盖 torque bias、摩擦项和小幅 gravity residual。
 - 新增项目内 Codex skill：`.codex/skills/armctrl-agent-recipes/SKILL.md`，限制 Agent 只能通过 recipe CLI 查看和规划动作。
 
@@ -23,6 +24,7 @@
 - 停止在旧实验实现上继续叠加功能，后续按 `v0.2.0` 到 `v0.5.0` 小 milestone 重新实现。
 - SysID execute 仍保持 rejected；workspace clearance 目前是 joint2 proxy，不是完整 FK/table collision model。
 - `sysid run --adapter sdk` 仍保持 rejected，等待真实 SDK runner、安全落态和真机验证。
+- 当前 postprocess 只覆盖基础文件合同和 data health，预测误差/物理一致性等待 solver stage。
 
 ## [0.1.0] - Historical Baseline
 

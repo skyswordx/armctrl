@@ -10,6 +10,7 @@ from armctrl.recipes import RecipeCatalog
 from armctrl.online_id import OnlineIdentificationPolicy
 from armctrl.safety import SafetyGate
 from armctrl.sysid import SysIdPlanner, SysIdPlanRequest
+from armctrl.sysid_postprocess import SysIdPostprocessor
 from armctrl.sysid_run import FakeSysIdRunner
 
 
@@ -59,6 +60,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     sysid_run_parser.add_argument("--safe-config", default="configs/x5.safe.yaml")
     sysid_run_parser.add_argument("--output", required=True)
     sysid_run_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    sysid_postprocess_parser = sysid_subparsers.add_parser("postprocess")
+    sysid_postprocess_parser.add_argument("--dataset", required=True)
+    sysid_postprocess_parser.add_argument("--json", action="store_true", dest="as_json")
 
     online_parser = subparsers.add_parser("online-id")
     online_subparsers = online_parser.add_subparsers(
@@ -160,6 +165,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 output_dir=Path(args.output),
             )
         )
+        payload = {"status": "ok", **result.to_json()}
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "sysid" and args.sysid_command == "postprocess":
+        result = SysIdPostprocessor().run(Path(args.dataset))
         payload = {"status": "ok", **result.to_json()}
         return _emit(payload, as_json=args.as_json)
 

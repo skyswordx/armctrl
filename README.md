@@ -96,6 +96,17 @@ uv run armctrl sysid run gravity_sweep \
 The fake runner writes `raw_samples.csv` and a run `manifest.json`. SDK/hardware
 runner support is still rejected in the clean rebuild.
 
+Postprocess a dataset:
+
+```bash
+uv run armctrl sysid postprocess \
+  --dataset runs/ident-fake \
+  --json
+```
+
+This writes `processed/processed_samples.csv`,
+`processed/quality_metrics.json`, and `processed/quality_report.md`.
+
 ## Online Identification Policy
 
 Online identification is currently a shadow-mode policy contract. It allows
