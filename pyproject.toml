@@ -20,6 +20,9 @@ dev = [
   "pytest>=8.2",
 ]
 
+[project.scripts]
+armctrl = "armctrl.cli:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

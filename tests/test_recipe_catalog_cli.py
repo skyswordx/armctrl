@@ -60,3 +60,17 @@ def test_cli_dry_run_returns_plan_and_safety_gate() -> None:
     assert payload["recipe"]["name"] == "home"
     assert payload["safety"]["allowed"] is True
     assert payload["steps"][0]["kind"] == "joint_target"
+
+
+def test_packaged_cli_entrypoint_lists_recipes() -> None:
+    completed = subprocess.run(
+        ["armctrl", "recipe", "list", "--json"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+
+    assert payload["status"] == "ok"
+    assert payload["recipes"][-1]["name"] == "retreat-safe"

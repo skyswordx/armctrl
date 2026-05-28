@@ -41,8 +41,8 @@ The clean rebuild starts with plan-only Agent recipes. These commands do not
 connect to hardware:
 
 ```bash
-uv run python -m armctrl.cli recipe list --json
-uv run python -m armctrl.cli recipe plan home --json
+uv run armctrl recipe list --json
+uv run armctrl recipe plan home --json
 ```
 
 The first clean milestone is `v0.2.0`: rebuild the governance, safety, and
