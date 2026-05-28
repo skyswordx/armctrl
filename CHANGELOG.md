@@ -12,13 +12,14 @@
 - 新增结构化 recipe execute 拒绝语义，防止在没有后端和安全合同前误触硬件执行。
 - 新增 plan-only SysID planner，输出 gravity/friction/Fourier profile 与 Pinocchio/FIGAROH/LeRobot handoff 合同。
 - 新增 `sysid plan --output` 离线产物生成，写出 `planned_trajectory.csv` 和 `manifest.json`。
+- 新增轻量 URDF joint limit 检查，`sysid plan --output` 会在 stdout 和 manifest 中记录 pass/fail。
 - 新增在线辨识 shadow-mode policy，限制在线更新只覆盖 torque bias、摩擦项和小幅 gravity residual。
 - 新增项目内 Codex skill：`.codex/skills/armctrl-agent-recipes/SKILL.md`，限制 Agent 只能通过 recipe CLI 查看和规划动作。
 
 ### Changed
 
 - 停止在旧实验实现上继续叠加功能，后续按 `v0.2.0` 到 `v0.5.0` 小 milestone 重新实现。
-- SysID execute 仍保持 rejected；URDF limit 与 workspace clearance 目前在 manifest 中标注为 `not_evaluated`。
+- SysID execute 仍保持 rejected；workspace clearance 目前在 manifest 中标注为 `not_evaluated`。
 
 ## [0.1.0] - Historical Baseline
 

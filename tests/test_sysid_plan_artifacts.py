@@ -48,6 +48,7 @@ def test_cli_sysid_plan_writes_manifest_and_trajectory(tmp_path: Path) -> None:
 
     assert payload["artifacts"]["manifest"] == str(manifest_path)
     assert payload["artifacts"]["planned_trajectory"] == str(trajectory_path)
+    assert payload["artifact_safety"]["allowed"] is True
     assert manifest_path.exists()
     assert trajectory_path.exists()
 
@@ -55,7 +56,7 @@ def test_cli_sysid_plan_writes_manifest_and_trajectory(tmp_path: Path) -> None:
     assert manifest["schema"] == "armctrl.ident_plan_manifest.v1"
     assert manifest["profile"]["name"] == "gravity_sweep"
     assert manifest["safety"]["allowed"] is True
-    assert manifest["safety"]["checks"]["urdf_limit_check"] == "not_evaluated"
+    assert manifest["safety"]["checks"]["urdf_limit_check"]["status"] == "pass"
     assert manifest["handoff"]["solver_backends"] == ["pinocchio", "figaroh"]
 
     with trajectory_path.open(newline="", encoding="utf-8") as file:
@@ -93,3 +94,39 @@ def test_cli_sysid_execute_with_output_is_rejected(tmp_path: Path) -> None:
     assert payload["schema"] == "armctrl.sysid_plan.v1"
     assert payload["safety"]["allowed"] is False
     assert not output_dir.exists()
+
+
+def test_cli_sysid_plan_manifest_records_urdf_limit_failure(tmp_path: Path) -> None:
+    output_dir = tmp_path / "ident-plan"
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "sysid",
+            "plan",
+            "gravity_sweep",
+            "--q-center",
+            "0",
+            "99",
+            "0.3",
+            "0",
+            "0",
+            "0",
+            "--output",
+            str(output_dir),
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+
+    assert payload["artifact_safety"]["allowed"] is False
+    assert manifest["safety"]["allowed"] is False
+    assert manifest["safety"]["checks"]["urdf_limit_check"]["status"] == "fail"
+    assert manifest["safety"]["checks"]["urdf_limit_check"]["violations"][0]["joint_index"] == 2

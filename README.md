@@ -74,9 +74,9 @@ uv run armctrl sysid plan gravity_sweep \
   --json
 ```
 
-This writes `planned_trajectory.csv` and `manifest.json`. URDF limit and
-workspace clearance checks are still marked `not_evaluated` until the real
-trajectory safety model is rebuilt.
+This writes `planned_trajectory.csv` and `manifest.json`. URDF joint-limit
+checks are evaluated from `--urdf-path`; workspace clearance is still marked
+`not_evaluated` until the table/workcell model is rebuilt.
 
 ## Online Identification Policy
 

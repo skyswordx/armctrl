@@ -7,6 +7,8 @@ import math
 from pathlib import Path
 from typing import Iterable
 
+from armctrl.limits import UrdfJointLimits, evaluate_joint_limits
+
 
 @dataclass(frozen=True)
 class SysIdSafety:
@@ -38,6 +40,7 @@ class SysIdPlan:
     safety: SysIdSafety
     handoff: dict[str, object]
     artifacts: dict[str, str] | None = None
+    artifact_safety: dict[str, object] | None = None
 
     def to_json(self) -> dict[str, object]:
         payload: dict[str, object] = {
@@ -48,6 +51,8 @@ class SysIdPlan:
         }
         if self.artifacts is not None:
             payload["artifacts"] = self.artifacts
+        if self.artifact_safety is not None:
+            payload["artifact_safety"] = self.artifact_safety
         return payload
 
 
@@ -124,6 +129,12 @@ class SysIdPlanner:
         request.output_dir.mkdir(parents=True, exist_ok=True)
         trajectory_path = request.output_dir / "planned_trajectory.csv"
         manifest_path = request.output_dir / "manifest.json"
+        limit_decision = evaluate_joint_limits(
+            UrdfJointLimits.from_urdf(Path(request.urdf_path)),
+            q_center=request.q_center,
+            amplitude_rad=request.amplitude_rad,
+        )
+        safety_allowed = plan.safety.allowed and limit_decision.status == "pass"
 
         rows = _trajectory_rows(request)
         with trajectory_path.open("w", newline="", encoding="utf-8") as file:
@@ -143,10 +154,17 @@ class SysIdPlanner:
                 "urdf_path": request.urdf_path,
             },
             "safety": {
-                "allowed": plan.safety.allowed,
-                "reason": plan.safety.reason,
+                "allowed": safety_allowed,
+                "reason": (
+                    plan.safety.reason
+                    if safety_allowed
+                    else "planned trajectory violates URDF joint limits"
+                ),
                 "checks": {
-                    "urdf_limit_check": "not_evaluated",
+                    "urdf_limit_check": {
+                        "status": limit_decision.status,
+                        "violations": limit_decision.violations,
+                    },
                     "workspace_clearance_check": "not_evaluated",
                     "hardware_execution": "not_requested",
                 },
@@ -169,6 +187,13 @@ class SysIdPlanner:
             artifacts={
                 "planned_trajectory": str(trajectory_path),
                 "manifest": str(manifest_path),
+            },
+            artifact_safety={
+                "allowed": safety_allowed,
+                "urdf_limit_check": {
+                    "status": limit_decision.status,
+                    "violation_count": len(limit_decision.violations),
+                },
             },
         )
 
