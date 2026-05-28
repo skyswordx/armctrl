@@ -43,6 +43,21 @@ connect to hardware:
 ```bash
 uv run armctrl recipe list --json
 uv run armctrl recipe plan home --json
+uv run armctrl recipe execute home --json
+```
+
+`recipe execute` currently returns a structured `rejected` response until an
+execution backend is rebuilt and verified.
+
+## SysID Preview
+
+SysID is also plan-only in this branch. The planner exposes the intended
+handoff instead of reimplementing Pinocchio or FIGAROH:
+
+```bash
+uv run armctrl sysid plan gravity_sweep --json
+uv run armctrl sysid plan friction_sweep --json
+uv run armctrl sysid plan fourier_multisine --json
 ```
 
 The first clean milestone is `v0.2.0`: rebuild the governance, safety, and

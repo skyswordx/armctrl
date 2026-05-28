@@ -25,6 +25,7 @@ class Recipe:
     name: str
     summary: str
     moves_hardware: bool
+    required_backend: str
     steps: tuple[RecipeStep, ...]
 
     def to_json(self) -> dict[str, object]:
@@ -32,6 +33,8 @@ class Recipe:
             "name": self.name,
             "summary": self.summary,
             "moves_hardware": self.moves_hardware,
+            "risk_level": "hardware" if self.moves_hardware else "offline",
+            "required_backend": self.required_backend,
         }
 
 
@@ -47,18 +50,21 @@ class RecipeCatalog:
                     name="damping",
                     summary="Enter passive damping through the hardware backend.",
                     moves_hardware=True,
+                    required_backend="arx5-interface",
                     steps=(RecipeStep("mode", "request damping mode"),),
                 ),
                 Recipe(
                     name="hold-current",
                     summary="Hold the current measured pose when supported by the backend.",
                     moves_hardware=True,
+                    required_backend="arx5-interface",
                     steps=(RecipeStep("mode", "hold current measured pose"),),
                 ),
                 Recipe(
                     name="home",
                     summary="Move to the conservative X5 safe center.",
                     moves_hardware=True,
+                    required_backend="arx5-interface",
                     steps=(
                         RecipeStep(
                             "joint_target",
@@ -71,18 +77,21 @@ class RecipeCatalog:
                     name="observe-front",
                     summary="Point the arm to a front observation posture.",
                     moves_hardware=True,
+                    required_backend="arx5-interface",
                     steps=(RecipeStep("joint_target", "front observation posture"),),
                 ),
                 Recipe(
                     name="pregrasp-table",
                     summary="Prepare a conservative table pregrasp posture.",
                     moves_hardware=True,
+                    required_backend="arx5-interface",
                     steps=(RecipeStep("joint_target", "table pregrasp posture"),),
                 ),
                 Recipe(
                     name="retreat-safe",
                     summary="Retreat from the workspace into a safe posture.",
                     moves_hardware=True,
+                    required_backend="arx5-interface",
                     steps=(RecipeStep("joint_target", "safe retreat posture"),),
                 ),
             ]

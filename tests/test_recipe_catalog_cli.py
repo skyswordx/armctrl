@@ -42,7 +42,9 @@ def test_cli_lists_recipes_as_json() -> None:
     payload = json.loads(completed.stdout)
 
     assert payload["status"] == "ok"
+    assert payload["schema"] == "armctrl.recipe_catalog.v1"
     assert payload["recipes"][0]["name"] == "damping"
+    assert payload["recipes"][0]["risk_level"] == "hardware"
 
 
 def test_cli_dry_run_returns_plan_and_safety_gate() -> None:
@@ -57,8 +59,10 @@ def test_cli_dry_run_returns_plan_and_safety_gate() -> None:
 
     assert payload["status"] == "ok"
     assert payload["plan_only"] is True
+    assert payload["schema"] == "armctrl.recipe_plan.v1"
     assert payload["recipe"]["name"] == "home"
     assert payload["safety"]["allowed"] is True
+    assert payload["safety"]["required_backend"] == "arx5-interface"
     assert payload["steps"][0]["kind"] == "joint_target"
 
 
@@ -74,3 +78,20 @@ def test_packaged_cli_entrypoint_lists_recipes() -> None:
 
     assert payload["status"] == "ok"
     assert payload["recipes"][-1]["name"] == "retreat-safe"
+
+
+def test_cli_execute_rejects_without_backend() -> None:
+    completed = subprocess.run(
+        [sys.executable, "-m", "armctrl.cli", "recipe", "execute", "home", "--json"],
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+
+    assert completed.returncode == 3
+    assert payload["status"] == "rejected"
+    assert payload["schema"] == "armctrl.recipe_execution.v1"
+    assert payload["recipe"]["name"] == "home"
+    assert payload["safety"]["allowed"] is False
+    assert payload["safety"]["required_backend"] == "arx5-interface"

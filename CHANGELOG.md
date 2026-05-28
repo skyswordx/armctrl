@@ -9,6 +9,8 @@
 - 新建 clean rebuild 分支入口，只保留 roadmap、changelog、文档索引、vendor 和 uv 配置作为重构基线。
 - 明确 `armctrl` 与 ARX5 SDK、Pinocchio、FIGAROH、LeRobot ARX5 集成的职责边界。
 - 新增第一版 plan-only Agent recipe catalog 和 JSON CLI 预览入口。
+- 新增结构化 recipe execute 拒绝语义，防止在没有后端和安全合同前误触硬件执行。
+- 新增 plan-only SysID planner，输出 gravity/friction/Fourier profile 与 Pinocchio/FIGAROH/LeRobot handoff 合同。
 
 ### Changed
 

@@ -7,6 +7,7 @@ from typing import Sequence
 
 from armctrl.recipes import RecipeCatalog
 from armctrl.safety import SafetyGate
+from armctrl.sysid import SysIdPlanner
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -23,12 +24,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     plan_parser.add_argument("name")
     plan_parser.add_argument("--json", action="store_true", dest="as_json")
 
+    execute_parser = recipe_subparsers.add_parser("execute")
+    execute_parser.add_argument("name")
+    execute_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    sysid_parser = subparsers.add_parser("sysid")
+    sysid_subparsers = sysid_parser.add_subparsers(dest="sysid_command", required=True)
+
+    sysid_plan_parser = sysid_subparsers.add_parser("plan")
+    sysid_plan_parser.add_argument("profile")
+    sysid_plan_parser.add_argument("--execute", action="store_true")
+    sysid_plan_parser.add_argument("--json", action="store_true", dest="as_json")
+
     args = parser.parse_args(argv)
     catalog = RecipeCatalog.default()
 
     if args.command == "recipe" and args.recipe_command == "list":
         payload = {
             "status": "ok",
+            "schema": "armctrl.recipe_catalog.v1",
             "recipes": [recipe.to_json() for recipe in catalog.list_recipes()],
         }
         return _emit(payload, as_json=args.as_json)
@@ -38,11 +52,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         safety = SafetyGate().evaluate(recipe, plan_only=True)
         payload = {
             "status": "ok",
+            "schema": "armctrl.recipe_plan.v1",
             "plan_only": True,
             "recipe": recipe.to_json(),
             "safety": safety.to_json(),
             "steps": [step.to_json() for step in recipe.steps],
         }
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "recipe" and args.recipe_command == "execute":
+        recipe = catalog.get(args.name)
+        safety = SafetyGate().evaluate(recipe, plan_only=False)
+        payload = {
+            "status": "rejected",
+            "schema": "armctrl.recipe_execution.v1",
+            "recipe": recipe.to_json(),
+            "safety": safety.to_json(),
+            "steps": [step.to_json() for step in recipe.steps],
+        }
+        _emit(payload, as_json=args.as_json)
+        return 3
+
+    if args.command == "sysid" and args.sysid_command == "plan":
+        plan = SysIdPlanner.default().plan(args.profile, execute=args.execute)
+        payload = {"status": "ok", **plan.to_json()}
         return _emit(payload, as_json=args.as_json)
 
     parser.error("unsupported command")
