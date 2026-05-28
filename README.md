@@ -137,6 +137,20 @@ uv run armctrl sysid package \
 solver metrics include Pinocchio condition and prediction-error evidence plus
 FIGAROH/base-parameter and physical-consistency evidence.
 
+Import external solver evidence from FIGAROH or manual review:
+
+```bash
+uv run armctrl sysid import-evidence \
+  --dataset runs/ident-fake \
+  --evidence figaroh-evidence.json \
+  --json
+```
+
+The evidence file must use schema `armctrl.external_solver_evidence.v1` and
+include `physical_consistency` plus `figaroh_base_parameters`. This keeps
+FIGAROH-owned checks outside `armctrl` while still making package gates
+machine-readable.
+
 ## Online Identification Policy
 
 Online identification is currently a shadow-mode policy contract. It allows
