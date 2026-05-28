@@ -63,6 +63,13 @@ def test_cli_dry_run_returns_plan_and_safety_gate() -> None:
     assert payload["recipe"]["name"] == "home"
     assert payload["safety"]["allowed"] is True
     assert payload["safety"]["required_backend"] == "arx5-interface"
+    assert payload["safety"]["dry_run"] is True
+    assert payload["safety"]["movement_allowed"] is False
+    assert payload["safety"]["risk_explanation"] == [
+        "recipe would move hardware when execution is enabled",
+        "current response is a dry-run preview only",
+        "planned joint targets must pass backend, limit, and workspace checks before execution",
+    ]
     assert payload["steps"][0]["kind"] == "joint_target"
 
 

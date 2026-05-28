@@ -61,7 +61,9 @@ uv run armctrl recipe cancel --json
 `recipe execute` currently returns a structured `rejected` response until an
 execution backend is rebuilt and verified. `recipe status` and `recipe cancel`
 are safe with no configured hardware session and expose the command executor
-boundary Agents must use.
+boundary Agents must use. `recipe plan` is always a dry-run preview: the JSON
+response includes `movement_allowed: false` and a `risk_explanation` list before
+any future backend is allowed to move joints.
 
 ## SysID Preview
 

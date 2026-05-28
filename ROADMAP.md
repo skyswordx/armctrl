@@ -23,7 +23,7 @@ Release readiness: `contracts_complete_hardware_pending`.
 - [x] 保持 `README.md`、`ROADMAP.md`、`CHANGELOG.md`、`docs/README.md` 为唯一当前入口。
 - [x] 定义第一版 Agent recipe catalog 和 JSON 请求/响应契约。
 - [x] 定义 safety gate 的 plan-only / execute 边界。
-- [ ] 所有硬件运动入口默认先 dry-run，并能解释计划轨迹风险。
+- [x] 所有硬件运动入口默认先 dry-run，并能解释计划轨迹风险。
 
 ### v0.3.0 - Offline SysID Loop
 

@@ -39,6 +39,7 @@ def release_status() -> dict[str, object]:
             "hardware_ab_control_benefit_test",
         ],
         "notes": [
+            "Recipe plans are dry-run previews with machine-readable risk explanations.",
             "Recipe execution remains rejected until a verified hardware backend exists.",
             "Parameter packages require package-gated solver evidence before rollout.",
         ],
