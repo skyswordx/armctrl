@@ -392,7 +392,10 @@ def _rank_revealing_column_subset(matrix) -> list[int]:
     except ModuleNotFoundError:
         return _rank_revealing_column_subset_pure(matrix)
 
-    y_matrix = np.asarray(matrix, dtype=float)
+    try:
+        y_matrix = np.asarray(matrix, dtype=float)
+    except (TypeError, ValueError):
+        y_matrix = np.asarray(list(matrix), dtype=float)
     if y_matrix.ndim != 2 or y_matrix.shape[1] == 0:
         return []
     standardized = _standardize_numpy_columns(y_matrix)

@@ -18,6 +18,7 @@ import armctrl.cli.arx5ctl as arx5ctl_cli
 from armctrl.cli.arx5ctl import main
 from armctrl.identification.backends import Arx5JointRobotIO, FakeJointRobotIO
 from armctrl.identification.models import TrajectoryPoint
+from armctrl.identification.models import JointSample
 from armctrl.identification.optimization import ExcitationScore, optimize_fourier_multisine, score_excitation_profile
 from armctrl.identification.postprocess import _zero_phase_moving_average, postprocess_dataset
 from armctrl.identification.recorder import DatasetRecorder
@@ -251,6 +252,28 @@ def test_fourier_multisine_uses_explicit_center_pose():
     assert profile.points[-1].q == pytest.approx((0.6, 0.7, 0.2), abs=1e-12)
 
 
+def test_fourier_multisine_can_be_rebuilt_from_explicit_coefficients():
+    coefficients = (
+        ((1.0, 0.10, 0.00), (2.0, 0.00, 0.02)),
+        ((1.0, 0.00, 0.08), (2.0, -0.03, 0.00)),
+    )
+
+    profile = generate_fourier_multisine(
+        dof=2,
+        sample_hz=20.0,
+        duration_s=2.0,
+        harmonics=2,
+        amplitude_rad=0.20,
+        coefficients=coefficients,
+    )
+
+    assert profile.metadata["coefficient_source"] == "explicit"
+    assert profile.metadata["coefficients"] == [
+        [[1.0, 0.10, 0.00], [2.0, 0.00, 0.02]],
+        [[1.0, 0.00, 0.08], [2.0, -0.03, 0.00]],
+    ]
+
+
 def test_x5_model_safety_rejects_joint2_negative_urdf_direction():
     profile = generate_fourier_multisine(
         dof=6,
@@ -376,6 +399,35 @@ def test_optimized_fourier_multisine_accepts_real_regressor_scorer():
     assert optimized.metadata["seed"] == 6
     assert optimized.metadata["optimization"]["score_mode"] == "pinocchio_regressor_condition"
     assert optimized.metadata["optimization"]["condition_number"] == pytest.approx(94.0)
+
+
+def test_optimized_fourier_multisine_enforces_joint_relation_constraints():
+    limits = TrajectorySafetyLimits(
+        joint_min=(-1.5, 0.10, 0.10),
+        joint_max=(1.5, 2.0, 2.0),
+        velocity_max=(1.2, 1.2, 1.2),
+        acceleration_max=(8.0, 8.0, 8.0),
+    )
+
+    optimized = optimize_fourier_multisine(
+        dof=3,
+        sample_hz=30.0,
+        duration_s=4.0,
+        harmonics=3,
+        amplitude_rad=0.40,
+        seed=7,
+        candidate_count=5,
+        safety_limits=limits,
+        q_center=(0.0, 0.30, 0.30),
+        positive_only_joint_indices=(1, 2),
+        joint_relation_constraints=((1, 2, -0.08, 0.08),),
+    )
+
+    for point in optimized.points:
+        assert -0.08 - 1e-9 <= point.q[1] - point.q[2] <= 0.08 + 1e-9
+    assert optimized.metadata["optimization"]["joint_relation_constraints"] == [
+        {"left": 1, "right": 2, "min_delta_rad": -0.08, "max_delta_rad": 0.08}
+    ]
 
 
 def test_pinocchio_regressor_scorer_skips_when_pinocchio_unavailable():
@@ -1281,10 +1333,10 @@ def test_cli_ident_plan_uses_field_gravity_defaults(capsys):
 
     assert code == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["detail"]["metadata"]["amplitude_rad"] == pytest.approx(0.55)
+    assert payload["detail"]["metadata"]["amplitude_rad"] == pytest.approx(0.18)
     assert payload["detail"]["metadata"]["segment_duration_s"] == pytest.approx(12.0)
     assert payload["detail"]["metadata"]["dwell_s"] == pytest.approx(1.0)
-    assert payload["detail"]["metadata"]["q_center"] == pytest.approx((0.0, 0.80, 0.85, 0.0, 0.0, 0.0))
+    assert payload["detail"]["metadata"]["q_center"] == pytest.approx((0.0, 0.30, 0.30, 0.0, 0.0, 0.0))
     assert payload["detail"]["duration_s"] == pytest.approx(312.0)
 
 
@@ -1334,10 +1386,10 @@ def test_cli_ident_plan_uses_field_friction_defaults(capsys):
     assert code == 0
     payload = json.loads(capsys.readouterr().out)
     metadata = payload["detail"]["metadata"]
-    assert metadata["amplitude_rad"] == pytest.approx(0.12)
+    assert metadata["amplitude_rad"] == pytest.approx(0.18)
     assert metadata["speed_levels_radps"] == pytest.approx((0.025, 0.06, 0.12))
     assert metadata["constant_velocity_plateaus"] is True
-    assert metadata["q_center"] == pytest.approx((0.0, 0.80, 0.85, 0.0, 0.0, 0.0))
+    assert metadata["q_center"] == pytest.approx((0.0, 0.30, 0.30, 0.0, 0.0, 0.0))
 
 
 def test_cli_ident_plan_uses_field_fourier_defaults(capsys):
@@ -1358,10 +1410,110 @@ def test_cli_ident_plan_uses_field_fourier_defaults(capsys):
     payload = json.loads(capsys.readouterr().out)
     metadata = payload["detail"]["metadata"]
     assert metadata["duration_s"] == pytest.approx(40.0)
-    assert metadata["amplitude_rad"] == pytest.approx(0.75)
+    assert metadata["amplitude_rad"] == pytest.approx(1.20)
     assert metadata["harmonics"] == 5
-    assert metadata["q_center"] == pytest.approx((0.0, 1.20, 1.20, 0.0, 0.0, 0.0))
-    assert min(payload["detail"]["planned_joint_ranges_deg"]) >= 35.0
+    assert metadata["q_center"] == pytest.approx((0.0, 0.30, 0.30, 0.0, 0.0, 0.0))
+    assert metadata["coupled_joint_groups"] == []
+    assert metadata["positive_only_joint_indices"] == [1, 2]
+    assert payload["detail"]["planned_joint_ranges_deg"][1] >= 35.0
+    assert payload["detail"]["planned_joint_ranges_deg"][2] >= 35.0
+
+
+def test_x5_optimized_fourier_keeps_joint2_joint3_relation_above_safe_center(capsys):
+    code = main(
+        [
+            "ident-plan",
+            "--adapter",
+            "fake",
+            "--profile",
+            "fourier_multisine",
+            "--dof",
+            "6",
+            "--optimize",
+            "--output",
+            "runs/test-x5-fourier-coupled",
+            "--json",
+        ]
+    )
+
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    planned_path = Path(payload["detail"]["planned_trajectory_csv"])
+    with planned_path.open(encoding="utf-8") as file:
+        rows = list(csv.DictReader(file))
+    assert rows
+    for row in rows:
+        joint2 = float(row["q_cmd_2"])
+        joint3 = float(row["q_cmd_3"])
+        assert -0.08 - 1e-12 <= joint2 - joint3 <= 0.08 + 1e-12
+        assert joint2 >= 0.30 - 1e-12
+        assert joint3 >= 0.30 - 1e-12
+    optimization = payload["detail"]["metadata"]["optimization"]
+    assert optimization["joint_relation_constraints"] == [
+        {"left": 1, "right": 2, "min_delta_rad": -0.08, "max_delta_rad": 0.08}
+    ]
+
+
+def test_postprocess_reports_planned_joint_relation_constraint(tmp_path: Path):
+    profile = optimize_fourier_multisine(
+        dof=3,
+        sample_hz=20.0,
+        duration_s=3.0,
+        harmonics=2,
+        amplitude_rad=0.20,
+        seed=5,
+        candidate_count=3,
+        safety_limits=TrajectorySafetyLimits(
+            joint_min=(-1.5, 0.10, 0.10),
+            joint_max=(1.5, 2.0, 2.0),
+            velocity_max=(1.2, 1.2, 1.2),
+            acceleration_max=(8.0, 8.0, 8.0),
+        ),
+        q_center=(0.0, 0.30, 0.30),
+        positive_only_joint_indices=(1, 2),
+        joint_relation_constraints=((1, 2, -0.08, 0.08),),
+    )
+    recorder = DatasetRecorder(tmp_path)
+    samples = [
+        JointSample(
+            t_s=point.t_s,
+            monotonic_s=point.t_s,
+            source_timestamp_s=point.t_s,
+            phase=point.phase,
+            q=point.q,
+            dq=point.dq,
+            tau_meas=(0.0, 0.0, 0.0),
+            q_cmd=point.q,
+            dq_cmd=point.dq,
+            ddq_cmd=point.ddq,
+            tau_cmd=(0.0, 0.0, 0.0),
+        )
+        for point in profile.points
+    ]
+    recorder.write_run(
+        profile=profile,
+        backend_name="fake_joint",
+        model="X5",
+        samples=samples,
+        execute=False,
+        urdf_path="configs/models/X5_camera.urdf",
+    )
+
+    response = postprocess_dataset(
+        dataset_dir=tmp_path,
+        output_dir=tmp_path / "processed",
+        tools=(),
+        urdf_path="configs/models/X5_camera.urdf",
+        smoothing_window=3,
+    )
+
+    planned_limits = response.detail["quality_metrics"]["planned_trajectory_limits"]
+    assert planned_limits["status"] == "pass"
+    assert planned_limits["joint_relation_constraints"] == [
+        {"left": 1, "right": 2, "min_delta_rad": -0.08, "max_delta_rad": 0.08}
+    ]
+    report = (tmp_path / "processed" / "quality_report.md").read_text(encoding="utf-8")
+    assert "关节关系约束" in report
 
 
 def test_cli_ident_plan_accepts_fourier_center_pose(capsys):

@@ -318,12 +318,15 @@ def _planned_trajectory_limits(manifest: dict, *, dataset_dir: Path | None, dof:
     contract = model_coordinate_contract(model, dof)
     limits = model_safety_limits(model, dof)
     planned_name = manifest.get("planned_trajectory")
+    profile_metadata = manifest.get("profile_metadata", {})
+    relation_constraints = _profile_joint_relation_constraints(profile_metadata)
     if dataset_dir is None or not planned_name:
         return {
             "status": "not_evaluated",
             "reason": "manifest does not reference planned_trajectory",
             "model": model,
             "coordinate_contract": contract,
+            "joint_relation_constraints": relation_constraints,
         }
     planned_path = dataset_dir / planned_name
     if not planned_path.is_file():
@@ -332,6 +335,7 @@ def _planned_trajectory_limits(manifest: dict, *, dataset_dir: Path | None, dof:
             "reason": f"planned trajectory not found: {planned_path}",
             "model": model,
             "coordinate_contract": contract,
+            "joint_relation_constraints": relation_constraints,
         }
     violations: list[dict] = []
     ranges = [
@@ -379,6 +383,25 @@ def _planned_trajectory_limits(manifest: dict, *, dataset_dir: Path | None, dof:
                                 "unit": unit,
                             }
                         )
+            for constraint in relation_constraints:
+                left = int(constraint["left"])
+                right = int(constraint["right"])
+                delta = float(row[f"q_cmd_{left + 1}"]) - float(row[f"q_cmd_{right + 1}"])
+                lower = float(constraint["min_delta_rad"])
+                upper = float(constraint["max_delta_rad"])
+                if delta < lower or delta > upper:
+                    violations.append(
+                        {
+                            "row_index": row_index,
+                            "joint": f"{left + 1}-{right + 1}",
+                            "kind": "joint_relation",
+                            "column": f"q_cmd_{left + 1}-q_cmd_{right + 1}",
+                            "value": delta,
+                            "lower": lower,
+                            "upper": upper,
+                            "unit": "rad",
+                        }
+                    )
         for item in ranges:
             if math.isinf(item["min_rad"]):
                 item["min_rad"] = None
@@ -389,6 +412,7 @@ def _planned_trajectory_limits(manifest: dict, *, dataset_dir: Path | None, dof:
             "status": "fail" if violations else "pass",
             "model": model,
             "coordinate_contract": contract,
+            "joint_relation_constraints": relation_constraints,
             "joint_min": list(limits.joint_min),
             "joint_max": list(limits.joint_max),
             "velocity_max": list(limits.velocity_max),
@@ -403,7 +427,35 @@ def _planned_trajectory_limits(manifest: dict, *, dataset_dir: Path | None, dof:
             "reason": str(exc),
             "model": model,
             "coordinate_contract": contract,
+            "joint_relation_constraints": relation_constraints,
         }
+
+
+def _profile_joint_relation_constraints(profile_metadata: dict) -> list[dict]:
+    optimization = profile_metadata.get("optimization", {})
+    constraints = optimization.get("joint_relation_constraints") or profile_metadata.get("joint_relation_constraints") or []
+    normalized = []
+    for item in constraints:
+        if isinstance(item, dict):
+            normalized.append(
+                {
+                    "left": int(item["left"]),
+                    "right": int(item["right"]),
+                    "min_delta_rad": float(item["min_delta_rad"]),
+                    "max_delta_rad": float(item["max_delta_rad"]),
+                }
+            )
+        elif isinstance(item, (list, tuple)) and len(item) == 4:
+            left, right, lower, upper = item
+            normalized.append(
+                {
+                    "left": int(left),
+                    "right": int(right),
+                    "min_delta_rad": float(lower),
+                    "max_delta_rad": float(upper),
+                }
+            )
+    return normalized
 
 
 def _data_health(rows: list[dict[str, str]], *, dof: int, times: list[float], expected_sample_count: int | None) -> dict:
@@ -618,6 +670,10 @@ def _write_quality_report(output_dir: Path, metrics: dict) -> Path:
                 f"- SDK/URDF 坐标契约: `{planned_limits.get('coordinate_contract', {}).get('sdk_to_urdf_joint_order', 'unknown')}`",
             ]
         )
+        if planned_limits.get("joint_relation_constraints"):
+            lines.append(
+                f"- 关节关系约束: `{planned_limits.get('joint_relation_constraints')}`"
+            )
         if planned_limits.get("violations"):
             lines.extend(
                 [

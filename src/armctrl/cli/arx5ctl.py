@@ -51,15 +51,26 @@ MOVE_CONFIRMATION = "I UNDERSTAND THIS WILL MOVE THE ARM"
 DEFAULT_GRAVITY_SWEEP_AMPLITUDE_RAD = 0.55
 DEFAULT_GRAVITY_SWEEP_SEGMENT_DURATION_S = 12.0
 DEFAULT_GRAVITY_SWEEP_DWELL_S = 1.0
-DEFAULT_X5_GRAVITY_SWEEP_CENTER = (0.0, 0.80, 0.85, 0.0, 0.0, 0.0)
+# X5 real-machine safe neutral observed on the steam arm:
+# joint2 slightly lifts link2 and the trunk stays roughly horizontal.
+# With the current symmetric generators, joint2/joint3 must keep margin above
+# X5_URDF_SAFETY_LIMITS lower=0.10 rad, so 0.30 +/- 0.18 leaves ~0.02 rad.
+DEFAULT_X5_SAFE_CENTER = (0.0, 0.30, 0.30, 0.0, 0.0, 0.0)
+DEFAULT_X5_GRAVITY_SWEEP_AMPLITUDE_RAD = 0.18
 DEFAULT_FRICTION_SWEEP_AMPLITUDE_RAD = 0.12
+DEFAULT_X5_FRICTION_SWEEP_AMPLITUDE_RAD = 0.18
 DEFAULT_FRICTION_SWEEP_SLOW_SPEED_RADPS = 0.025
 DEFAULT_FRICTION_SWEEP_MEDIUM_SPEED_RADPS = 0.06
 DEFAULT_FRICTION_SWEEP_FAST_SPEED_RADPS = 0.12
 DEFAULT_FOURIER_DURATION_S = 40.0
 DEFAULT_FOURIER_AMPLITUDE_RAD = 1.3
-DEFAULT_X5_FOURIER_AMPLITUDE_RAD = 0.75
+DEFAULT_X5_FOURIER_AMPLITUDE_RAD = 1.20
 DEFAULT_FOURIER_HARMONICS = 5
+# X5 joint2/joint3 must stay in a table-safe posture family on the steam arm.
+# We use this as an optimizer relation constraint, not as a permanent
+# same-signal coupling, so the solver can still search richer coefficients.
+X5_FOURIER_JOINT_RELATION_CONSTRAINTS = ((1, 2, -0.08, 0.08),)
+X5_FOURIER_POSITIVE_ONLY_JOINT_INDICES = (1, 2)
 GRIPPER_CALIBRATION_COMMANDS = {
     "gripper-calibration-show",
     "gripper-calibration-set",
@@ -460,19 +471,21 @@ def dispatch_identification(args: argparse.Namespace) -> CommandResponse:
 
 def build_identification_profile(args: argparse.Namespace):
     # 三个 profile 的默认参数按风险递增设置。
+    # X5 默认值来自实机验证的安全水平姿态，而不是单靠 URDF/FK 直觉。
     # 用户可以用 --duration / --amplitude 覆盖，但仍会经过 safety 预检查。
     if args.profile == "gravity_sweep":
         q_center = tuple(args.q_center) if args.q_center is not None else _default_gravity_sweep_center(args)
+        amplitude_rad = args.amplitude if args.amplitude is not None else _default_gravity_sweep_amplitude(args)
         return generate_gravity_sweep(
             dof=args.dof,
             sample_hz=args.sample_hz,
-            amplitude_rad=args.amplitude if args.amplitude is not None else DEFAULT_GRAVITY_SWEEP_AMPLITUDE_RAD,
+            amplitude_rad=amplitude_rad,
             segment_duration_s=args.duration if args.duration is not None else DEFAULT_GRAVITY_SWEEP_SEGMENT_DURATION_S,
             dwell_s=args.dwell if args.dwell is not None else DEFAULT_GRAVITY_SWEEP_DWELL_S,
             q_center=q_center,
         )
     if args.profile == "friction_sweep":
-        amplitude_rad = args.amplitude if args.amplitude is not None else DEFAULT_FRICTION_SWEEP_AMPLITUDE_RAD
+        amplitude_rad = args.amplitude if args.amplitude is not None else _default_friction_sweep_amplitude(args)
         q_center = tuple(args.q_center) if args.q_center is not None else _default_gravity_sweep_center(args)
         return generate_friction_sweep(
             dof=args.dof,
@@ -512,6 +525,9 @@ def build_identification_profile(args: argparse.Namespace):
                 candidate_count=args.candidate_count,
                 safety_limits=model_safety_limits(args.model, args.dof),
                 q_center=q_center,
+                coupled_joint_groups=_default_fourier_initial_coupled_joint_groups(args),
+                positive_only_joint_indices=_default_fourier_positive_only_joint_indices(args),
+                joint_relation_constraints=_default_fourier_joint_relation_constraints(args),
                 scorer=scorer,
             )
         return generate_fourier_multisine(
@@ -522,26 +538,62 @@ def build_identification_profile(args: argparse.Namespace):
             amplitude_rad=amplitude_rad,
             seed=args.seed,
             q_center=q_center,
+            coupled_joint_groups=_default_fourier_coupled_joint_groups(args),
+            positive_only_joint_indices=_default_fourier_positive_only_joint_indices(args),
         )
     raise ArmctrlError(ErrorCode.INVALID_REQUEST, f"unsupported identification profile {args.profile}")
 
 
 def _default_gravity_sweep_center(args: argparse.Namespace) -> tuple[float, ...] | None:
     if args.dof == 6 and getattr(args, "model", "X5") == "X5":
-        return DEFAULT_X5_GRAVITY_SWEEP_CENTER
+        return DEFAULT_X5_SAFE_CENTER
     return None
 
 
 def _default_fourier_center(args: argparse.Namespace) -> tuple[float, ...] | None:
     if args.dof == 6 and getattr(args, "model", "X5") == "X5":
-        return (0.0, 1.20, 1.20, 0.0, 0.0, 0.0)
+        return DEFAULT_X5_SAFE_CENTER
     return _default_gravity_sweep_center(args)
+
+
+def _default_gravity_sweep_amplitude(args: argparse.Namespace) -> float:
+    if args.dof == 6 and getattr(args, "model", "X5") == "X5":
+        return DEFAULT_X5_GRAVITY_SWEEP_AMPLITUDE_RAD
+    return DEFAULT_GRAVITY_SWEEP_AMPLITUDE_RAD
+
+
+def _default_friction_sweep_amplitude(args: argparse.Namespace) -> float:
+    if args.dof == 6 and getattr(args, "model", "X5") == "X5":
+        return DEFAULT_X5_FRICTION_SWEEP_AMPLITUDE_RAD
+    return DEFAULT_FRICTION_SWEEP_AMPLITUDE_RAD
 
 
 def _default_fourier_amplitude(args: argparse.Namespace) -> float:
     if args.dof == 6 and getattr(args, "model", "X5") == "X5":
         return DEFAULT_X5_FOURIER_AMPLITUDE_RAD
     return DEFAULT_FOURIER_AMPLITUDE_RAD
+
+
+def _default_fourier_coupled_joint_groups(args: argparse.Namespace) -> tuple[tuple[int, ...], ...]:
+    return _default_fourier_initial_coupled_joint_groups(args)
+
+
+def _default_fourier_initial_coupled_joint_groups(args: argparse.Namespace) -> tuple[tuple[int, ...], ...]:
+    if args.dof == 6 and getattr(args, "model", "X5") == "X5" and args.q_center is None:
+        return ()
+    return ()
+
+
+def _default_fourier_positive_only_joint_indices(args: argparse.Namespace) -> tuple[int, ...]:
+    if args.dof == 6 and getattr(args, "model", "X5") == "X5" and args.q_center is None:
+        return X5_FOURIER_POSITIVE_ONLY_JOINT_INDICES
+    return ()
+
+
+def _default_fourier_joint_relation_constraints(args: argparse.Namespace) -> tuple[tuple[int, int, float, float], ...]:
+    if args.dof == 6 and getattr(args, "model", "X5") == "X5" and args.q_center is None:
+        return X5_FOURIER_JOINT_RELATION_CONSTRAINTS
+    return ()
 
 
 def default_identification_output_dir(profile_name: str) -> str:

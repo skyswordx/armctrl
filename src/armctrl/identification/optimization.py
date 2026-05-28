@@ -1,14 +1,12 @@
 """有限傅里叶激励轨迹优化。
 
-这里实现的是“工程可用的第一层优化”：
-- 用多个随机种子生成候选有限傅里叶轨迹；
-- 对每条轨迹做关节位置、速度、加速度安全预检查；
-- 用轻量代理特征矩阵估计观测条件数；
-- 选择条件数最低的候选。
+这里把成熟 SysID optimal excitation 的核心约束放进同一个问题：
+- 有限傅里叶系数是优化变量；
+- 关节位置、速度、加速度是硬约束；
+- 关节间关系约束用于表达 X5 实机 table-safe 姿态族；
+- 目标函数最小化代理观测矩阵条件数，或外部 Pinocchio scorer 的真实回归矩阵条件数。
 
-真正的论文级优化应把这里的代理评分替换成外部工具生成的真实回归矩阵：
-`Y(q, dq, ddq)`。
-当前模块先把优化接口、元数据和安全筛选做稳，方便后面接 Pinocchio 或 URDFly。
+SciPy 可用时走 SLSQP 约束非线性优化；不可用时退回到安全候选筛选。
 """
 
 from __future__ import annotations
@@ -37,6 +35,9 @@ class ExcitationScore:
     mode: str = "surrogate_feature_condition"
 
 
+JointRelationConstraint = tuple[int, int, float, float]
+
+
 def optimize_fourier_multisine(
     *,
     dof: int,
@@ -49,15 +50,20 @@ def optimize_fourier_multisine(
     safety_limits: TrajectorySafetyLimits | None = None,
     q_center: tuple[float, ...] | None = None,
     q0: tuple[float, ...] | None = None,
+    coupled_joint_groups: tuple[tuple[int, ...], ...] = (),
+    positive_only_joint_indices: tuple[int, ...] = (),
+    joint_relation_constraints: tuple[JointRelationConstraint, ...] = (),
+    use_nonlinear_optimizer: bool = True,
     scorer: Callable[[ExcitationProfile], ExcitationScore] | None = None,
 ) -> ExcitationProfile:
-    """在多个候选有限傅里叶轨迹中选择代理条件数最低的一条。"""
+    """优化有限傅里叶轨迹，让激励尽量强且仍满足安全约束。"""
 
     if candidate_count <= 0:
         raise ValueError("candidate_count must be positive")
     best_profile: ExcitationProfile | None = None
     best_score: ExcitationScore | None = None
     rejected_candidates = 0
+    candidate_records: list[tuple[ExcitationProfile, ExcitationScore]] = []
     for offset in range(candidate_count):
         candidate_seed = seed + offset
         candidate = generate_fourier_multisine(
@@ -69,30 +75,66 @@ def optimize_fourier_multisine(
             seed=candidate_seed,
             q_center=q_center,
             q0=q0,
+            coupled_joint_groups=coupled_joint_groups,
+            positive_only_joint_indices=positive_only_joint_indices,
         )
-        validation = validate_trajectory(candidate, safety_limits)
+        if joint_relation_constraints:
+            candidate = _relation_feasible_initial_profile(candidate, joint_relation_constraints)
+        validation = _validate_with_relation_constraints(
+            candidate,
+            safety_limits,
+            joint_relation_constraints,
+        )
         if not validation.allowed:
             rejected_candidates += 1
             continue
         score = scorer(candidate) if scorer is not None else score_excitation_profile(candidate)
+        candidate_records.append((candidate, score))
         if best_score is None or score.condition_number < best_score.condition_number:
             best_profile = candidate
             best_score = score
     if best_profile is None or best_score is None:
         raise ValueError("no safe fourier candidate found")
+    nonlinear_result = (
+        _optimize_with_slsqp(
+            baseline=best_profile,
+            baseline_score=best_score,
+            scorer=scorer,
+            safety_limits=safety_limits,
+            joint_relation_constraints=joint_relation_constraints,
+        )
+        if use_nonlinear_optimizer and scorer is None
+        else None
+    )
+    optimizer_backend = "seeded_candidate_search"
+    nonlinear_status = None
+    if nonlinear_result is not None:
+        nonlinear_profile, nonlinear_score, nonlinear_status = nonlinear_result
+        if (
+            nonlinear_profile is not None
+            and nonlinear_score is not None
+            and nonlinear_score.condition_number <= best_score.condition_number
+        ):
+            best_profile = nonlinear_profile
+            best_score = nonlinear_score
+            optimizer_backend = "scipy_slsqp"
     metadata = dict(best_profile.metadata)
     metadata["optimization"] = {
         "score_mode": best_score.mode,
+        "optimizer_backend": optimizer_backend,
         "candidate_count": candidate_count,
         "rejected_candidates": rejected_candidates,
         "best_seed": metadata.get("seed"),
         "condition_number": best_score.condition_number,
         "rank": best_score.rank,
         "feature_count": best_score.feature_count,
+        "joint_relation_constraints": _serialize_joint_relation_constraints(joint_relation_constraints),
     }
+    if nonlinear_status is not None:
+        metadata["optimization"]["nonlinear_status"] = nonlinear_status
     return ExcitationProfile(
         name=best_profile.name,
-        description=best_profile.description + " 已按代理观测矩阵条件数从候选集中选优。",
+        description=best_profile.description + " 已按观测矩阵条件数和安全约束优化。",
         sample_hz=best_profile.sample_hz,
         points=best_profile.points,
         metadata=metadata,
@@ -130,6 +172,289 @@ def _surrogate_feature_matrix(points: tuple[TrajectoryPoint, ...]) -> list[list[
         row.extend(point.q[index] * point.ddq[index] for index in range(point.dof))
         matrix.append(row)
     return _standardize_columns(matrix)
+
+
+def _validate_with_relation_constraints(
+    profile: ExcitationProfile,
+    safety_limits: TrajectorySafetyLimits | None,
+    joint_relation_constraints: tuple[JointRelationConstraint, ...],
+):
+    validation = validate_trajectory(profile, safety_limits)
+    if not validation.allowed:
+        return validation
+    from armctrl.protocol.enums import ErrorCode
+    from armctrl.protocol.errors import ValidationResult
+
+    for point_index, point in enumerate(profile.points):
+        for left, right, min_delta, max_delta in joint_relation_constraints:
+            delta = point.q[left] - point.q[right]
+            if delta < min_delta or delta > max_delta:
+                return ValidationResult.reject(
+                    ErrorCode.SAFETY_REJECTED,
+                    "trajectory joint relation outside configured range",
+                    {
+                        "point_index": point_index,
+                        "left_joint_index": left,
+                        "right_joint_index": right,
+                        "delta_rad": delta,
+                        "min_delta_rad": min_delta,
+                        "max_delta_rad": max_delta,
+                    },
+                )
+    return validation
+
+
+def _relation_feasible_initial_profile(
+    profile: ExcitationProfile,
+    joint_relation_constraints: tuple[JointRelationConstraint, ...],
+) -> ExcitationProfile:
+    coefficient_payload = profile.metadata.get("coefficients")
+    if not coefficient_payload:
+        return profile
+    coefficients = [
+        [tuple(float(value) for value in coefficient) for coefficient in joint_coefficients]
+        for joint_coefficients in coefficient_payload
+    ]
+    for left, right, min_delta, max_delta in joint_relation_constraints:
+        if min_delta <= 0.0 <= max_delta:
+            averaged = []
+            for left_item, right_item in zip(coefficients[left], coefficients[right]):
+                harmonic = left_item[0]
+                averaged.append((harmonic, 0.5 * (left_item[1] + right_item[1]), 0.5 * (left_item[2] + right_item[2])))
+            coefficients[left] = averaged
+            coefficients[right] = list(averaged)
+    metadata = profile.metadata
+    return generate_fourier_multisine(
+        dof=profile.dof,
+        sample_hz=profile.sample_hz,
+        duration_s=float(metadata["duration_s"]),
+        harmonics=int(metadata["harmonics"]),
+        amplitude_rad=float(metadata["amplitude_rad"]),
+        seed=int(metadata.get("seed", 1)),
+        q_center=tuple(float(value) for value in metadata.get("q_center", profile.points[0].q)),
+        coupled_joint_groups=tuple(tuple(int(value) for value in group) for group in metadata.get("coupled_joint_groups", ())),
+        positive_only_joint_indices=tuple(int(value) for value in metadata.get("positive_only_joint_indices", ())),
+        coefficients=coefficients,
+    )
+
+
+def _serialize_joint_relation_constraints(
+    constraints: tuple[JointRelationConstraint, ...],
+) -> list[dict[str, float | int]]:
+    return [
+        {
+            "left": left,
+            "right": right,
+            "min_delta_rad": min_delta,
+            "max_delta_rad": max_delta,
+        }
+        for left, right, min_delta, max_delta in constraints
+    ]
+
+
+def _optimize_with_slsqp(
+    *,
+    baseline: ExcitationProfile,
+    baseline_score: ExcitationScore,
+    scorer: Callable[[ExcitationProfile], ExcitationScore] | None,
+    safety_limits: TrajectorySafetyLimits | None,
+    joint_relation_constraints: tuple[JointRelationConstraint, ...],
+) -> tuple[ExcitationProfile | None, ExcitationScore | None, dict[str, object]] | None:
+    try:
+        import numpy as np
+        from scipy.optimize import minimize
+    except ImportError:
+        return None
+
+    coefficient_payload = baseline.metadata.get("coefficients")
+    if not coefficient_payload:
+        return None
+    dof = baseline.dof
+    harmonics = int(baseline.metadata["harmonics"])
+    duration_s = float(baseline.metadata["duration_s"])
+    amplitude_rad = float(baseline.metadata["amplitude_rad"])
+    sample_hz = float(baseline.sample_hz)
+    optimization_sample_hz = min(sample_hz, 20.0)
+    seed = int(baseline.metadata.get("seed", 1))
+    q_center = tuple(float(value) for value in baseline.metadata.get("q_center", baseline.points[0].q))
+    coupled_joint_groups = tuple(tuple(int(value) for value in group) for group in baseline.metadata.get("coupled_joint_groups", ()))
+    positive_only_joint_indices = tuple(int(value) for value in baseline.metadata.get("positive_only_joint_indices", ()))
+    x0 = np.asarray(
+        [float(value) for joint in coefficient_payload for _, a, b in joint for value in (a, b)],
+        dtype=float,
+    )
+    if x0.size == 0:
+        return None
+    coefficient_bound = max(amplitude_rad, max(abs(value) for value in x0) * 1.5, 1e-3)
+    bounds = [(-coefficient_bound, coefficient_bound) for _ in range(int(x0.size))]
+
+    def profile_from_x(x_values) -> ExcitationProfile:
+        return _profile_from_x_values(
+            x_values,
+            dof=dof,
+            sample_hz=optimization_sample_hz,
+            duration_s=duration_s,
+            harmonics=harmonics,
+            amplitude_rad=amplitude_rad,
+            seed=seed,
+            q_center=q_center,
+            coupled_joint_groups=coupled_joint_groups,
+            positive_only_joint_indices=positive_only_joint_indices,
+        )
+
+    def full_rate_profile_from_x(x_values) -> ExcitationProfile:
+        return _profile_from_x_values(
+            x_values,
+            dof=dof,
+            sample_hz=sample_hz,
+            duration_s=duration_s,
+            harmonics=harmonics,
+            amplitude_rad=amplitude_rad,
+            seed=seed,
+            q_center=q_center,
+            coupled_joint_groups=coupled_joint_groups,
+            positive_only_joint_indices=positive_only_joint_indices,
+        )
+
+    def objective(x_values) -> float:
+        profile = profile_from_x(x_values)
+        score = scorer(profile) if scorer is not None else score_excitation_profile(profile)
+        range_reward = _joint_range_reward(profile)
+        if not math.isfinite(score.condition_number):
+            return 1e12
+        return math.log10(max(score.condition_number, 1.0)) - 0.03 * range_reward
+
+    constraints = _build_slsqp_constraints(
+        safety_limits=safety_limits,
+        joint_relation_constraints=joint_relation_constraints,
+        profile_from_x=profile_from_x,
+    )
+    result = minimize(
+        objective,
+        x0,
+        method="SLSQP",
+        bounds=bounds,
+        constraints=constraints,
+        options={"maxiter": 15, "ftol": 1e-3, "disp": False},
+    )
+    status = {
+        "success": bool(result.success),
+        "message": str(result.message),
+        "iterations": int(result.nit),
+        "optimization_sample_hz": float(optimization_sample_hz),
+        "initial_condition_number": float(baseline_score.condition_number),
+    }
+    profile = full_rate_profile_from_x(result.x)
+    validation = _validate_with_relation_constraints(profile, safety_limits, joint_relation_constraints)
+    if not validation.allowed:
+        status["accepted_feasible_iterate"] = False
+        status["rejected_reason"] = validation.error.message if validation.error else "slsqp iterate failed safety validation"
+        return None, None, status
+    score = scorer(profile) if scorer is not None else score_excitation_profile(profile)
+    status["final_condition_number"] = float(score.condition_number)
+    status["accepted_feasible_iterate"] = bool(score.condition_number <= baseline_score.condition_number)
+    return profile, score, status
+
+
+def _profile_from_x_values(
+    x_values,
+    *,
+    dof: int,
+    sample_hz: float,
+    duration_s: float,
+    harmonics: int,
+    amplitude_rad: float,
+    seed: int,
+    q_center: tuple[float, ...],
+    coupled_joint_groups: tuple[tuple[int, ...], ...],
+    positive_only_joint_indices: tuple[int, ...],
+) -> ExcitationProfile:
+        coefficients = _vector_to_coefficients(x_values, dof=dof, harmonics=harmonics)
+        return generate_fourier_multisine(
+            dof=dof,
+            sample_hz=sample_hz,
+            duration_s=duration_s,
+            harmonics=harmonics,
+            amplitude_rad=amplitude_rad,
+            seed=seed,
+            q_center=q_center,
+            coupled_joint_groups=coupled_joint_groups,
+            positive_only_joint_indices=positive_only_joint_indices,
+            coefficients=coefficients,
+        )
+
+
+def _vector_to_coefficients(x_values, *, dof: int, harmonics: int):
+    coefficients = []
+    cursor = 0
+    for _ in range(dof):
+        joint = []
+        for harmonic in range(1, harmonics + 1):
+            joint.append((float(harmonic), float(x_values[cursor]), float(x_values[cursor + 1])))
+            cursor += 2
+        coefficients.append(tuple(joint))
+    return tuple(coefficients)
+
+
+def _build_slsqp_constraints(
+    *,
+    safety_limits: TrajectorySafetyLimits | None,
+    joint_relation_constraints: tuple[JointRelationConstraint, ...],
+    profile_from_x,
+) -> list[dict[str, object]]:
+    if safety_limits is None and not joint_relation_constraints:
+        return []
+
+    def all_margins(x_values):
+        profile = profile_from_x(x_values)
+        margins = []
+        if safety_limits is not None:
+            for joint_index, limit in enumerate(safety_limits.joint_min):
+                margins.append(_min_q(profile, joint_index) - limit)
+            for joint_index, limit in enumerate(safety_limits.joint_max):
+                margins.append(limit - _max_q(profile, joint_index))
+            for joint_index, limit in enumerate(safety_limits.velocity_max):
+                margins.append(limit - _max_abs_dq(profile, joint_index))
+            for joint_index, limit in enumerate(safety_limits.acceleration_max):
+                margins.append(limit - _max_abs_ddq(profile, joint_index))
+        for left, right, min_delta, max_delta in joint_relation_constraints:
+            margins.append(_min_joint_delta(profile, left, right) - min_delta)
+            margins.append(max_delta - _max_joint_delta(profile, left, right))
+        return margins
+
+    return [{"type": "ineq", "fun": all_margins}]
+
+
+def _min_q(profile: ExcitationProfile, joint_index: int) -> float:
+    return min(point.q[joint_index] for point in profile.points)
+
+
+def _max_q(profile: ExcitationProfile, joint_index: int) -> float:
+    return max(point.q[joint_index] for point in profile.points)
+
+
+def _max_abs_dq(profile: ExcitationProfile, joint_index: int) -> float:
+    return max(abs(point.dq[joint_index]) for point in profile.points)
+
+
+def _max_abs_ddq(profile: ExcitationProfile, joint_index: int) -> float:
+    return max(abs(point.ddq[joint_index]) for point in profile.points)
+
+
+def _min_joint_delta(profile: ExcitationProfile, left: int, right: int) -> float:
+    return min(point.q[left] - point.q[right] for point in profile.points)
+
+
+def _max_joint_delta(profile: ExcitationProfile, left: int, right: int) -> float:
+    return max(point.q[left] - point.q[right] for point in profile.points)
+
+
+def _joint_range_reward(profile: ExcitationProfile) -> float:
+    ranges = []
+    for joint_index in range(profile.dof):
+        values = [point.q[joint_index] for point in profile.points]
+        ranges.append(max(values) - min(values))
+    return sum(ranges) / max(len(ranges), 1)
 
 
 def _standardize_columns(matrix: list[list[float]]) -> list[list[float]]:

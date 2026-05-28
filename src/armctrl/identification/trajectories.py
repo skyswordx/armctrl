@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import math
 import random
+from collections.abc import Sequence
 
 from armctrl.identification.models import ExcitationProfile, TrajectoryPoint
 
@@ -317,6 +318,33 @@ def _normalised_fourier_coefficients(
     return all_coefficients
 
 
+def _coerce_fourier_coefficients(
+    coefficients: Sequence[Sequence[Sequence[float]]] | None,
+    *,
+    dof: int,
+    harmonics: int,
+) -> tuple[tuple[tuple[float, float, float], ...], ...] | None:
+    if coefficients is None:
+        return None
+    if len(coefficients) != dof:
+        raise ValueError(f"coefficients must contain {dof} joint coefficient sets")
+    coerced: list[tuple[tuple[float, float, float], ...]] = []
+    for joint_index, joint_coefficients in enumerate(coefficients):
+        if len(joint_coefficients) != harmonics:
+            raise ValueError(f"coefficients[{joint_index}] must contain {harmonics} harmonics")
+        joint_values = []
+        for harmonic_index, item in enumerate(joint_coefficients):
+            if len(item) != 3:
+                raise ValueError("each coefficient entry must be (harmonic, a, b)")
+            harmonic, a, b = (float(item[0]), float(item[1]), float(item[2]))
+            expected_harmonic = float(harmonic_index + 1)
+            if abs(harmonic - expected_harmonic) > 1e-9:
+                raise ValueError("coefficient harmonics must be ordered from 1 to harmonics")
+            joint_values.append((harmonic, a, b))
+        coerced.append(tuple(joint_values))
+    return tuple(coerced)
+
+
 def generate_fourier_multisine(
     *,
     dof: int = 6,
@@ -327,17 +355,24 @@ def generate_fourier_multisine(
     seed: int = 1,
     q_center: tuple[float, ...] | None = None,
     q0: tuple[float, ...] | None = None,
+    coupled_joint_groups: tuple[tuple[int, ...], ...] = (),
+    positive_only_joint_indices: tuple[int, ...] = (),
+    coefficients: Sequence[Sequence[Sequence[float]]] | None = None,
 ) -> ExcitationProfile:
     """生成带五次包络的有限傅里叶多关节激励轨迹。"""
 
     base = _center_q(dof, q_center, q0)
     omega = 2.0 * math.pi / duration_s
-    coefficients = _normalised_fourier_coefficients(
-        dof=dof,
-        harmonics=harmonics,
-        amplitude_rad=amplitude_rad,
-        duration_s=duration_s,
-        seed=seed,
+    explicit_coefficients = _coerce_fourier_coefficients(coefficients, dof=dof, harmonics=harmonics)
+    active_coefficients = explicit_coefficients or tuple(
+        tuple(joint_coefficients)
+        for joint_coefficients in _normalised_fourier_coefficients(
+            dof=dof,
+            harmonics=harmonics,
+            amplitude_rad=amplitude_rad,
+            duration_s=duration_s,
+            seed=seed,
+        )
     )
     points: list[TrajectoryPoint] = []
     for t in _sample_times(duration_s, sample_hz):
@@ -345,18 +380,40 @@ def generate_fourier_multisine(
         envelope, denvelope_ds, ddenvelope_ds = _zero_boundary_envelope(s)
         denvelope_dt = denvelope_ds / duration_s
         ddenvelope_dt = ddenvelope_ds / (duration_s * duration_s)
-        q_values: list[float] = []
-        dq_values: list[float] = []
-        ddq_values: list[float] = []
+        signals: list[float] = []
+        signal_ds: list[float] = []
+        signal_dds: list[float] = []
         for joint_index in range(dof):
             signal = 0.0
             signal_d = 0.0
             signal_dd = 0.0
-            for harmonic, a, b in coefficients[joint_index]:
+            for harmonic, a, b in active_coefficients[joint_index]:
                 kw = harmonic * omega
                 signal += a * math.sin(kw * t) + b * math.cos(kw * t)
                 signal_d += a * kw * math.cos(kw * t) - b * kw * math.sin(kw * t)
                 signal_dd += -a * kw * kw * math.sin(kw * t) - b * kw * kw * math.cos(kw * t)
+            signals.append(signal)
+            signal_ds.append(signal_d)
+            signal_dds.append(signal_dd)
+        for group in coupled_joint_groups:
+            if not group:
+                continue
+            representative = group[0]
+            for joint_index in group[1:]:
+                signals[joint_index] = signals[representative]
+                signal_ds[joint_index] = signal_ds[representative]
+                signal_dds[joint_index] = signal_dds[representative]
+        for joint_index in positive_only_joint_indices:
+            signals[joint_index] = 0.5 * (signals[joint_index] + amplitude_rad)
+            signal_ds[joint_index] = 0.5 * signal_ds[joint_index]
+            signal_dds[joint_index] = 0.5 * signal_dds[joint_index]
+        q_values: list[float] = []
+        dq_values: list[float] = []
+        ddq_values: list[float] = []
+        for joint_index in range(dof):
+            signal = signals[joint_index]
+            signal_d = signal_ds[joint_index]
+            signal_dd = signal_dds[joint_index]
             q_values.append(base[joint_index] + envelope * signal)
             dq_values.append(denvelope_dt * signal + envelope * signal_d)
             ddq_values.append(ddenvelope_dt * signal + 2.0 * denvelope_dt * signal_d + envelope * signal_dd)
@@ -373,6 +430,13 @@ def generate_fourier_multisine(
             "harmonics": harmonics,
             "seed": seed,
             "q_center": base,
+            "coupled_joint_groups": coupled_joint_groups,
+            "positive_only_joint_indices": positive_only_joint_indices,
+            "coefficient_source": "explicit" if explicit_coefficients is not None else "seeded_random_normalized",
+            "coefficients": [
+                [[harmonic, a, b] for harmonic, a, b in joint_coefficients]
+                for joint_coefficients in active_coefficients
+            ],
             "boundary_mode": "quintic_envelope_zero_velocity_acceleration",
             "recommended_use": "让回归矩阵观测条件更好，真实硬件上应放在最后阶段。",
         },

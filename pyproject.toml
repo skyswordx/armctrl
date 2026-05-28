@@ -12,6 +12,7 @@ dependencies = [
   "arx5-interface==0.1.2; sys_platform == 'linux'",
   "figaroh==0.3.1; sys_platform == 'linux'",
   "pin==4.0.0; sys_platform == 'linux'",
+  "scipy>=1.13",
 ]
 
 [project.optional-dependencies]
