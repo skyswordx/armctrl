@@ -23,3 +23,19 @@ def test_cli_release_status_reports_contract_complete_and_hardware_pending() -> 
     assert payload["milestones"][-1]["status"] == "contract_complete"
     assert "real_sdk_runner" in payload["hardware_pending"]
     assert "n100d_pinocchio_figaroh_validation" in payload["hardware_pending"]
+    assert payload["verification"]["local_commands"] == [
+        "uv run pytest -q",
+        "uv run python -m compileall src tests",
+        "uv run armctrl release status --json",
+    ]
+    assert payload["verification"]["test_count"] >= 50
+    assert payload["deferred_validation"]["requires_hardware"] == [
+        "real_sdk_runner",
+        "sdk_preflight_on_target_linux",
+        "sdk_handshake_plan_on_target_linux",
+        "hold_damping_ctrl_c_hardware_landing",
+        "hardware_ab_control_benefit_test",
+    ]
+    assert payload["deferred_validation"]["requires_external_tool"] == [
+        "n100d_pinocchio_figaroh_validation",
+    ]

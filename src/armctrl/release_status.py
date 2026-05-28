@@ -38,6 +38,30 @@ def release_status() -> dict[str, object]:
             "n100d_pinocchio_figaroh_validation",
             "hardware_ab_control_benefit_test",
         ],
+        "verification": {
+            "local_commands": [
+                "uv run pytest -q",
+                "uv run python -m compileall src tests",
+                "uv run armctrl release status --json",
+            ],
+            "test_count": 50,
+            "scope": "local contracts and non-hardware safety gates through v0.5.0",
+        },
+        "deferred_validation": {
+            "requires_hardware": [
+                "real_sdk_runner",
+                "sdk_preflight_on_target_linux",
+                "sdk_handshake_plan_on_target_linux",
+                "hold_damping_ctrl_c_hardware_landing",
+                "hardware_ab_control_benefit_test",
+            ],
+            "requires_external_tool": [
+                "n100d_pinocchio_figaroh_validation",
+            ],
+            "requires_geometry_upgrade": [
+                "mesh_body_collision_model",
+            ],
+        },
         "notes": [
             "Recipe plans are dry-run previews with machine-readable risk explanations.",
             "Recipe execution remains rejected until a verified hardware backend exists.",

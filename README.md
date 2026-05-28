@@ -43,7 +43,9 @@ uv run armctrl release status --json
 
 Version `0.5.0` means the clean contracts through Agent recipes are present.
 Hardware execution, real SDK collection, and n100d Pinocchio/FIGAROH validation
-are still explicitly marked pending.
+are still explicitly marked pending. The JSON includes local verification
+commands plus separate `deferred_validation` buckets for hardware, external
+tools, and geometry upgrades.
 
 ## Recipe Preview
 
