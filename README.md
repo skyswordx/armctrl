@@ -60,6 +60,24 @@ uv run armctrl sysid plan friction_sweep --json
 uv run armctrl sysid plan fourier_multisine --json
 ```
 
+Write a reviewable offline plan:
+
+```bash
+uv run armctrl sysid plan gravity_sweep \
+  --dof 6 \
+  --sample-hz 100 \
+  --duration 10 \
+  --amplitude 0.1 \
+  --q-center 0 0.3 0.3 0 0 0 \
+  --urdf-path configs/models/X5_camera.urdf \
+  --output runs/ident-plan-preview \
+  --json
+```
+
+This writes `planned_trajectory.csv` and `manifest.json`. URDF limit and
+workspace clearance checks are still marked `not_evaluated` until the real
+trajectory safety model is rebuilt.
+
 ## Online Identification Policy
 
 Online identification is currently a shadow-mode policy contract. It allows

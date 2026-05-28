@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import csv
+import json
+import math
+from pathlib import Path
 from typing import Iterable
 
 
@@ -33,14 +37,30 @@ class SysIdPlan:
     profile: SysIdProfile
     safety: SysIdSafety
     handoff: dict[str, object]
+    artifacts: dict[str, str] | None = None
 
     def to_json(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "schema": self.schema,
             "profile": self.profile.to_json(),
             "safety": self.safety.to_json(),
             "handoff": self.handoff,
         }
+        if self.artifacts is not None:
+            payload["artifacts"] = self.artifacts
+        return payload
+
+
+@dataclass(frozen=True)
+class SysIdPlanRequest:
+    profile_name: str
+    dof: int
+    sample_hz: float
+    duration_s: float
+    amplitude_rad: float
+    q_center: tuple[float, ...]
+    urdf_path: str
+    output_dir: Path
 
 
 class SysIdPlanner:
@@ -98,3 +118,71 @@ class SysIdPlanner:
                 "hardware_required_for_execute": True,
             },
         )
+
+    def write_plan(self, request: SysIdPlanRequest) -> SysIdPlan:
+        plan = self.plan(request.profile_name, execute=False)
+        request.output_dir.mkdir(parents=True, exist_ok=True)
+        trajectory_path = request.output_dir / "planned_trajectory.csv"
+        manifest_path = request.output_dir / "manifest.json"
+
+        rows = _trajectory_rows(request)
+        with trajectory_path.open("w", newline="", encoding="utf-8") as file:
+            writer = csv.DictWriter(file, fieldnames=list(rows[0]))
+            writer.writeheader()
+            writer.writerows(rows)
+
+        manifest = {
+            "schema": "armctrl.ident_plan_manifest.v1",
+            "profile": plan.profile.to_json(),
+            "request": {
+                "dof": request.dof,
+                "sample_hz": request.sample_hz,
+                "duration_s": request.duration_s,
+                "amplitude_rad": request.amplitude_rad,
+                "q_center": list(request.q_center),
+                "urdf_path": request.urdf_path,
+            },
+            "safety": {
+                "allowed": plan.safety.allowed,
+                "reason": plan.safety.reason,
+                "checks": {
+                    "urdf_limit_check": "not_evaluated",
+                    "workspace_clearance_check": "not_evaluated",
+                    "hardware_execution": "not_requested",
+                },
+            },
+            "handoff": plan.handoff,
+            "artifacts": {
+                "planned_trajectory": str(trajectory_path),
+                "manifest": str(manifest_path),
+            },
+        }
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return SysIdPlan(
+            schema=plan.schema,
+            profile=plan.profile,
+            safety=plan.safety,
+            handoff=plan.handoff,
+            artifacts={
+                "planned_trajectory": str(trajectory_path),
+                "manifest": str(manifest_path),
+            },
+        )
+
+
+def _trajectory_rows(request: SysIdPlanRequest) -> list[dict[str, str]]:
+    sample_count = int(round(request.duration_s * request.sample_hz)) + 1
+    rows: list[dict[str, str]] = []
+    for sample_index in range(sample_count):
+        t = sample_index / request.sample_hz
+        phase = 2.0 * math.pi * (t / request.duration_s if request.duration_s else 0.0)
+        row = {"time_s": f"{t:.6f}"}
+        for joint_index in range(request.dof):
+            center = request.q_center[joint_index]
+            offset = request.amplitude_rad * math.sin(phase) if joint_index == 0 else 0.0
+            row[f"q_cmd_{joint_index + 1}"] = f"{center + offset:.6f}"
+        rows.append(row)
+    return rows

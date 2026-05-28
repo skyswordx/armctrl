@@ -25,6 +25,7 @@
 ### v0.3.0 - Offline SysID Loop
 
 - [x] 定义 plan-only SysID profile 和 Pinocchio/FIGAROH/LeRobot handoff 合同。
+- [x] `ident-plan` / `sysid plan --output` 能写出 `planned_trajectory.csv` 和 `manifest.json`。
 - [ ] `ident-plan` 在实机运动前拒绝不安全的 planned trajectory。
 - [ ] `ident-run` 采集 gravity、friction、Fourier profile，并有 hold、damping、Ctrl-C 落态。
 - [ ] `ident-postprocess` 输出清洗数据、中文质量报告和固定 solver 复跑脚本。

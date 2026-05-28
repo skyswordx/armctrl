@@ -3,12 +3,13 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 from typing import Sequence
 
 from armctrl.recipes import RecipeCatalog
 from armctrl.online_id import OnlineIdentificationPolicy
 from armctrl.safety import SafetyGate
-from armctrl.sysid import SysIdPlanner
+from armctrl.sysid import SysIdPlanner, SysIdPlanRequest
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -35,6 +36,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     sysid_plan_parser = sysid_subparsers.add_parser("plan")
     sysid_plan_parser.add_argument("profile")
     sysid_plan_parser.add_argument("--execute", action="store_true")
+    sysid_plan_parser.add_argument("--dof", type=int, default=6)
+    sysid_plan_parser.add_argument("--sample-hz", type=float, default=100.0)
+    sysid_plan_parser.add_argument("--duration", type=float, default=10.0)
+    sysid_plan_parser.add_argument("--amplitude", type=float, default=0.1)
+    sysid_plan_parser.add_argument("--q-center", nargs="+", type=float)
+    sysid_plan_parser.add_argument("--urdf-path", default="configs/models/X5_camera.urdf")
+    sysid_plan_parser.add_argument("--output")
     sysid_plan_parser.add_argument("--json", action="store_true", dest="as_json")
 
     online_parser = subparsers.add_parser("online-id")
@@ -83,7 +91,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 3
 
     if args.command == "sysid" and args.sysid_command == "plan":
-        plan = SysIdPlanner.default().plan(args.profile, execute=args.execute)
+        planner = SysIdPlanner.default()
+        if args.execute:
+            plan = planner.plan(args.profile, execute=True)
+            payload = {"status": "rejected", **plan.to_json()}
+            _emit(payload, as_json=args.as_json)
+            return 3
+        if args.output:
+            q_center = tuple(args.q_center or [0.0] * args.dof)
+            if len(q_center) != args.dof:
+                parser.error("--q-center length must match --dof")
+            plan = planner.write_plan(
+                SysIdPlanRequest(
+                    profile_name=args.profile,
+                    dof=args.dof,
+                    sample_hz=args.sample_hz,
+                    duration_s=args.duration,
+                    amplitude_rad=args.amplitude,
+                    q_center=q_center,
+                    urdf_path=args.urdf_path,
+                    output_dir=Path(args.output),
+                )
+            )
+        else:
+            plan = planner.plan(args.profile, execute=False)
         payload = {"status": "ok", **plan.to_json()}
         return _emit(payload, as_json=args.as_json)
 
