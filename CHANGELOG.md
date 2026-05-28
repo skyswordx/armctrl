@@ -1,6 +1,6 @@
 # Changelog
 
-本文件记录 `armctrl` 的用户可见变更。
+本文记录 `armctrl` 的用户可见变更。
 
 ## [Unreleased]
 
@@ -16,15 +16,16 @@
 - 新增 workspace/table clearance 的第一版保守 proxy 检查，读取 `configs/x5.safe.yaml` 并在 stdout/manifest 中记录 pass/fail。
 - 新增 `sysid run --adapter fake`，可生成 `raw_samples.csv` 和 run manifest，用于恢复无硬件数据链路。
 - 新增 `sysid postprocess`，从 fake/raw dataset 生成 `processed_samples.csv`、`quality_metrics.json` 和 `quality_report.md`。
+- 新增 `sysid solve`，从 processed dataset 生成 `solver_metrics.json` 和 `solver_report_zh.md`，并记录 Pinocchio/FIGAROH 可用性。
 - 新增在线辨识 shadow-mode policy，限制在线更新只覆盖 torque bias、摩擦项和小幅 gravity residual。
-- 新增项目内 Codex skill：`.codex/skills/armctrl-agent-recipes/SKILL.md`，限制 Agent 只能通过 recipe CLI 查看和规划动作。
+- 新增项目内 Codex skill: `.codex/skills/armctrl-agent-recipes/SKILL.md`，限制 Agent 只能通过 recipe CLI 查看和规划动作。
 
 ### Changed
 
-- 停止在旧实验实现上继续叠加功能，后续按 `v0.2.0` 到 `v0.5.0` 小 milestone 重新实现。
+- 停止在旧实验实现上继续叠加功能，后续按 `v0.2.0` 到 `v0.5.0` milestone 重新实现。
 - SysID execute 仍保持 rejected；workspace clearance 目前是 joint2 proxy，不是完整 FK/table collision model。
 - `sysid run --adapter sdk` 仍保持 rejected，等待真实 SDK runner、安全落态和真机验证。
-- 当前 postprocess 只覆盖基础文件合同和 data health，预测误差/物理一致性等待 solver stage。
+- 当前 postprocess 覆盖基础文件合同和 data health；预测误差、物理一致性等进入固定 solver stage 后继续补齐。
 
 ## [0.1.0] - Historical Baseline
 

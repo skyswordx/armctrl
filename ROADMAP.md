@@ -1,17 +1,16 @@
 # armctrl Roadmap
 
-本文件是 ARX5/X5 运控、系统辨识和 Agent recipe 重构的当前事实源。
+本文是 ARX5/X5 运控、系统辨识和 Agent recipe 重构的当前事实源。
 
 ## Project Boundary
 
-`armctrl` 是 Roboclaw 内部面向 ARX5/X5 的安全执行与系统辨识外壳。
-它不做第二套 LeRobot，不做第二套 FIGAROH，也不重写 ARX5 SDK。
+`armctrl` 是 Roboclaw 内部面向 ARX5/X5 的安全执行与系统辨识外壳。它不做第二套 LeRobot，不做第二套 FIGAROH，也不重写 ARX5 SDK。
 
-- ARX5 SDK / `arx5-interface`：底层控制器、CAN 通信、IK、动力学和硬件会话。
-- Pinocchio：可复现的本地回归矩阵构建和 solver 校验。
-- FIGAROH：成熟的机器人辨识数学，包括最优激励、基础参数提取和物理一致性工具。
-- `lerobot-robot-arx5` / `lerobot-teleoperator-arx5`：LeRobot Robot/Teleoperator 接入、数据采集、训练和策略 rollout。
-- `armctrl`：安全门、动作 recipe、辨识采集编排、数据交接、参数包、上线校验和 Agent CLI 命令。
+- ARX5 SDK / `arx5-interface`: 底层控制器、CAN 通信、IK、动力学和硬件会话。
+- Pinocchio: 可复现的本地回归矩阵构建、rank/condition/prediction error 校验。
+- FIGAROH: 成熟的机器人辨识数学，包括激励轨迹、基础参数和物理一致性工具。
+- `lerobot-robot-arx5` / `lerobot-teleoperator-arx5`: LeRobot Robot/Teleoperator 接入、数采、训练和 policy rollout。
+- `armctrl`: 安全门、动作 recipe、辨识采集编排、数据交接、参数包、上线校验和 Agent CLI 命令。
 
 ## Release Track
 
@@ -20,21 +19,20 @@
 - [x] 保持 `README.md`、`ROADMAP.md`、`CHANGELOG.md`、`docs/README.md` 为唯一当前入口。
 - [x] 定义第一版 Agent recipe catalog 和 JSON 请求/响应契约。
 - [x] 定义 safety gate 的 plan-only / execute 边界。
-- [ ] 所有硬件运动入口默认先能 dry-run，并能解释计划轨迹风险。
+- [ ] 所有硬件运动入口默认先 dry-run，并能解释计划轨迹风险。
 
 ### v0.3.0 - Offline SysID Loop
 
 - [x] 定义 plan-only SysID profile 和 Pinocchio/FIGAROH/LeRobot handoff 合同。
-- [x] `ident-plan` / `sysid plan --output` 能写出 `planned_trajectory.csv` 和 `manifest.json`。
-- [x] `ident-plan` / `sysid plan --output` 评估 URDF joint limit 并在 stdout/manifest 标注 pass/fail。
-- [x] `ident-plan` / `sysid plan --output` 评估第一版 workspace/table clearance proxy 并在 stdout/manifest 标注 pass/fail。
-- [x] `ident-run` / `sysid run --adapter fake` 生成 `raw_samples.csv` 和 run manifest。
-- [x] `ident-postprocess` / `sysid postprocess` 输出清洗数据、质量指标和 Markdown 报告。
-- [ ] `ident-plan` 在实机运动前使用完整 FK/table collision model 拒绝不安全 planned trajectory。
-- [ ] `ident-run` 使用 ARX5 SDK 采集 gravity、friction、Fourier profile，并有 hold、damping、Ctrl-C 落态。
-- [ ] `ident-run` 采集 gravity、friction、Fourier profile，并有 hold、damping、Ctrl-C 落态。
-- [ ] `ident-postprocess` 输出清洗数据、中文质量报告和固定 solver 复跑脚本。
-- [ ] `ident-solve` 输出 Pinocchio rank、条件数、预测误差和物理一致性指标。
+- [x] `sysid plan --output` 写出 `planned_trajectory.csv` 和 `manifest.json`。
+- [x] `sysid plan --output` 评估 URDF joint limit 并在 stdout/manifest 标注 pass/fail。
+- [x] `sysid plan --output` 评估第一版 workspace/table clearance proxy 并在 stdout/manifest 标注 pass/fail。
+- [x] `sysid run --adapter fake` 生成 `raw_samples.csv` 和 run manifest。
+- [x] `sysid postprocess` 输出清洗数据、质量指标和 Markdown 报告。
+- [x] `sysid solve` 输出固定 solver 阶段产物、Pinocchio/FIGAROH 可用性和 fake 数据残差冒烟检查。
+- [ ] `sysid plan` 在实机运动前使用完整 FK/table collision model 拒绝不安全 planned trajectory。
+- [ ] `sysid run` 使用 ARX5 SDK 采集 gravity、friction、Fourier profile，并有 hold、damping、Ctrl-C 落态。
+- [ ] `sysid solve` 接入真实 Pinocchio regressor，输出 rank、条件数、预测误差和物理一致性指标。
 - [ ] FIGAROH handoff 显式存在；本地不重写 FIGAROH 最优轨迹或物理一致性内部实现。
 - [ ] 只有质量门通过时才生成版本化参数包。
 
@@ -47,9 +45,9 @@
 
 ### v0.5.0 - Agent Recipe And CLI Skill
 
-- [x] 增加 recipe registry：`home`、`damping`、`hold-current`、`observe-front`、`pregrasp-table`、`retreat-safe`。
+- [x] 增加 recipe registry: `home`、`damping`、`hold-current`、`observe-front`、`pregrasp-table`、`retreat-safe`。
 - [x] 所有可能动硬件的 recipe 都支持 plan-only。
-- [x] 增加 JSON CLI：列出 recipe、dry-run、执行、取消、查看状态。
+- [x] 增加 JSON CLI: 列出 recipe、dry-run、执行、取消、查看状态。
 - [x] 编写 Codex CLI skill，只允许调用这些受限命令。
 - [ ] 测试证明 Agent 路径不能绕过 safety gate 和 command executor。
 

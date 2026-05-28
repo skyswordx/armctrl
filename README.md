@@ -107,6 +107,19 @@ uv run armctrl sysid postprocess \
 This writes `processed/processed_samples.csv`,
 `processed/quality_metrics.json`, and `processed/quality_report.md`.
 
+Run the fixed solver handoff stage:
+
+```bash
+uv run armctrl sysid solve \
+  --dataset runs/ident-fake \
+  --json
+```
+
+This writes `processed/solver_metrics.json` and
+`processed/solver_report_zh.md`. The clean rebuild currently checks processed
+data, records Pinocchio/FIGAROH module availability, and performs a fake-data
+residual smoke test. Real Pinocchio regressor metrics are the next SysID step.
+
 ## Online Identification Policy
 
 Online identification is currently a shadow-mode policy contract. It allows
