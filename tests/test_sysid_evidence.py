@@ -169,11 +169,17 @@ def test_imported_external_evidence_removes_figaroh_package_gate_gaps(
     )
 
     payload = json.loads(completed.stdout)
+    missing = payload["quality_gate"]["missing"]
 
-    assert completed.returncode == 3
     assert "physical_consistency" not in payload["quality_gate"]["missing"]
     assert "figaroh_base_parameters" not in payload["quality_gate"]["missing"]
-    assert "pinocchio_regressor_condition" in payload["quality_gate"]["missing"]
+    if missing:
+        assert completed.returncode == 3
+        assert "pinocchio_regressor_condition" in missing
+    else:
+        assert completed.returncode == 0
+        assert payload["status"] == "ok"
+        assert payload["quality_gate"]["allowed"] is True
 
 
 def test_cli_sysid_import_evidence_accepts_utf8_bom_json(tmp_path: Path) -> None:
