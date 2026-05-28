@@ -47,7 +47,7 @@ Release readiness: `contracts_complete_hardware_pending`.
 - [x] `sysid adapt-figaroh-evidence` 将 FIGAROH-style report 规范化为 armctrl external evidence。
 - [ ] 本地不重写 FIGAROH 最优轨迹或物理一致性内部实现，只继续补官方工具输出适配器。
 - [x] `sysid package` 只有质量门通过时才生成候选参数包，否则结构化拒绝。
-- [ ] 候选参数包加入版本号、签名、回滚目标和上线 A/B 验证记录。
+- [x] 候选参数包加入版本号、签名、回滚目标和上线 A/B 验证记录。
 
 ### v0.4.0 - Conservative Online Identification
 

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import json
 from pathlib import Path
+
+from armctrl import __version__
 
 
 @dataclass(frozen=True)
@@ -25,7 +28,7 @@ class SysIdPackager:
         processed_dir = dataset_dir / "processed"
         solver_metrics_path = processed_dir / "solver_metrics.json"
         package_path = processed_dir / "parameter_package.json"
-        solver_metrics = json.loads(solver_metrics_path.read_text(encoding="utf-8"))
+        solver_metrics = json.loads(solver_metrics_path.read_text(encoding="utf-8-sig"))
         quality_gate = _quality_gate(solver_metrics)
         artifacts = {
             "solver_metrics": str(solver_metrics_path),
@@ -40,12 +43,10 @@ class SysIdPackager:
                 artifacts=artifacts,
             )
 
-        package = {
-            "schema": "armctrl.parameter_package.v1",
-            "source_dataset": str(dataset_dir),
-            "solver_metrics": str(solver_metrics_path),
-            "status": "candidate",
-        }
+        package = _candidate_package(
+            dataset_dir=dataset_dir,
+            solver_metrics_path=solver_metrics_path,
+        )
         package_path.write_text(
             json.dumps(package, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -56,6 +57,42 @@ class SysIdPackager:
             quality_gate=quality_gate,
             artifacts=artifacts,
         )
+
+
+def _candidate_package(
+    *,
+    dataset_dir: Path,
+    solver_metrics_path: Path,
+) -> dict[str, object]:
+    signature = hashlib.sha256(solver_metrics_path.read_bytes()).hexdigest()
+    return {
+            "schema": "armctrl.parameter_package.v1",
+            "package_version": __version__,
+            "source_dataset": str(dataset_dir),
+            "solver_metrics": str(solver_metrics_path),
+            "status": "candidate",
+            "signature": {
+                "algorithm": "sha256",
+                "value": signature,
+                "covers": ["solver_metrics"],
+            },
+            "rollback": {
+                "target": "previous_active_parameter_package",
+                "required_before_activation": True,
+            },
+            "rollout": {
+                "activation_status": "blocked_until_ab_validation",
+                "ab_validation": {
+                    "status": "required_before_activation",
+                    "metrics": [
+                        "hold_pose_error",
+                        "joint_current_rms",
+                        "torque_prediction_residual",
+                        "operator_abort_count",
+                    ],
+                },
+            },
+        }
 
 
 def _quality_gate(metrics: dict[str, object]) -> dict[str, object]:

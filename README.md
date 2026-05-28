@@ -177,7 +177,10 @@ uv run armctrl sysid package \
 
 `sysid package` refuses to write `processed/parameter_package.json` unless the
 solver metrics include Pinocchio condition and prediction-error evidence plus
-FIGAROH/base-parameter and physical-consistency evidence.
+FIGAROH/base-parameter and physical-consistency evidence. When the gate passes,
+the candidate package records package version, a SHA-256 signature over solver
+evidence, a rollback target, and an A/B validation checklist that must pass
+before activation on hardware.
 
 Import external solver evidence from FIGAROH or manual review:
 
