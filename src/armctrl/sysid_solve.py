@@ -2,9 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import csv
+import importlib
 import importlib.util
 import json
 from pathlib import Path
+import sys
+
+import numpy as np
 
 
 @dataclass(frozen=True)
@@ -29,16 +33,25 @@ class SysIdSolver:
 
         processed_rows = _read_csv(processed_samples_path)
         quality_metrics = json.loads(quality_metrics_path.read_text(encoding="utf-8"))
+        manifest = json.loads((dataset_dir / "manifest.json").read_text(encoding="utf-8"))
         input_quality_status = str(quality_metrics["data_health"]["status"])
         backend_status = {
             "pinocchio": _module_status("pinocchio"),
             "figaroh": _module_status("figaroh"),
         }
         residual_summary = _fake_zero_tau_residual_summary(processed_rows)
+        regressor_condition = {
+            "pinocchio": _pinocchio_regressor_condition(
+                backend_status=backend_status["pinocchio"],
+                manifest=manifest,
+                rows=processed_rows,
+                dataset_dir=dataset_dir,
+            )
+        }
         overall_verdict = (
             "solver_ready"
             if input_quality_status == "pass"
-            and backend_status["pinocchio"]["status"] == "available"
+            and regressor_condition["pinocchio"]["status"] == "computed"
             else "solver_handoff_only"
         )
 
@@ -48,6 +61,7 @@ class SysIdSolver:
             "input_quality_status": input_quality_status,
             "overall_verdict": overall_verdict,
             "backend_status": backend_status,
+            "regressor_condition": regressor_condition,
             "residual_summary": residual_summary,
             "solver_boundary": {
                 "pinocchio": "deterministic regressor and least-squares backend",
@@ -81,10 +95,77 @@ def _read_csv(path: Path) -> list[dict[str, str]]:
 
 
 def _module_status(module_name: str) -> dict[str, str]:
+    if module_name in sys.modules:
+        return {"status": "available", "module": module_name}
     spec = importlib.util.find_spec(module_name)
     if spec is None:
         return {"status": "missing", "module": module_name}
     return {"status": "available", "module": module_name}
+
+
+def _pinocchio_regressor_condition(
+    *,
+    backend_status: dict[str, str],
+    manifest: dict[str, object],
+    rows: list[dict[str, str]],
+    dataset_dir: Path,
+) -> dict[str, object]:
+    if backend_status["status"] != "available":
+        return {
+            "status": "not_evaluated",
+            "reason": "pinocchio module is not importable",
+        }
+    try:
+        pinocchio = importlib.import_module("pinocchio")
+        request = manifest["profile"] and manifest.get("request", {})
+        urdf_path = _resolve_dataset_path(dataset_dir, str(request["urdf_path"]))
+        model = pinocchio.buildModelFromUrdf(str(urdf_path))
+        data = model.createData()
+        regressors = []
+        for row in rows:
+            q = _row_vector(row, prefix="q_proc_", dof=model.nq)
+            v = _row_vector(row, prefix="dq_proc_", dof=model.nv)
+            a = np.zeros(model.nv)
+            regressor = pinocchio.computeJointTorqueRegressor(model, data, q, v, a)
+            if regressor is None:
+                regressor = data.jointTorqueRegressor
+            regressors.append(np.asarray(regressor, dtype=float))
+        y_matrix = np.vstack(regressors)
+        singular_values = np.linalg.svd(y_matrix, compute_uv=False)
+        tolerance = np.finfo(float).eps * max(y_matrix.shape) * singular_values[0]
+        nonzero_singular_values = singular_values[singular_values > tolerance]
+        rank = int(nonzero_singular_values.size)
+        condition_number = (
+            float(nonzero_singular_values[0] / nonzero_singular_values[-1])
+            if rank
+            else float("inf")
+        )
+        return {
+            "status": "computed",
+            "row_count": int(y_matrix.shape[0]),
+            "column_count": int(y_matrix.shape[1]),
+            "rank": rank,
+            "effective_condition_number": condition_number,
+        }
+    except Exception as exc:  # pragma: no cover - message is user-facing evidence.
+        return {
+            "status": "failed",
+            "reason": str(exc),
+        }
+
+
+def _resolve_dataset_path(dataset_dir: Path, path_text: str) -> Path:
+    path = Path(path_text)
+    if path.is_absolute():
+        return path
+    candidate = dataset_dir / path
+    if candidate.exists():
+        return candidate
+    return Path.cwd() / path
+
+
+def _row_vector(row: dict[str, str], *, prefix: str, dof: int) -> np.ndarray:
+    return np.array([float(row[f"{prefix}{index + 1}"]) for index in range(dof)])
 
 
 def _fake_zero_tau_residual_summary(rows: list[dict[str, str]]) -> dict[str, float]:
@@ -101,6 +182,7 @@ def _fake_zero_tau_residual_summary(rows: list[dict[str, str]]) -> dict[str, flo
 
 def _solver_report(metrics: dict[str, object]) -> str:
     backend_status = metrics["backend_status"]
+    pinocchio_condition = metrics["regressor_condition"]["pinocchio"]
     residual_summary = metrics["residual_summary"]
     title = "SysID \u6c42\u89e3\u62a5\u544a"
     note = (
@@ -119,6 +201,7 @@ def _solver_report(metrics: dict[str, object]) -> str:
         f"- overall_verdict: `{metrics['overall_verdict']}`\n"
         f"- Pinocchio: `{backend_status['pinocchio']['status']}`\n"
         f"- FIGAROH: `{backend_status['figaroh']['status']}`\n"
+        f"- Pinocchio regressor: `{pinocchio_condition['status']}`\n"
         "- residual_summary: "
         f"`fake_zero_tau_rmse_nm={residual_summary['fake_zero_tau_rmse_nm']}`\n\n"
         f"{note}\n"

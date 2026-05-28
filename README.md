@@ -120,7 +120,9 @@ uv run armctrl sysid solve \
 This writes `processed/solver_metrics.json` and
 `processed/solver_report_zh.md`. The clean rebuild currently checks processed
 data, records Pinocchio/FIGAROH module availability, and performs a fake-data
-residual smoke test. Real Pinocchio regressor metrics are the next SysID step.
+residual smoke test. When Pinocchio is importable, it also builds the joint
+torque regressor from the dataset URDF and reports matrix rank plus effective
+condition number.
 
 ## Online Identification Policy
 

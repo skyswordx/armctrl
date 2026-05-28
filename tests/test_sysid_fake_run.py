@@ -57,6 +57,8 @@ def test_cli_sysid_run_fake_writes_raw_samples_and_manifest(tmp_path: Path) -> N
     assert manifest["schema"] == "armctrl.sysid_run_manifest.v1"
     assert manifest["adapter"] == "fake"
     assert manifest["sample_count"] == 41
+    assert manifest["request"]["urdf_path"] == "configs/models/X5_camera.urdf"
+    assert manifest["request"]["dof"] == 6
     assert manifest["handoff"]["dataset_contract"] == "lerobot-compatible"
 
     with raw_samples_path.open(newline="", encoding="utf-8") as file:

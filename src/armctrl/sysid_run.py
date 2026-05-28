@@ -40,6 +40,15 @@ class FakeSysIdRunner:
             "schema": "armctrl.sysid_run_manifest.v1",
             "adapter": "fake",
             "profile": plan.profile.to_json(),
+            "request": {
+                "dof": request.dof,
+                "sample_hz": request.sample_hz,
+                "duration_s": request.duration_s,
+                "amplitude_rad": request.amplitude_rad,
+                "q_center": list(request.q_center),
+                "urdf_path": request.urdf_path,
+                "safe_config_path": request.safe_config_path,
+            },
             "sample_count": len(raw_rows),
             "handoff": plan.handoff,
             "artifacts": {

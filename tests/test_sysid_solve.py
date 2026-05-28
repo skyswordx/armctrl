@@ -1,7 +1,12 @@
 import json
 import subprocess
 import sys
+import types
 from pathlib import Path
+
+import numpy as np
+
+from armctrl.sysid_solve import SysIdSolver
 
 
 def _create_processed_dataset(output_dir: Path) -> None:
@@ -101,3 +106,47 @@ def test_cli_sysid_solve_writes_solver_artifacts_from_processed_dataset(
     assert "SysID \u6c42\u89e3\u62a5\u544a" in report
     assert "Pinocchio" in report
     assert "FIGAROH" in report
+
+
+def test_sysid_solve_computes_pinocchio_regressor_metrics_when_backend_exists(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    dataset_dir = tmp_path / "ident-run"
+    _create_processed_dataset(dataset_dir)
+
+    class FakeModel:
+        nq = 6
+        nv = 6
+
+        def createData(self):
+            return types.SimpleNamespace()
+
+    def compute_joint_torque_regressor(model, data, q, v, a):
+        base = np.zeros((model.nv, 60))
+        base[:, : model.nv] = np.eye(model.nv)
+        base[:, model.nv : 2 * model.nv] = np.diag(q)
+        data.jointTorqueRegressor = base
+        return base
+
+    fake_pinocchio = types.SimpleNamespace(
+        buildModelFromUrdf=lambda path: FakeModel(),
+        computeJointTorqueRegressor=compute_joint_torque_regressor,
+    )
+    monkeypatch.setitem(sys.modules, "pinocchio", fake_pinocchio)
+
+    SysIdSolver().run(dataset_dir)
+
+    metrics = json.loads(
+        (dataset_dir / "processed" / "solver_metrics.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    condition = metrics["regressor_condition"]["pinocchio"]
+
+    assert metrics["backend_status"]["pinocchio"]["status"] == "available"
+    assert condition["status"] == "computed"
+    assert condition["row_count"] == 246
+    assert condition["column_count"] == 60
+    assert condition["rank"] >= 6
+    assert condition["effective_condition_number"] >= 1.0
