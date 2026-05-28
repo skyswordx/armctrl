@@ -7,7 +7,12 @@ from pathlib import Path
 from typing import Sequence
 
 from armctrl.recipes import RecipeCatalog
-from armctrl.online_id import OnlineIdentificationPolicy
+from armctrl.online_id import (
+    OnlineAuditRequest,
+    OnlineIdentificationAuditor,
+    OnlineIdentificationPolicy,
+    ParameterUpdate,
+)
 from armctrl.safety import SafetyGate
 from armctrl.sysid import SysIdPlanner, SysIdPlanRequest
 from armctrl.sysid_evidence import SysIdEvidenceImporter
@@ -101,6 +106,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     online_policy_parser = online_subparsers.add_parser("policy")
     online_policy_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    online_audit_parser = online_subparsers.add_parser("audit")
+    online_audit_parser.add_argument("--parameter", required=True)
+    online_audit_parser.add_argument("--value", type=float, required=True)
+    online_audit_parser.add_argument("--source", required=True)
+    online_audit_parser.add_argument("--window-start", type=float, required=True)
+    online_audit_parser.add_argument("--window-end", type=float, required=True)
+    online_audit_parser.add_argument("--residual-before", type=float, required=True)
+    online_audit_parser.add_argument("--residual-after", type=float, required=True)
+    online_audit_parser.add_argument("--saturation-status", required=True)
+    online_audit_parser.add_argument("--rollback-target", required=True)
+    online_audit_parser.add_argument("--output", required=True)
+    online_audit_parser.add_argument("--json", action="store_true", dest="as_json")
 
     args = parser.parse_args(argv)
     catalog = RecipeCatalog.default()
@@ -233,6 +251,26 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "online-id" and args.online_command == "policy":
         payload = {"status": "ok", **OnlineIdentificationPolicy.default().to_json()}
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "online-id" and args.online_command == "audit":
+        result = OnlineIdentificationAuditor.default().record(
+            OnlineAuditRequest(
+                update=ParameterUpdate(
+                    name=args.parameter,
+                    value=args.value,
+                    source=args.source,
+                ),
+                window_start_s=args.window_start,
+                window_end_s=args.window_end,
+                residual_before=args.residual_before,
+                residual_after=args.residual_after,
+                saturation_status=args.saturation_status,
+                rollback_target=args.rollback_target,
+                output_path=Path(args.output),
+            )
+        )
+        payload = {"status": "ok", **result.to_json()}
         return _emit(payload, as_json=args.as_json)
 
     parser.error("unsupported command")

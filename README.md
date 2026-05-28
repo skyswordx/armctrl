@@ -166,6 +166,26 @@ mass, center of mass, or inertia:
 uv run armctrl online-id policy --json
 ```
 
+Record a shadow-mode online update audit:
+
+```bash
+uv run armctrl online-id audit \
+  --parameter joint_2.viscous_friction \
+  --value 0.12 \
+  --source rolling_residual_window \
+  --window-start 12.0 \
+  --window-end 18.0 \
+  --residual-before 0.8 \
+  --residual-after 0.5 \
+  --saturation-status pass \
+  --rollback-target previous_parameter_bundle \
+  --output runs/online-id-audit.jsonl \
+  --json
+```
+
+The audit log is append-only JSONL and still requires manual promotion before
+any shadow update can affect control.
+
 ## Codex Skill
 
 The project-local Codex skill is stored at:
