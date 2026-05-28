@@ -26,6 +26,7 @@
 - 新增 `online-id audit`，以 append-only JSONL 记录 shadow 在线辨识更新窗口、残差变化、饱和检查、回滚目标和人工确认要求。
 - 新增 `recipe status` / `recipe cancel` 和显式 recipe command executor gate，Agent skill 只能通过受限 recipe CLI 触达动作。
 - 新增 `release status`，机器可读标注 `0.5.0` contracts complete / hardware pending 状态。
+- 新增 `sysid sdk-preflight`，只读检查 `arx5_interface` 导入状态和目标 model/interface，不打开 CAN、不移动硬件。
 
 ## [0.5.0] - Contract Complete, Hardware Pending
 

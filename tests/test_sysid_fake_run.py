@@ -93,3 +93,4 @@ def test_cli_sysid_run_sdk_is_rejected_until_runner_exists(tmp_path: Path) -> No
     assert completed.returncode == 3
     assert payload["status"] == "rejected"
     assert payload["reason"] == "only fake sysid runner is implemented in clean rebuild"
+    assert payload["next_gate"] == "run sysid sdk-preflight before enabling sdk runner"

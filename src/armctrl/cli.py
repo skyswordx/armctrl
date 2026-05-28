@@ -22,6 +22,7 @@ from armctrl.sysid_figaroh_adapter import FigarohEvidenceAdapter
 from armctrl.sysid_package import SysIdPackager
 from armctrl.sysid_postprocess import SysIdPostprocessor, SysIdPostprocessResult
 from armctrl.sysid_run import FakeSysIdRunner
+from armctrl.sysid_sdk import SdkPreflight
 from armctrl.sysid_solve import SysIdSolver
 
 
@@ -102,6 +103,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     sysid_figaroh_adapter_parser.add_argument("--input", required=True)
     sysid_figaroh_adapter_parser.add_argument("--output", required=True)
     sysid_figaroh_adapter_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+    )
+
+    sysid_sdk_preflight_parser = sysid_subparsers.add_parser("sdk-preflight")
+    sysid_sdk_preflight_parser.add_argument("--model", default="X5")
+    sysid_sdk_preflight_parser.add_argument("--interface", required=True)
+    sysid_sdk_preflight_parser.add_argument(
         "--json",
         action="store_true",
         dest="as_json",
@@ -229,6 +239,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "schema": "armctrl.sysid_run.v1",
                 "adapter": args.adapter,
                 "reason": "only fake sysid runner is implemented in clean rebuild",
+                "next_gate": "run sysid sdk-preflight before enabling sdk runner",
             }
             _emit(payload, as_json=args.as_json)
             return 3
@@ -282,6 +293,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "sysid" and args.sysid_command == "adapt-figaroh-evidence":
         result = FigarohEvidenceAdapter().run(Path(args.input), Path(args.output))
+        payload = {"status": "ok", **result.to_json()}
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "sysid" and args.sysid_command == "sdk-preflight":
+        result = SdkPreflight().run(model=args.model, interface=args.interface)
         payload = {"status": "ok", **result.to_json()}
         return _emit(payload, as_json=args.as_json)
 

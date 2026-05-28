@@ -110,6 +110,19 @@ uv run armctrl sysid run gravity_sweep \
 The fake runner writes `raw_samples.csv` and a run `manifest.json`. SDK/hardware
 runner support is still rejected in the clean rebuild.
 
+Check the SDK environment without moving hardware:
+
+```bash
+uv run armctrl sysid sdk-preflight \
+  --model X5 \
+  --interface can0 \
+  --json
+```
+
+This command is read-only. It checks `arx5_interface` importability and records
+the requested model/interface labels, but does not open CAN or instantiate robot
+objects.
+
 Postprocess a dataset:
 
 ```bash
