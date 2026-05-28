@@ -34,7 +34,8 @@
 - [ ] `sysid plan` 在实机运动前使用完整 FK/table collision model 拒绝不安全 planned trajectory。
 - [ ] `sysid run` 使用 ARX5 SDK 采集 gravity、friction、Fourier profile，并有 hold、damping、Ctrl-C 落态。
 - [x] `sysid solve` 接入可选 Pinocchio regressor，输出 rank 和条件数；缺依赖时结构化降级。
-- [ ] `sysid solve` 输出预测误差、基础参数和物理一致性指标。
+- [x] `sysid solve` 用 Pinocchio regressor 做 least-squares 回代并输出 prediction RMSE；缺依赖时结构化降级。
+- [ ] `sysid solve` 输出基础参数和物理一致性指标。
 - [ ] FIGAROH handoff 显式存在；本地不重写 FIGAROH 最优轨迹或物理一致性内部实现。
 - [ ] 只有质量门通过时才生成版本化参数包。
 

@@ -122,7 +122,8 @@ This writes `processed/solver_metrics.json` and
 data, records Pinocchio/FIGAROH module availability, and performs a fake-data
 residual smoke test. When Pinocchio is importable, it also builds the joint
 torque regressor from the dataset URDF and reports matrix rank plus effective
-condition number.
+condition number, then solves a least-squares parameter vector and reports
+prediction RMSE.
 
 ## Online Identification Policy
 

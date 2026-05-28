@@ -150,3 +150,68 @@ def test_sysid_solve_computes_pinocchio_regressor_metrics_when_backend_exists(
     assert condition["column_count"] == 60
     assert condition["rank"] >= 6
     assert condition["effective_condition_number"] >= 1.0
+
+
+def test_sysid_solve_reports_pinocchio_prediction_error_for_solved_parameters(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    dataset_dir = tmp_path / "ident-run"
+    _create_processed_dataset(dataset_dir)
+    processed_csv = dataset_dir / "processed" / "processed_samples.csv"
+
+    class FakeModel:
+        nq = 6
+        nv = 6
+
+        def createData(self):
+            return types.SimpleNamespace()
+
+    true_parameters = np.array([1.0, -2.0, 3.0, -4.0, 5.0, -6.0])
+
+    def compute_joint_torque_regressor(model, data, q, v, a):
+        base = np.zeros((model.nv, 60))
+        base[:, : model.nv] = np.eye(model.nv)
+        base[:, model.nv : 2 * model.nv] = np.diag(q)
+        data.jointTorqueRegressor = base
+        return base
+
+    fake_pinocchio = types.SimpleNamespace(
+        buildModelFromUrdf=lambda path: FakeModel(),
+        computeJointTorqueRegressor=compute_joint_torque_regressor,
+    )
+    monkeypatch.setitem(sys.modules, "pinocchio", fake_pinocchio)
+
+    rows = processed_csv.read_text(encoding="utf-8").splitlines()
+    header = rows[0].split(",")
+    rewritten_rows = [rows[0]]
+    for line in rows[1:]:
+        values = line.split(",")
+        row = dict(zip(header, values, strict=True))
+        q = np.array([float(row[f"q_proc_{index + 1}"]) for index in range(6)])
+        regressor = compute_joint_torque_regressor(
+            FakeModel(),
+            types.SimpleNamespace(),
+            q,
+            q * 0,
+            q * 0,
+        )
+        tau = regressor @ np.r_[true_parameters, np.zeros(54)]
+        for index, value in enumerate(tau, start=1):
+            row[f"tau_proc_{index}"] = f"{value:.9f}"
+        rewritten_rows.append(",".join(row[column] for column in header))
+    processed_csv.write_text("\n".join(rewritten_rows) + "\n", encoding="utf-8")
+
+    SysIdSolver().run(dataset_dir)
+
+    metrics = json.loads(
+        (dataset_dir / "processed" / "solver_metrics.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    prediction = metrics["prediction_error"]["pinocchio"]
+
+    assert prediction["status"] == "computed"
+    assert prediction["rmse_nm"] < 1e-8
+    assert prediction["sample_count"] == 41
+    assert prediction["parameter_count"] == 60
