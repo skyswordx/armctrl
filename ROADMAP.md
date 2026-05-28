@@ -41,10 +41,10 @@
 
 ### v0.5.0 - Agent Recipe And CLI Skill
 
-- [ ] 增加 recipe registry：`home`、`damping`、`hold-current`、`observe-front`、`pregrasp-table`、`retreat-safe`。
-- [ ] 所有可能动硬件的 recipe 都支持 plan-only。
-- [ ] 增加 JSON CLI：列出 recipe、dry-run、执行、取消、查看状态。
-- [ ] 编写 Codex CLI skill，只允许调用这些受限命令。
+- [x] 增加 recipe registry：`home`、`damping`、`hold-current`、`observe-front`、`pregrasp-table`、`retreat-safe`。
+- [x] 所有可能动硬件的 recipe 都支持 plan-only。
+- [x] 增加 JSON CLI：列出 recipe、dry-run、执行、取消、查看状态。
+- [x] 编写 Codex CLI skill，只允许调用这些受限命令。
 - [ ] 测试证明 Agent 路径不能绕过 safety gate 和 command executor。
 
 ### v0.6.0 - LeRobot Integration

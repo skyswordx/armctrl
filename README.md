@@ -70,5 +70,16 @@ mass, center of mass, or inertia:
 uv run armctrl online-id policy --json
 ```
 
+## Codex Skill
+
+The project-local Codex skill is stored at:
+
+```text
+.codex/skills/armctrl-agent-recipes/SKILL.md
+```
+
+It only allows Agents to inspect and plan bounded recipes through
+`uv run armctrl recipe ...`.
+
 The first clean milestone is `v0.2.0`: rebuild the governance, safety, and
 recipe contracts before reintroducing hardware-moving code.
