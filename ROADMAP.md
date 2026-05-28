@@ -14,6 +14,10 @@
 
 ## Release Track
 
+Current package version: `0.5.0`.
+
+Release readiness: `contracts_complete_hardware_pending`.
+
 ### v0.2.0 - Governance And Safety Boundary
 
 - [x] 保持 `README.md`、`ROADMAP.md`、`CHANGELOG.md`、`docs/README.md` 为唯一当前入口。

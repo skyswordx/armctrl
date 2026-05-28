@@ -25,6 +25,14 @@
 - 新增 `sysid adapt-figaroh-evidence`，把 FIGAROH-style report 规范化为 `armctrl.external_solver_evidence.v1`。
 - 新增 `online-id audit`，以 append-only JSONL 记录 shadow 在线辨识更新窗口、残差变化、饱和检查、回滚目标和人工确认要求。
 - 新增 `recipe status` / `recipe cancel` 和显式 recipe command executor gate，Agent skill 只能通过受限 recipe CLI 触达动作。
+- 新增 `release status`，机器可读标注 `0.5.0` contracts complete / hardware pending 状态。
+
+## [0.5.0] - Contract Complete, Hardware Pending
+
+### Status
+
+- Clean rebuild contracts through v0.5.0 are implemented and tested.
+- Hardware SDK runner, full FK/table collision, and n100d Pinocchio/FIGAROH validation remain pending.
 - 新增在线辨识 shadow-mode policy，限制在线更新只覆盖 torque bias、摩擦项和小幅 gravity residual。
 - 新增项目内 Codex skill: `.codex/skills/armctrl-agent-recipes/SKILL.md`，限制 Agent 只能通过 recipe CLI 查看和规划动作。
 

@@ -35,6 +35,16 @@ uv sync --extra dev
 uv run pytest -q
 ```
 
+Check the current clean rebuild release status:
+
+```bash
+uv run armctrl release status --json
+```
+
+Version `0.5.0` means the clean contracts through Agent recipes are present.
+Hardware execution, real SDK collection, and n100d Pinocchio/FIGAROH validation
+are still explicitly marked pending.
+
 ## Recipe Preview
 
 The clean rebuild starts with plan-only Agent recipes. These commands do not

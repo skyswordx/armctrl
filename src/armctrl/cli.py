@@ -8,6 +8,7 @@ from typing import Sequence
 
 from armctrl.recipes import RecipeCatalog
 from armctrl.recipe_executor import RecipeExecutor
+from armctrl.release_status import release_status
 from armctrl.online_id import (
     OnlineAuditRequest,
     OnlineIdentificationAuditor,
@@ -126,6 +127,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     online_audit_parser.add_argument("--rollback-target", required=True)
     online_audit_parser.add_argument("--output", required=True)
     online_audit_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    release_parser = subparsers.add_parser("release")
+    release_subparsers = release_parser.add_subparsers(
+        dest="release_command",
+        required=True,
+    )
+    release_status_parser = release_subparsers.add_parser("status")
+    release_status_parser.add_argument("--json", action="store_true", dest="as_json")
 
     args = parser.parse_args(argv)
     catalog = RecipeCatalog.default()
@@ -298,6 +307,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         )
         payload = {"status": "ok", **result.to_json()}
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "release" and args.release_command == "status":
+        payload = {"status": "ok", **release_status()}
         return _emit(payload, as_json=args.as_json)
 
     parser.error("unsupported command")
