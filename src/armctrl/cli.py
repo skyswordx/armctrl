@@ -42,6 +42,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     sysid_plan_parser.add_argument("--amplitude", type=float, default=0.1)
     sysid_plan_parser.add_argument("--q-center", nargs="+", type=float)
     sysid_plan_parser.add_argument("--urdf-path", default="configs/models/X5_camera.urdf")
+    sysid_plan_parser.add_argument("--safe-config", default="configs/x5.safe.yaml")
     sysid_plan_parser.add_argument("--output")
     sysid_plan_parser.add_argument("--json", action="store_true", dest="as_json")
 
@@ -110,6 +111,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     amplitude_rad=args.amplitude,
                     q_center=q_center,
                     urdf_path=args.urdf_path,
+                    safe_config_path=args.safe_config,
                     output_dir=Path(args.output),
                 )
             )

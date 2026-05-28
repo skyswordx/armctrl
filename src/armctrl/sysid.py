@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Iterable
 
 from armctrl.limits import UrdfJointLimits, evaluate_joint_limits
+from armctrl.workspace import WorkspaceSafetyConfig, evaluate_workspace_clearance
 
 
 @dataclass(frozen=True)
@@ -65,6 +66,7 @@ class SysIdPlanRequest:
     amplitude_rad: float
     q_center: tuple[float, ...]
     urdf_path: str
+    safe_config_path: str
     output_dir: Path
 
 
@@ -134,7 +136,16 @@ class SysIdPlanner:
             q_center=request.q_center,
             amplitude_rad=request.amplitude_rad,
         )
-        safety_allowed = plan.safety.allowed and limit_decision.status == "pass"
+        workspace_decision = evaluate_workspace_clearance(
+            WorkspaceSafetyConfig.from_yaml(Path(request.safe_config_path)),
+            q_center=request.q_center,
+            amplitude_rad=request.amplitude_rad,
+        )
+        safety_allowed = (
+            plan.safety.allowed
+            and limit_decision.status == "pass"
+            and workspace_decision.status == "pass"
+        )
 
         rows = _trajectory_rows(request)
         with trajectory_path.open("w", newline="", encoding="utf-8") as file:
@@ -152,20 +163,25 @@ class SysIdPlanner:
                 "amplitude_rad": request.amplitude_rad,
                 "q_center": list(request.q_center),
                 "urdf_path": request.urdf_path,
+                "safe_config_path": request.safe_config_path,
             },
             "safety": {
                 "allowed": safety_allowed,
-                "reason": (
-                    plan.safety.reason
-                    if safety_allowed
-                    else "planned trajectory violates URDF joint limits"
+                "reason": _safety_reason(
+                    plan_reason=plan.safety.reason,
+                    limit_status=limit_decision.status,
+                    workspace_status=workspace_decision.status,
                 ),
                 "checks": {
                     "urdf_limit_check": {
                         "status": limit_decision.status,
                         "violations": limit_decision.violations,
                     },
-                    "workspace_clearance_check": "not_evaluated",
+                    "workspace_clearance_check": {
+                        "status": workspace_decision.status,
+                        "method": "joint2_clearance_proxy",
+                        "violations": workspace_decision.violations,
+                    },
                     "hardware_execution": "not_requested",
                 },
             },
@@ -194,6 +210,11 @@ class SysIdPlanner:
                     "status": limit_decision.status,
                     "violation_count": len(limit_decision.violations),
                 },
+                "workspace_clearance_check": {
+                    "status": workspace_decision.status,
+                    "method": "joint2_clearance_proxy",
+                    "violation_count": len(workspace_decision.violations),
+                },
             },
         )
 
@@ -211,3 +232,16 @@ def _trajectory_rows(request: SysIdPlanRequest) -> list[dict[str, str]]:
             row[f"q_cmd_{joint_index + 1}"] = f"{center + offset:.6f}"
         rows.append(row)
     return rows
+
+
+def _safety_reason(
+    *,
+    plan_reason: str,
+    limit_status: str,
+    workspace_status: str,
+) -> str:
+    if limit_status == "fail":
+        return "planned trajectory violates URDF joint limits"
+    if workspace_status == "fail":
+        return "planned trajectory violates workspace clearance proxy"
+    return plan_reason

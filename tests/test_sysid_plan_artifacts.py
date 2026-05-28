@@ -33,6 +33,8 @@ def test_cli_sysid_plan_writes_manifest_and_trajectory(tmp_path: Path) -> None:
             "0",
             "--urdf-path",
             "configs/models/X5_camera.urdf",
+            "--safe-config",
+            "configs/x5.safe.yaml",
             "--output",
             str(output_dir),
             "--json",
@@ -57,6 +59,7 @@ def test_cli_sysid_plan_writes_manifest_and_trajectory(tmp_path: Path) -> None:
     assert manifest["profile"]["name"] == "gravity_sweep"
     assert manifest["safety"]["allowed"] is True
     assert manifest["safety"]["checks"]["urdf_limit_check"]["status"] == "pass"
+    assert manifest["safety"]["checks"]["workspace_clearance_check"]["status"] == "pass"
     assert manifest["handoff"]["solver_backends"] == ["pinocchio", "figaroh"]
 
     with trajectory_path.open(newline="", encoding="utf-8") as file:
@@ -130,3 +133,43 @@ def test_cli_sysid_plan_manifest_records_urdf_limit_failure(tmp_path: Path) -> N
     assert manifest["safety"]["allowed"] is False
     assert manifest["safety"]["checks"]["urdf_limit_check"]["status"] == "fail"
     assert manifest["safety"]["checks"]["urdf_limit_check"]["violations"][0]["joint_index"] == 2
+
+
+def test_cli_sysid_plan_manifest_records_workspace_clearance_failure(tmp_path: Path) -> None:
+    output_dir = tmp_path / "ident-plan"
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "sysid",
+            "plan",
+            "gravity_sweep",
+            "--q-center",
+            "0",
+            "0",
+            "0.3",
+            "0",
+            "0",
+            "0",
+            "--amplitude",
+            "0.2",
+            "--safe-config",
+            "configs/x5.safe.yaml",
+            "--output",
+            str(output_dir),
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+
+    assert payload["artifact_safety"]["allowed"] is False
+    assert payload["artifact_safety"]["workspace_clearance_check"]["status"] == "fail"
+    assert manifest["safety"]["allowed"] is False
+    assert manifest["safety"]["checks"]["workspace_clearance_check"]["violations"][0]["check"] == "min_clearance_proxy"

@@ -75,8 +75,9 @@ uv run armctrl sysid plan gravity_sweep \
 ```
 
 This writes `planned_trajectory.csv` and `manifest.json`. URDF joint-limit
-checks are evaluated from `--urdf-path`; workspace clearance is still marked
-`not_evaluated` until the table/workcell model is rebuilt.
+checks are evaluated from `--urdf-path`; workspace clearance currently uses a
+conservative joint2 clearance proxy from `--safe-config`. A full FK/table
+collision model is still pending before hardware execution can be enabled.
 
 ## Online Identification Policy
 
