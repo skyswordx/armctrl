@@ -8,6 +8,7 @@
 
 - 新建 clean rebuild 分支入口，只保留 roadmap、changelog、文档索引、vendor 和 uv 配置作为重构基线。
 - 明确 `armctrl` 与 ARX5 SDK、Pinocchio、FIGAROH、LeRobot ARX5 集成的职责边界。
+- 新增第一版 plan-only Agent recipe catalog 和 JSON CLI 预览入口。
 
 ### Changed
 

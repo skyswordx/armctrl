@@ -35,5 +35,15 @@ uv sync --extra dev
 uv run pytest -q
 ```
 
+## Recipe Preview
+
+The clean rebuild starts with plan-only Agent recipes. These commands do not
+connect to hardware:
+
+```bash
+uv run python -m armctrl.cli recipe list --json
+uv run python -m armctrl.cli recipe plan home --json
+```
+
 The first clean milestone is `v0.2.0`: rebuild the governance, safety, and
 recipe contracts before reintroducing hardware-moving code.
