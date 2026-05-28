@@ -39,13 +39,15 @@ Check the current clean rebuild release status:
 
 ```bash
 uv run armctrl release status --json
+uv run armctrl release notes --json
 ```
 
 Version `0.5.0` means the clean contracts through Agent recipes are present.
 Hardware execution, real SDK collection, and n100d Pinocchio/FIGAROH validation
 are still explicitly marked pending. The JSON includes local verification
 commands plus separate `deferred_validation` buckets for hardware, external
-tools, and geometry upgrades.
+tools, and geometry upgrades. Release notes are generated from the same status
+surface, so the repository does not need another release-note document.
 
 ## Recipe Preview
 

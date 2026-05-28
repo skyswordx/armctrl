@@ -68,3 +68,40 @@ def release_status() -> dict[str, object]:
             "Parameter packages require package-gated solver evidence before rollout.",
         ],
     }
+
+
+def release_notes() -> dict[str, object]:
+    status = release_status()
+    included = [
+        "governance and safety boundary",
+        "offline SysID loop contracts",
+        "conservative online identification policy",
+        "Agent recipe CLI skill",
+    ]
+    deferred = list(status["hardware_pending"])
+    title = "armctrl 0.5.0 clean rebuild"
+    summary = (
+        "contracts_complete_hardware_pending: local contracts through v0.5.0 "
+        "are implemented, while real hardware and n100d external-tool validation "
+        "remain deferred."
+    )
+    markdown = (
+        f"# {title}\n\n"
+        f"{summary}\n\n"
+        "## Included\n"
+        + "\n".join(f"- {item}" for item in included)
+        + "\n\n## Deferred Validation\n"
+        + "\n".join(f"- {item}" for item in deferred)
+        + "\n"
+    )
+    return {
+        "schema": "armctrl.release_notes.v1",
+        "version": status["version"],
+        "title": title,
+        "summary": summary,
+        "sections": {
+            "included": included,
+            "deferred": deferred,
+        },
+        "markdown": markdown,
+    }

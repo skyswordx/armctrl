@@ -39,3 +39,28 @@ def test_cli_release_status_reports_contract_complete_and_hardware_pending() -> 
     assert payload["deferred_validation"]["requires_external_tool"] == [
         "n100d_pinocchio_figaroh_validation",
     ]
+
+
+def test_cli_release_notes_reports_v050_candidate_summary() -> None:
+    completed = subprocess.run(
+        [sys.executable, "-m", "armctrl.cli", "release", "notes", "--json"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+
+    assert payload["status"] == "ok"
+    assert payload["schema"] == "armctrl.release_notes.v1"
+    assert payload["version"] == "0.5.0"
+    assert payload["title"] == "armctrl 0.5.0 clean rebuild"
+    assert "contracts_complete_hardware_pending" in payload["summary"]
+    assert payload["sections"]["included"] == [
+        "governance and safety boundary",
+        "offline SysID loop contracts",
+        "conservative online identification policy",
+        "Agent recipe CLI skill",
+    ]
+    assert "real_sdk_runner" in payload["sections"]["deferred"]
+    assert payload["markdown"].startswith("# armctrl 0.5.0 clean rebuild")
