@@ -125,6 +125,18 @@ torque regressor from the dataset URDF and reports matrix rank plus effective
 condition number, then solves a least-squares parameter vector and reports
 prediction RMSE.
 
+Gate a candidate parameter package:
+
+```bash
+uv run armctrl sysid package \
+  --dataset runs/ident-fake \
+  --json
+```
+
+`sysid package` refuses to write `processed/parameter_package.json` unless the
+solver metrics include Pinocchio condition and prediction-error evidence plus
+FIGAROH/base-parameter and physical-consistency evidence.
+
 ## Online Identification Policy
 
 Online identification is currently a shadow-mode policy contract. It allows

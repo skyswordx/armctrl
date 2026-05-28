@@ -10,6 +10,7 @@ from armctrl.recipes import RecipeCatalog
 from armctrl.online_id import OnlineIdentificationPolicy
 from armctrl.safety import SafetyGate
 from armctrl.sysid import SysIdPlanner, SysIdPlanRequest
+from armctrl.sysid_package import SysIdPackager
 from armctrl.sysid_postprocess import SysIdPostprocessor, SysIdPostprocessResult
 from armctrl.sysid_run import FakeSysIdRunner
 from armctrl.sysid_solve import SysIdSolver
@@ -70,6 +71,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     sysid_solve_parser = sysid_subparsers.add_parser("solve")
     sysid_solve_parser.add_argument("--dataset", required=True)
     sysid_solve_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    sysid_package_parser = sysid_subparsers.add_parser("package")
+    sysid_package_parser.add_argument("--dataset", required=True)
+    sysid_package_parser.add_argument("--json", action="store_true", dest="as_json")
 
     online_parser = subparsers.add_parser("online-id")
     online_subparsers = online_parser.add_subparsers(
@@ -191,6 +196,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = SysIdSolver().run(Path(args.dataset))
         payload = {"status": "ok", **result.to_json()}
         return _emit(payload, as_json=args.as_json)
+
+    if args.command == "sysid" and args.sysid_command == "package":
+        result = SysIdPackager().run(Path(args.dataset))
+        payload = {"status": result.status, **result.to_json()}
+        _emit(payload, as_json=args.as_json)
+        return 0 if result.status == "ok" else 3
 
     if args.command == "online-id" and args.online_command == "policy":
         payload = {"status": "ok", **OnlineIdentificationPolicy.default().to_json()}

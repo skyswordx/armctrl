@@ -20,6 +20,7 @@
 - 新增 `sysid postprocess --solve`，让后处理完成后可以直接运行固定 solver 阶段并返回 solver 产物。
 - 新增可选 Pinocchio regressor rank/condition 指标；无 Pinocchio 环境时保持结构化降级。
 - 新增可选 Pinocchio least-squares prediction RMSE 指标，用于验证 `Y*pi -> tau_pred -> residual` 链路。
+- 新增 `sysid package` 质量门；缺少 Pinocchio、FIGAROH/base-parameter 或物理一致性证据时拒绝生成候选参数包。
 - 新增在线辨识 shadow-mode policy，限制在线更新只覆盖 torque bias、摩擦项和小幅 gravity residual。
 - 新增项目内 Codex skill: `.codex/skills/armctrl-agent-recipes/SKILL.md`，限制 Agent 只能通过 recipe CLI 查看和规划动作。
 
