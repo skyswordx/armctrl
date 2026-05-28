@@ -140,6 +140,11 @@ FIGAROH/base-parameter and physical-consistency evidence.
 Import external solver evidence from FIGAROH or manual review:
 
 ```bash
+uv run armctrl sysid adapt-figaroh-evidence \
+  --input figaroh-report.json \
+  --output figaroh-evidence.json \
+  --json
+
 uv run armctrl sysid import-evidence \
   --dataset runs/ident-fake \
   --evidence figaroh-evidence.json \

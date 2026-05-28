@@ -11,6 +11,7 @@ from armctrl.online_id import OnlineIdentificationPolicy
 from armctrl.safety import SafetyGate
 from armctrl.sysid import SysIdPlanner, SysIdPlanRequest
 from armctrl.sysid_evidence import SysIdEvidenceImporter
+from armctrl.sysid_figaroh_adapter import FigarohEvidenceAdapter
 from armctrl.sysid_package import SysIdPackager
 from armctrl.sysid_postprocess import SysIdPostprocessor, SysIdPostprocessResult
 from armctrl.sysid_run import FakeSysIdRunner
@@ -81,6 +82,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     sysid_evidence_parser.add_argument("--dataset", required=True)
     sysid_evidence_parser.add_argument("--evidence", required=True)
     sysid_evidence_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    sysid_figaroh_adapter_parser = sysid_subparsers.add_parser(
+        "adapt-figaroh-evidence"
+    )
+    sysid_figaroh_adapter_parser.add_argument("--input", required=True)
+    sysid_figaroh_adapter_parser.add_argument("--output", required=True)
+    sysid_figaroh_adapter_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+    )
 
     online_parser = subparsers.add_parser("online-id")
     online_subparsers = online_parser.add_subparsers(
@@ -211,6 +223,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "sysid" and args.sysid_command == "import-evidence":
         result = SysIdEvidenceImporter().run(Path(args.dataset), Path(args.evidence))
+        payload = {"status": "ok", **result.to_json()}
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "sysid" and args.sysid_command == "adapt-figaroh-evidence":
+        result = FigarohEvidenceAdapter().run(Path(args.input), Path(args.output))
         payload = {"status": "ok", **result.to_json()}
         return _emit(payload, as_json=args.as_json)
 
