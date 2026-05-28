@@ -1,0 +1,25 @@
+# Changelog
+
+本文件记录 `armctrl` 的用户可见变更。
+
+## [Unreleased]
+
+### Added
+
+- 新建 clean rebuild 分支入口，只保留 roadmap、changelog、文档索引、vendor 和 uv 配置作为重构基线。
+- 明确 `armctrl` 与 ARX5 SDK、Pinocchio、FIGAROH、LeRobot ARX5 集成的职责边界。
+
+### Changed
+
+- 停止在旧实验实现上继续叠加功能，后续按 `v0.2.0` 到 `v0.5.0` 小 milestone 重新实现。
+
+## [0.1.0] - Historical Baseline
+
+### Added
+
+- 历史 `develop`/`feature/subsystem` 分支包含初始 SDK adapter、安全检查、teleop、SysID 轨迹生成、采集、后处理和 solver 报告实验。
+
+### Known Gaps
+
+- 历史实现边界不清，容易重复 LeRobot、FIGAROH 和 ARX5 SDK 的成熟能力。
+- 历史文档较多，当前工作以 `ROADMAP.md` 为主线。

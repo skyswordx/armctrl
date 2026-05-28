@@ -8,15 +8,17 @@ version = "0.1.0"
 description = "Safe ARX5 arm control interface for Roboclaw"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+  "arx5-interface==0.1.2; sys_platform == 'linux'",
+  "figaroh==0.3.1; sys_platform == 'linux'",
+  "pin==4.0.0; sys_platform == 'linux'",
+  "scipy>=1.13",
+]
 
 [project.optional-dependencies]
 dev = [
   "pytest>=8.2",
 ]
-
-[project.scripts]
-arx5ctl = "armctrl.cli.arx5ctl:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
