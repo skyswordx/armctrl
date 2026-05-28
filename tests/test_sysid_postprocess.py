@@ -85,3 +85,37 @@ def test_cli_sysid_postprocess_writes_processed_samples_and_quality(tmp_path: Pa
     assert len(rows) == 41
     assert "q_proc_6" in rows[0]
     assert "tau_proc_6" in rows[0]
+
+
+def test_cli_sysid_postprocess_can_run_solver_stage(tmp_path: Path) -> None:
+    dataset_dir = tmp_path / "ident-run"
+    _create_fake_dataset(dataset_dir)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "sysid",
+            "postprocess",
+            "--dataset",
+            str(dataset_dir),
+            "--solve",
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+    solver_metrics = dataset_dir / "processed" / "solver_metrics.json"
+    solver_report = dataset_dir / "processed" / "solver_report_zh.md"
+
+    assert payload["status"] == "ok"
+    assert payload["schema"] == "armctrl.sysid_postprocess.v1"
+    assert payload["solver"]["schema"] == "armctrl.sysid_solve.v1"
+    assert payload["solver"]["artifacts"]["solver_metrics"] == str(solver_metrics)
+    assert payload["solver"]["artifacts"]["solver_report"] == str(solver_report)
+    assert solver_metrics.exists()
+    assert solver_report.exists()

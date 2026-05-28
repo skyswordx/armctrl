@@ -101,11 +101,13 @@ Postprocess a dataset:
 ```bash
 uv run armctrl sysid postprocess \
   --dataset runs/ident-fake \
+  --solve \
   --json
 ```
 
 This writes `processed/processed_samples.csv`,
-`processed/quality_metrics.json`, and `processed/quality_report.md`.
+`processed/quality_metrics.json`, `processed/quality_report.md`, and, with
+`--solve`, the fixed solver handoff artifacts.
 
 Run the fixed solver handoff stage:
 

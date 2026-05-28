@@ -30,6 +30,7 @@
 - [x] `sysid run --adapter fake` 生成 `raw_samples.csv` 和 run manifest。
 - [x] `sysid postprocess` 输出清洗数据、质量指标和 Markdown 报告。
 - [x] `sysid solve` 输出固定 solver 阶段产物、Pinocchio/FIGAROH 可用性和 fake 数据残差冒烟检查。
+- [x] `sysid postprocess --solve` 支持后处理后立即运行固定 solver 阶段。
 - [ ] `sysid plan` 在实机运动前使用完整 FK/table collision model 拒绝不安全 planned trajectory。
 - [ ] `sysid run` 使用 ARX5 SDK 采集 gravity、friction、Fourier profile，并有 hold、damping、Ctrl-C 落态。
 - [ ] `sysid solve` 接入真实 Pinocchio regressor，输出 rank、条件数、预测误差和物理一致性指标。

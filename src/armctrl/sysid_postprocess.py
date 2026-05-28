@@ -11,13 +11,17 @@ class SysIdPostprocessResult:
     schema: str
     sample_count: int
     artifacts: dict[str, str]
+    solver: dict[str, object] | None = None
 
     def to_json(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "schema": self.schema,
             "sample_count": self.sample_count,
             "artifacts": self.artifacts,
         }
+        if self.solver is not None:
+            payload["solver"] = self.solver
+        return payload
 
 
 class SysIdPostprocessor:
