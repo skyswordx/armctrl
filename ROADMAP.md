@@ -37,6 +37,7 @@ Release readiness: `contracts_complete_hardware_pending`.
 - [x] `sysid postprocess --solve` 支持后处理后立即运行固定 solver 阶段。
 - [ ] `sysid plan` 在实机运动前使用完整 FK/table collision model 拒绝不安全 planned trajectory。
 - [x] `sysid sdk-preflight` 只读检查 SDK 环境，不打开 CAN、不实例化硬件对象。
+- [x] `sysid sdk-handshake-plan` 只读固定实机采集前确认、hold/damping、记录时序和 Ctrl-C/fault 落态契约。
 - [ ] `sysid run` 使用 ARX5 SDK 采集 gravity、friction、Fourier profile，并有 hold、damping、Ctrl-C 落态。
 - [x] `sysid solve` 接入可选 Pinocchio regressor，输出 rank 和条件数；缺依赖时结构化降级。
 - [x] `sysid solve` 用 Pinocchio regressor 做 least-squares 回代并输出 prediction RMSE；缺依赖时结构化降级。

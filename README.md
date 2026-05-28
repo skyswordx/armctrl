@@ -123,6 +123,19 @@ This command is read-only. It checks `arx5_interface` importability and records
 the requested model/interface labels, but does not open CAN or instantiate robot
 objects.
 
+Preview the required SDK collection handshake before any real runner exists:
+
+```bash
+uv run armctrl sysid sdk-handshake-plan \
+  --model X5 \
+  --interface can0 \
+  --json
+```
+
+This is also read-only. It fixes the future hardware sequence as: preflight,
+explicit operator confirmation, enter hold/damping, start recording only after a
+safe state, and land Ctrl-C or faults in damping.
+
 Postprocess a dataset:
 
 ```bash

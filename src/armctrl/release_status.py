@@ -33,6 +33,7 @@ def release_status() -> dict[str, object]:
             "full_fk_table_collision_model",
             "real_sdk_runner",
             "sdk_preflight_on_target_linux",
+            "sdk_handshake_plan_on_target_linux",
             "hold_damping_ctrl_c_hardware_landing",
             "n100d_pinocchio_figaroh_validation",
             "hardware_ab_control_benefit_test",

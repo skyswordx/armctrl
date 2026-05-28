@@ -35,6 +35,80 @@ class SdkPreflight:
         )
 
 
+@dataclass(frozen=True)
+class SdkHandshakeStep:
+    name: str
+    purpose: str
+    movement_allowed: bool
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "purpose": self.purpose,
+            "movement_allowed": self.movement_allowed,
+        }
+
+
+@dataclass(frozen=True)
+class SdkHandshakePlanResult:
+    model: str
+    interface: str
+    steps: tuple[SdkHandshakeStep, ...]
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "schema": "armctrl.sysid_sdk_handshake_plan.v1",
+            "model": self.model,
+            "interface": self.interface,
+            "read_only": True,
+            "movement_allowed": False,
+            "requires_confirm": "I UNDERSTAND THIS WILL MOVE THE ARM",
+            "fault_landing_mode": "damping",
+            "steps": [step.to_json() for step in self.steps],
+            "next_gate": "real_sdk_runner_pending",
+            "notes": [
+                "handshake planning is read-only and does not import or instantiate the SDK",
+                "real collection must enter a verified hold or damping state before recording",
+                "faults and Ctrl-C must land in damping before any SDK runner can be enabled",
+            ],
+        }
+
+
+class SdkHandshakePlanner:
+    def plan(self, *, model: str, interface: str) -> SdkHandshakePlanResult:
+        return SdkHandshakePlanResult(
+            model=model,
+            interface=interface,
+            steps=(
+                SdkHandshakeStep(
+                    name="sdk_preflight",
+                    purpose="check SDK availability and requested labels without opening CAN",
+                    movement_allowed=False,
+                ),
+                SdkHandshakeStep(
+                    name="operator_confirm",
+                    purpose="require explicit human confirmation before any future motion command",
+                    movement_allowed=False,
+                ),
+                SdkHandshakeStep(
+                    name="enter_hold_or_damping",
+                    purpose="land the arm in a known safe controller state before collection",
+                    movement_allowed=False,
+                ),
+                SdkHandshakeStep(
+                    name="start_recording_after_safe_state",
+                    purpose="start logs only after the safe state is reached and verified",
+                    movement_allowed=False,
+                ),
+                SdkHandshakeStep(
+                    name="fault_or_ctrl_c_to_damping",
+                    purpose="route interruption and controller faults to damping",
+                    movement_allowed=False,
+                ),
+            ),
+        )
+
+
 def _module_status(module_name: str) -> dict[str, str]:
     spec = importlib.util.find_spec(module_name)
     return {
