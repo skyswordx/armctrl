@@ -34,9 +34,9 @@
 
 ### v0.4.0 - Conservative Online Identification
 
-- [ ] 在线估计第一版只允许更新 torque bias、viscous friction、Coulomb friction 和小幅 gravity residual。
-- [ ] 质量、质心、惯量等完整刚体参数继续保持离线辨识。
-- [ ] 在线更新先进入 shadow mode，不直接影响控制命令。
+- [x] 在线估计第一版只允许更新 torque bias、viscous friction、Coulomb friction 和小幅 gravity residual。
+- [x] 质量、质心、惯量等完整刚体参数继续保持离线辨识。
+- [x] 在线更新先进入 shadow mode，不直接影响控制命令。
 - [ ] 每次在线更新必须记录数据窗口、残差变化、饱和检查、回滚目标和人工确认。
 
 ### v0.5.0 - Agent Recipe And CLI Skill

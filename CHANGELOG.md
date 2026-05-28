@@ -11,6 +11,7 @@
 - 新增第一版 plan-only Agent recipe catalog 和 JSON CLI 预览入口。
 - 新增结构化 recipe execute 拒绝语义，防止在没有后端和安全合同前误触硬件执行。
 - 新增 plan-only SysID planner，输出 gravity/friction/Fourier profile 与 Pinocchio/FIGAROH/LeRobot handoff 合同。
+- 新增在线辨识 shadow-mode policy，限制在线更新只覆盖 torque bias、摩擦项和小幅 gravity residual。
 
 ### Changed
 

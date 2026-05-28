@@ -6,6 +6,7 @@ import sys
 from typing import Sequence
 
 from armctrl.recipes import RecipeCatalog
+from armctrl.online_id import OnlineIdentificationPolicy
 from armctrl.safety import SafetyGate
 from armctrl.sysid import SysIdPlanner
 
@@ -35,6 +36,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     sysid_plan_parser.add_argument("profile")
     sysid_plan_parser.add_argument("--execute", action="store_true")
     sysid_plan_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    online_parser = subparsers.add_parser("online-id")
+    online_subparsers = online_parser.add_subparsers(
+        dest="online_command",
+        required=True,
+    )
+    online_policy_parser = online_subparsers.add_parser("policy")
+    online_policy_parser.add_argument("--json", action="store_true", dest="as_json")
 
     args = parser.parse_args(argv)
     catalog = RecipeCatalog.default()
@@ -76,6 +85,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "sysid" and args.sysid_command == "plan":
         plan = SysIdPlanner.default().plan(args.profile, execute=args.execute)
         payload = {"status": "ok", **plan.to_json()}
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "online-id" and args.online_command == "policy":
+        payload = {"status": "ok", **OnlineIdentificationPolicy.default().to_json()}
         return _emit(payload, as_json=args.as_json)
 
     parser.error("unsupported command")

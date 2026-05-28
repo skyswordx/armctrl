@@ -60,5 +60,15 @@ uv run armctrl sysid plan friction_sweep --json
 uv run armctrl sysid plan fourier_multisine --json
 ```
 
+## Online Identification Policy
+
+Online identification is currently a shadow-mode policy contract. It allows
+only conservative residual parameters and forbids direct online updates to
+mass, center of mass, or inertia:
+
+```bash
+uv run armctrl online-id policy --json
+```
+
 The first clean milestone is `v0.2.0`: rebuild the governance, safety, and
 recipe contracts before reintroducing hardware-moving code.
