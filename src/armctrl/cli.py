@@ -21,7 +21,7 @@ from armctrl.sysid_evidence import SysIdEvidenceImporter
 from armctrl.sysid_figaroh_adapter import FigarohEvidenceAdapter
 from armctrl.sysid_package import SysIdPackager
 from armctrl.sysid_postprocess import SysIdPostprocessor, SysIdPostprocessResult
-from armctrl.sysid_run import FakeSysIdRunner
+from armctrl.sysid_run import FakeSysIdRunner, SdkSysIdRunnerGate
 from armctrl.sysid_sdk import SdkHandshakePlanner, SdkPreflight
 from armctrl.sysid_solve import SysIdSolver
 
@@ -243,13 +243,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "sysid" and args.sysid_command == "run":
         if args.adapter != "fake":
-            payload = {
-                "status": "rejected",
-                "schema": "armctrl.sysid_run.v1",
-                "adapter": args.adapter,
-                "reason": "only fake sysid runner is implemented in clean rebuild",
-                "next_gate": "run sysid sdk-preflight before enabling sdk runner",
-            }
+            payload = SdkSysIdRunnerGate().reject_without_confirmation(
+                adapter=args.adapter,
+            )
             _emit(payload, as_json=args.as_json)
             return 3
         q_center = tuple(args.q_center or [0.0] * args.dof)

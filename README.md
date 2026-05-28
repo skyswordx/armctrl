@@ -109,8 +109,11 @@ uv run armctrl sysid run gravity_sweep \
   --json
 ```
 
-The fake runner writes `raw_samples.csv` and a run `manifest.json`. SDK/hardware
-runner support is still rejected in the clean rebuild.
+The fake runner writes `raw_samples.csv` and a run `manifest.json`.
+`--adapter sdk` remains rejected from the public CLI unless the exact operator
+confirmation is present and a verified backend is configured. Internally the SDK
+runner skeleton is tested with an injected backend: it enters hold/damping before
+recording and always lands in damping on completion or failure.
 
 Check the SDK environment without moving hardware:
 

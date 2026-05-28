@@ -17,6 +17,7 @@
 - 新增 workspace/table clearance 的第一版保守 proxy 检查，读取 `configs/x5.safe.yaml` 并在 stdout/manifest 中记录 pass/fail。
 - 新增 URDF frame-level FK/table clearance 检查，替换旧 joint2 proxy，并在 manifest 中记录 `urdf_fk_frame_clearance`。
 - 新增 `sysid run --adapter fake`，可生成 `raw_samples.csv` 和 run manifest，用于恢复无硬件数据链路。
+- 新增可注入 SDK SysID runner 骨架，测试覆盖 hold/damping 后开始记录以及完成/故障落 damping；公共 CLI 仍默认拒绝真硬件。
 - 新增 `sysid postprocess`，从 fake/raw dataset 生成 `processed_samples.csv`、`quality_metrics.json` 和 `quality_report.md`。
 - 新增 `sysid solve`，从 processed dataset 生成 `solver_metrics.json` 和 `solver_report_zh.md`，并记录 Pinocchio/FIGAROH 可用性。
 - 新增 `sysid postprocess --solve`，让后处理完成后可以直接运行固定 solver 阶段并返回 solver 产物。

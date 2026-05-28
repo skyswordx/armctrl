@@ -4,6 +4,32 @@ import subprocess
 import sys
 from pathlib import Path
 
+from armctrl.sysid import SysIdPlanRequest
+from armctrl.sysid_run import SdkSysIdRunner, SDK_CONFIRMATION
+
+
+class RecordingBackend:
+    def __init__(self) -> None:
+        self.events: list[str] = []
+
+    def enter_hold_or_damping(self) -> None:
+        self.events.append("enter_hold_or_damping")
+
+    def read_samples(self, request: SysIdPlanRequest) -> list[dict[str, str]]:
+        self.events.append("read_samples")
+        return [
+            {
+                "time_s": "0.000000",
+                **{f"q_cmd_{index + 1}": "0.000000" for index in range(request.dof)},
+                **{f"q_{index + 1}": "0.000000" for index in range(request.dof)},
+                **{f"dq_{index + 1}": "0.000000" for index in range(request.dof)},
+                **{f"tau_meas_{index + 1}": "0.000000" for index in range(request.dof)},
+            }
+        ]
+
+    def enter_damping(self) -> None:
+        self.events.append("enter_damping")
+
 
 def test_cli_sysid_run_fake_writes_raw_samples_and_manifest(tmp_path: Path) -> None:
     output_dir = tmp_path / "ident-run"
@@ -92,5 +118,44 @@ def test_cli_sysid_run_sdk_is_rejected_until_runner_exists(tmp_path: Path) -> No
 
     assert completed.returncode == 3
     assert payload["status"] == "rejected"
-    assert payload["reason"] == "only fake sysid runner is implemented in clean rebuild"
-    assert payload["next_gate"] == "run sysid sdk-preflight before enabling sdk runner"
+    assert payload["reason"] == "sdk sysid runner requires explicit operator confirmation"
+    assert payload["requires_confirm"] == "I UNDERSTAND THIS WILL MOVE THE ARM"
+    assert payload["movement_allowed"] is False
+    assert payload["fault_landing_mode"] == "damping"
+    assert payload["recording_starts_after_safe_state"] is True
+    assert payload["next_gate"] == "run sysid sdk-handshake-plan before enabling sdk runner"
+
+
+def test_sdk_sysid_runner_starts_recording_after_safe_state_and_lands_damping(
+    tmp_path: Path,
+) -> None:
+    backend = RecordingBackend()
+    request = SysIdPlanRequest(
+        profile_name="gravity_sweep",
+        dof=6,
+        sample_hz=20,
+        duration_s=1,
+        amplitude_rad=0.1,
+        q_center=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
+        urdf_path="configs/models/X5_camera.urdf",
+        safe_config_path="configs/x5.safe.yaml",
+        output_dir=tmp_path / "ident-sdk",
+    )
+
+    result = SdkSysIdRunner(backend=backend).run(
+        request,
+        confirm=SDK_CONFIRMATION,
+    )
+
+    manifest = json.loads((request.output_dir / "manifest.json").read_text(encoding="utf-8"))
+
+    assert result.adapter == "sdk"
+    assert backend.events == [
+        "enter_hold_or_damping",
+        "read_samples",
+        "enter_damping",
+    ]
+    assert manifest["adapter"] == "sdk"
+    assert manifest["safety"]["recording_starts_after_safe_state"] is True
+    assert manifest["safety"]["fault_landing_mode"] == "damping"
+    assert manifest["safety"]["movement_allowed"] is True
