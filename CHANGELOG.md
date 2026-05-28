@@ -22,6 +22,7 @@
 - 新增 `sysid postprocess --solve`，让后处理完成后可以直接运行固定 solver 阶段并返回 solver 产物。
 - 新增可选 Pinocchio regressor rank/condition 指标；无 Pinocchio 环境时保持结构化降级。
 - 新增可选 Pinocchio least-squares prediction RMSE 指标，用于验证 `Y*pi -> tau_pred -> residual` 链路。
+- 新增 solver 固定输出物理一致性和 FIGAROH 基础参数 gate 字段；未导入外部证据前为 `not_evaluated`。
 - 新增 `sysid package` 质量门；缺少 Pinocchio、FIGAROH/base-parameter 或物理一致性证据时拒绝生成候选参数包。
 - 新增候选参数包版本、SHA-256 签名、回滚目标和上线前 A/B 验证记录。
 - 新增 `sysid import-evidence`，把 FIGAROH/外部物理一致性和基础参数证据导入 solver metrics，供参数包质量门消费。

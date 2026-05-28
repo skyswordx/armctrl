@@ -42,7 +42,7 @@ Release readiness: `contracts_complete_hardware_pending`.
 - [ ] `sysid run` 使用 ARX5 SDK 采集 gravity、friction、Fourier profile，并有 hold、damping、Ctrl-C 落态。
 - [x] `sysid solve` 接入可选 Pinocchio regressor，输出 rank 和条件数；缺依赖时结构化降级。
 - [x] `sysid solve` 用 Pinocchio regressor 做 least-squares 回代并输出 prediction RMSE；缺依赖时结构化降级。
-- [ ] `sysid solve` 输出基础参数和物理一致性指标。
+- [x] `sysid solve` 固定输出基础参数和物理一致性 gate 字段，缺外部证据时标为 `not_evaluated`。
 - [x] FIGAROH/外部工具证据可通过 `sysid import-evidence` 导入，并被 package gate 消费。
 - [x] `sysid adapt-figaroh-evidence` 将 FIGAROH-style report 规范化为 armctrl external evidence。
 - [ ] 本地不重写 FIGAROH 最优轨迹或物理一致性内部实现，只继续补官方工具输出适配器。

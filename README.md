@@ -165,7 +165,9 @@ data, records Pinocchio/FIGAROH module availability, and performs a fake-data
 residual smoke test. When Pinocchio is importable, it also builds the joint
 torque regressor from the dataset URDF and reports matrix rank plus effective
 condition number, then solves a least-squares parameter vector and reports
-prediction RMSE.
+prediction RMSE. Physical-consistency and base-parameter gates are always present
+in `solver_metrics.json`; `sysid solve` marks them `not_evaluated` until FIGAROH
+or manual-review evidence is imported.
 
 Gate a candidate parameter package:
 

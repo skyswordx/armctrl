@@ -63,6 +63,14 @@ class SysIdSolver:
             "backend_status": backend_status,
             "regressor_condition": regressor_condition,
             "prediction_error": prediction_error,
+            "physical_consistency": {
+                "status": "not_evaluated",
+                "source": "figaroh_or_manual_review_required",
+            },
+            "figaroh_base_parameters": {
+                "status": "not_evaluated",
+                "source": "figaroh_required",
+            },
             "residual_summary": residual_summary,
             "solver_boundary": {
                 "pinocchio": "deterministic regressor and least-squares backend",
@@ -240,6 +248,8 @@ def _solver_report(metrics: dict[str, object]) -> str:
     backend_status = metrics["backend_status"]
     pinocchio_condition = metrics["regressor_condition"]["pinocchio"]
     pinocchio_prediction = metrics["prediction_error"]["pinocchio"]
+    physical_consistency = metrics["physical_consistency"]
+    figaroh_base_parameters = metrics["figaroh_base_parameters"]
     residual_summary = metrics["residual_summary"]
     title = "SysID \u6c42\u89e3\u62a5\u544a"
     note = (
@@ -260,6 +270,8 @@ def _solver_report(metrics: dict[str, object]) -> str:
         f"- FIGAROH: `{backend_status['figaroh']['status']}`\n"
         f"- Pinocchio regressor: `{pinocchio_condition['status']}`\n"
         f"- Pinocchio prediction_error: `{pinocchio_prediction['status']}`\n"
+        f"- 物理一致性: `{physical_consistency['status']}`\n"
+        f"- 基础参数: `{figaroh_base_parameters['status']}`\n"
         "- residual_summary: "
         f"`fake_zero_tau_rmse_nm={residual_summary['fake_zero_tau_rmse_nm']}`\n\n"
         f"{note}\n"

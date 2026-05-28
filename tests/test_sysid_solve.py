@@ -100,12 +100,22 @@ def test_cli_sysid_solve_writes_solver_artifacts_from_processed_dataset(
     assert metrics["overall_verdict"] in {"solver_ready", "solver_handoff_only"}
     assert metrics["backend_status"]["pinocchio"]["status"] in {"available", "missing"}
     assert metrics["backend_status"]["figaroh"]["status"] in {"available", "missing"}
+    assert metrics["physical_consistency"] == {
+        "status": "not_evaluated",
+        "source": "figaroh_or_manual_review_required",
+    }
+    assert metrics["figaroh_base_parameters"] == {
+        "status": "not_evaluated",
+        "source": "figaroh_required",
+    }
     assert metrics["residual_summary"]["fake_zero_tau_rmse_nm"] == 0.0
 
     report = solver_report.read_text(encoding="utf-8")
     assert "SysID \u6c42\u89e3\u62a5\u544a" in report
     assert "Pinocchio" in report
     assert "FIGAROH" in report
+    assert "物理一致性" in report
+    assert "基础参数" in report
 
 
 def test_sysid_solve_computes_pinocchio_regressor_metrics_when_backend_exists(
