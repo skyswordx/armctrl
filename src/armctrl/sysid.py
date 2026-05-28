@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Iterable
 
 from armctrl.limits import UrdfJointLimits, evaluate_joint_limits
-from armctrl.workspace import WorkspaceSafetyConfig, evaluate_workspace_clearance
+from armctrl.workspace import WorkspaceSafetyConfig, evaluate_workspace_fk_clearance
 
 
 @dataclass(frozen=True)
@@ -136,10 +136,11 @@ class SysIdPlanner:
             q_center=request.q_center,
             amplitude_rad=request.amplitude_rad,
         )
-        workspace_decision = evaluate_workspace_clearance(
+        rows = trajectory_rows(request)
+        workspace_decision = evaluate_workspace_fk_clearance(
+            Path(request.urdf_path),
             WorkspaceSafetyConfig.from_yaml(Path(request.safe_config_path)),
-            q_center=request.q_center,
-            amplitude_rad=request.amplitude_rad,
+            samples=_q_samples_from_rows(rows, dof=request.dof),
         )
         safety_allowed = (
             plan.safety.allowed
@@ -147,7 +148,6 @@ class SysIdPlanner:
             and workspace_decision.status == "pass"
         )
 
-        rows = trajectory_rows(request)
         with trajectory_path.open("w", newline="", encoding="utf-8") as file:
             writer = csv.DictWriter(file, fieldnames=list(rows[0]))
             writer.writeheader()
@@ -179,7 +179,7 @@ class SysIdPlanner:
                     },
                     "workspace_clearance_check": {
                         "status": workspace_decision.status,
-                        "method": "joint2_clearance_proxy",
+                        "method": workspace_decision.method,
                         "violations": workspace_decision.violations,
                     },
                     "hardware_execution": "not_requested",
@@ -212,7 +212,7 @@ class SysIdPlanner:
                 },
                 "workspace_clearance_check": {
                     "status": workspace_decision.status,
-                    "method": "joint2_clearance_proxy",
+                    "method": workspace_decision.method,
                     "violation_count": len(workspace_decision.violations),
                 },
             },
@@ -232,6 +232,17 @@ def trajectory_rows(request: SysIdPlanRequest) -> list[dict[str, str]]:
             row[f"q_cmd_{joint_index + 1}"] = f"{center + offset:.6f}"
         rows.append(row)
     return rows
+
+
+def _q_samples_from_rows(
+    rows: list[dict[str, str]],
+    *,
+    dof: int,
+) -> list[tuple[float, ...]]:
+    return [
+        tuple(float(row[f"q_cmd_{joint_index + 1}"]) for joint_index in range(dof))
+        for row in rows
+    ]
 
 
 def _safety_reason(

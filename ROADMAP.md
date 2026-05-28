@@ -30,12 +30,13 @@ Release readiness: `contracts_complete_hardware_pending`.
 - [x] 定义 plan-only SysID profile 和 Pinocchio/FIGAROH/LeRobot handoff 合同。
 - [x] `sysid plan --output` 写出 `planned_trajectory.csv` 和 `manifest.json`。
 - [x] `sysid plan --output` 评估 URDF joint limit 并在 stdout/manifest 标注 pass/fail。
-- [x] `sysid plan --output` 评估第一版 workspace/table clearance proxy 并在 stdout/manifest 标注 pass/fail。
+- [x] `sysid plan --output` 评估 URDF frame-level FK/table clearance 并在 stdout/manifest 标注 pass/fail。
 - [x] `sysid run --adapter fake` 生成 `raw_samples.csv` 和 run manifest。
 - [x] `sysid postprocess` 输出清洗数据、质量指标和 Markdown 报告。
 - [x] `sysid solve` 输出固定 solver 阶段产物、Pinocchio/FIGAROH 可用性和 fake 数据残差冒烟检查。
 - [x] `sysid postprocess --solve` 支持后处理后立即运行固定 solver 阶段。
-- [ ] `sysid plan` 在实机运动前使用完整 FK/table collision model 拒绝不安全 planned trajectory。
+- [x] `sysid plan` 在实机运动前使用 URDF frame-level FK/table clearance 拒绝不安全 planned trajectory。
+- [ ] `sysid plan` 升级到 mesh/body collision model，覆盖连杆几何而不只检查 link frame。
 - [x] `sysid sdk-preflight` 只读检查 SDK 环境，不打开 CAN、不实例化硬件对象。
 - [x] `sysid sdk-handshake-plan` 只读固定实机采集前确认、hold/damping、记录时序和 Ctrl-C/fault 落态契约。
 - [ ] `sysid run` 使用 ARX5 SDK 采集 gravity、friction、Fourier profile，并有 hold、damping、Ctrl-C 落态。

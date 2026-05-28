@@ -91,9 +91,9 @@ uv run armctrl sysid plan gravity_sweep \
 ```
 
 This writes `planned_trajectory.csv` and `manifest.json`. URDF joint-limit
-checks are evaluated from `--urdf-path`; workspace clearance currently uses a
-conservative joint2 clearance proxy from `--safe-config`. A full FK/table
-collision model is still pending before hardware execution can be enabled.
+checks are evaluated from `--urdf-path`; workspace clearance uses a URDF
+frame-level FK table-height check from `--safe-config`. Mesh/body collision is
+still pending before hardware execution can be enabled.
 
 Run the fake data path:
 

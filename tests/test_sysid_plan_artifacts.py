@@ -60,6 +60,7 @@ def test_cli_sysid_plan_writes_manifest_and_trajectory(tmp_path: Path) -> None:
     assert manifest["safety"]["allowed"] is True
     assert manifest["safety"]["checks"]["urdf_limit_check"]["status"] == "pass"
     assert manifest["safety"]["checks"]["workspace_clearance_check"]["status"] == "pass"
+    assert manifest["safety"]["checks"]["workspace_clearance_check"]["method"] == "urdf_fk_frame_clearance"
     assert manifest["handoff"]["solver_backends"] == ["pinocchio", "figaroh"]
 
     with trajectory_path.open(newline="", encoding="utf-8") as file:
@@ -148,13 +149,13 @@ def test_cli_sysid_plan_manifest_records_workspace_clearance_failure(tmp_path: P
             "gravity_sweep",
             "--q-center",
             "0",
-            "0",
-            "0.3",
+            "3.0",
+            "1.0",
             "0",
             "0",
             "0",
             "--amplitude",
-            "0.2",
+            "0.05",
             "--safe-config",
             "configs/x5.safe.yaml",
             "--output",
@@ -172,4 +173,5 @@ def test_cli_sysid_plan_manifest_records_workspace_clearance_failure(tmp_path: P
     assert payload["artifact_safety"]["allowed"] is False
     assert payload["artifact_safety"]["workspace_clearance_check"]["status"] == "fail"
     assert manifest["safety"]["allowed"] is False
-    assert manifest["safety"]["checks"]["workspace_clearance_check"]["violations"][0]["check"] == "min_clearance_proxy"
+    assert manifest["safety"]["checks"]["workspace_clearance_check"]["method"] == "urdf_fk_frame_clearance"
+    assert manifest["safety"]["checks"]["workspace_clearance_check"]["violations"][0]["check"] == "fk_min_z"
