@@ -6,6 +6,33 @@
 
 ### Added
 
+- 新增 `armctrl lerobot doctor`，只读检查 LeRobot、ARX5 LeRobot 插件和 `arx5_interface` 导入状态，不打开 CAN、不连接硬件。
+- 新增 `armctrl lerobot config-plan record/train/rollout`，把采集、训练、推理收敛为原生 LeRobot CLI 命令计划，`armctrl` 只输出 JSON 合同且不执行。
+- 新增 `armctrl lerobot export-metadata`，写出 LeRobot 数据集、SysID 参数包和安全配置之间的 metadata bridge。
+- 将 release 状态推进为 `0.6.0-rc.1`，标注 LeRobot 非硬件合同完成，真实 record/rollout 仍等待硬件验证。
+
+## [0.6.0-rc.1] - LeRobot Planning Bridge
+
+### Status
+
+- `armctrl` 现在能为 LeRobot record/train/rollout 生成可审查命令计划，但不重写 LeRobot Robot/Teleoperator，也不在该层直接执行硬件动作。
+- `armctrl lerobot doctor` 是只读环境检查；目标 Linux 主机上的插件安装/导入验证和真实 record/rollout 仍列为 deferred validation。
+- `armctrl lerobot export-metadata` 提供数据集到 SysID 参数包、安全配置的桥接文件，用于后续训练、推理与参数版本追溯。
+
+### Added
+
+- 新增 `armctrl lerobot doctor`、`config-plan` 和 `export-metadata` 三个 CLI 合同。
+- 新增 LeRobot CLI 合同测试，覆盖 doctor、record/train/rollout 计划和 metadata bridge。
+
+### Changed
+
+- `ROADMAP.md` 的 v0.6.0 从抽象 LeRobot 集成改为可执行的分阶段 CLI 合同：先 doctor/config-plan/metadata，再目标 Linux 非硬件验证，最后真实硬件 record/rollout。
+- `release status` / `release notes` 升级到 `0.6.0-rc.1`，并把 LeRobot 真实硬件 record/rollout 标为 deferred。
+
+## [0.5.0] - Contract Complete, Hardware Pending
+
+### Added
+
 - 新建 clean rebuild 分支入口，只保留 roadmap、changelog、文档索引、vendor 和 uv 配置作为重构基线。
 - 明确 `armctrl` 与 ARX5 SDK、Pinocchio、FIGAROH、LeRobot ARX5 集成的职责边界。
 - 新增第一版 plan-only Agent recipe catalog 和 JSON CLI 预览入口。
@@ -37,8 +64,6 @@
 - 新增 `sysid sdk-preflight`，只读检查 `arx5_interface` 导入状态和目标 model/interface，不打开 CAN、不移动硬件。
 - 新增 `sysid sdk-handshake-plan`，只读固定未来 SDK 采集前的确认、hold/damping、记录时序和 Ctrl-C/fault 落态契约。
 
-## [0.5.0] - Contract Complete, Hardware Pending
-
 ### Status
 
 - Clean rebuild contracts through v0.5.0 are implemented and tested.
@@ -49,7 +74,7 @@
 ### Changed
 
 - 停止在旧实验实现上继续叠加功能，后续按 `v0.2.0` 到 `v0.5.0` milestone 重新实现。
-- SysID execute 仍保持 rejected；workspace clearance 目前是 joint2 proxy，不是完整 FK/table collision model。
+- SysID execute 仍保持 rejected；workspace clearance 已升级为 URDF frame-level FK/table clearance，但仍不是完整 mesh/body collision model。
 - `sysid run --adapter sdk` 仍保持 rejected，等待真实 SDK runner、安全落态和真机验证。
 - 当前 postprocess 覆盖基础文件合同和 data health；预测误差、物理一致性等进入固定 solver stage 后继续补齐。
 

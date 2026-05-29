@@ -9,6 +9,13 @@ from typing import Sequence
 from armctrl.recipes import RecipeCatalog
 from armctrl.recipe_executor import RecipeExecutor
 from armctrl.release_status import release_notes, release_status
+from armctrl.lerobot_bridge import (
+    LeRobotConfigPlanner,
+    LeRobotConfigPlanRequest,
+    LeRobotDoctor,
+    LeRobotMetadataExport,
+    LeRobotMetadataExporter,
+)
 from armctrl.online_id import (
     OnlineAuditRequest,
     OnlineIdentificationAuditor,
@@ -49,6 +56,43 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     cancel_parser = recipe_subparsers.add_parser("cancel")
     cancel_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    lerobot_parser = subparsers.add_parser("lerobot")
+    lerobot_subparsers = lerobot_parser.add_subparsers(
+        dest="lerobot_command",
+        required=True,
+    )
+
+    lerobot_doctor_parser = lerobot_subparsers.add_parser("doctor")
+    lerobot_doctor_parser.add_argument("--model", default="X5")
+    lerobot_doctor_parser.add_argument("--robot-interface", default="can0")
+    lerobot_doctor_parser.add_argument("--teleop-interface", default="can1")
+    lerobot_doctor_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    lerobot_config_parser = lerobot_subparsers.add_parser("config-plan")
+    lerobot_config_parser.add_argument("mode", choices=["record", "train", "rollout"])
+    lerobot_config_parser.add_argument("--model", default="X5")
+    lerobot_config_parser.add_argument("--robot-interface", default="can0")
+    lerobot_config_parser.add_argument("--teleop-interface", default="can1")
+    lerobot_config_parser.add_argument("--dataset-repo-id")
+    lerobot_config_parser.add_argument("--task")
+    lerobot_config_parser.add_argument("--episodes", type=int, default=10)
+    lerobot_config_parser.add_argument("--policy", default="act")
+    lerobot_config_parser.add_argument("--output-dir", default="outputs/train/act_arx5")
+    lerobot_config_parser.add_argument("--job-name", default="act_arx5")
+    lerobot_config_parser.add_argument("--policy-path")
+    lerobot_config_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    lerobot_metadata_parser = lerobot_subparsers.add_parser("export-metadata")
+    lerobot_metadata_parser.add_argument("--dataset-repo-id", required=True)
+    lerobot_metadata_parser.add_argument("--parameter-bundle", required=True)
+    lerobot_metadata_parser.add_argument("--safe-config", default="configs/x5.safe.yaml")
+    lerobot_metadata_parser.add_argument("--output", required=True)
+    lerobot_metadata_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+    )
 
     sysid_parser = subparsers.add_parser("sysid")
     sysid_subparsers = sysid_parser.add_subparsers(dest="sysid_command", required=True)
@@ -222,6 +266,52 @@ def main(argv: Sequence[str] | None = None) -> int:
             "schema": "armctrl.recipe_executor_cancel.v1",
             "executor": executor.to_json(),
         }
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "lerobot" and args.lerobot_command == "doctor":
+        result = LeRobotDoctor(
+            model=args.model,
+            robot_interface=args.robot_interface,
+            teleop_interface=args.teleop_interface,
+        )
+        payload = {"status": "ok", **result.to_json()}
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "lerobot" and args.lerobot_command == "config-plan":
+        if args.mode in {"record", "train"} and not args.dataset_repo_id:
+            parser.error("--dataset-repo-id is required for record/train")
+        if args.mode == "record" and not args.task:
+            parser.error("--task is required for record")
+        if args.mode == "rollout" and not args.policy_path:
+            parser.error("--policy-path is required for rollout")
+        result = LeRobotConfigPlanner().plan(
+            LeRobotConfigPlanRequest(
+                mode=args.mode,
+                model=args.model,
+                robot_interface=args.robot_interface,
+                teleop_interface=args.teleop_interface,
+                dataset_repo_id=args.dataset_repo_id,
+                task=args.task,
+                episodes=args.episodes,
+                policy=args.policy,
+                output_dir=args.output_dir,
+                job_name=args.job_name,
+                policy_path=args.policy_path,
+            )
+        )
+        payload = {"status": "ok", **result}
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "lerobot" and args.lerobot_command == "export-metadata":
+        result = LeRobotMetadataExporter().run(
+            LeRobotMetadataExport(
+                dataset_repo_id=args.dataset_repo_id,
+                parameter_bundle=args.parameter_bundle,
+                safe_config=args.safe_config,
+                output=Path(args.output),
+            )
+        )
+        payload = {"status": "ok", **result}
         return _emit(payload, as_json=args.as_json)
 
     if args.command == "sysid" and args.sysid_command == "plan":

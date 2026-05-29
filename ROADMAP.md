@@ -14,9 +14,9 @@
 
 ## Release Track
 
-Current package version: `0.5.0`.
+Current package version: `0.6.0-rc.1`.
 
-Release readiness: `contracts_complete_hardware_pending`.
+Release readiness: `lerobot_contracts_complete_nonhardware_verified`.
 
 ### v0.2.0 - Governance And Safety Boundary
 
@@ -68,10 +68,14 @@ Release readiness: `contracts_complete_hardware_pending`.
 
 ### v0.6.0 - LeRobot Integration
 
-- [ ] 在目标 Linux 主机验证 `lerobot-robot-arx5` 和 `lerobot-teleoperator-arx5`。
-- [ ] `armctrl.compat.lerobot` 只保留为数据集 metadata/export，除非明确需要 safety bridge。
+- [x] 增加 `armctrl lerobot doctor`，只读检查 `lerobot`、`lerobot-robot-arx5`、`lerobot-teleoperator-arx5` 和 `arx5_interface` 导入状态，不打开 CAN、不连接相机、不移动硬件。
+- [x] 增加 `armctrl lerobot config-plan record/train/rollout`，只输出原生 LeRobot CLI 命令计划，不在 `armctrl` 内执行采集、训练或推理。
+- [x] 增加 `armctrl lerobot export-metadata`，写出 LeRobot dataset 与 `armctrl` SysID 参数包、安全配置之间的 metadata bridge。
+- [x] 说明 LeRobot record/train/rollout 产物与 `armctrl` SysID 数据集、参数包之间的关系。
+- [x] `armctrl.compat.lerobot` 边界收敛为数据集 metadata/export；当前不重写完整 LeRobot Robot。
+- [ ] 在目标 Linux 主机无硬件连接验证 `lerobot-robot-arx5` 和 `lerobot-teleoperator-arx5` 依赖可安装/可导入。
+- [ ] 在目标 Linux 主机用真实硬件验证原生 LeRobot record/rollout 命令。
 - [ ] 如果 policy action 必须经过 `armctrl`，只加薄 safety bridge，不重写完整 LeRobot Robot。
-- [ ] 说明 LeRobot record/train/rollout 产物与 `armctrl` SysID 数据集、参数包之间的关系。
 
 ## Rules
 

@@ -42,12 +42,13 @@ uv run armctrl release status --json
 uv run armctrl release notes --json
 ```
 
-Version `0.5.0` means the clean contracts through Agent recipes are present.
-Hardware execution, real SDK collection, and n100d Pinocchio/FIGAROH validation
-are still explicitly marked pending. The JSON includes local verification
-commands plus separate `deferred_validation` buckets for hardware, external
-tools, and geometry upgrades. Release notes are generated from the same status
-surface, so the repository does not need another release-note document.
+Version `0.6.0-rc.1` means the clean contracts through Agent recipes plus the
+LeRobot planning bridge are present. Hardware execution, real SDK collection,
+native LeRobot record/rollout on hardware, and n100d Pinocchio/FIGAROH
+validation are still explicitly marked pending. The JSON includes local
+verification commands plus separate `deferred_validation` buckets for hardware,
+external tools, and geometry upgrades. Release notes are generated from the same
+status surface, so the repository does not need another release-note document.
 
 ## Recipe Preview
 
@@ -215,6 +216,57 @@ metadata, required FIGAROH outputs, and the import command to run afterward. The
 evidence file must use schema `armctrl.external_solver_evidence.v1` and include
 `physical_consistency` plus `figaroh_base_parameters`. This keeps FIGAROH-owned
 checks outside `armctrl` while still making package gates machine-readable.
+
+## LeRobot Planning Bridge
+
+LeRobot owns ARX5 record, train, and rollout through its native CLI plus
+`lerobot-robot-arx5` / `lerobot-teleoperator-arx5`. `armctrl` only provides
+read-only checks, command plans, and dataset metadata bridges:
+
+```bash
+uv run armctrl lerobot doctor \
+  --model X5 \
+  --robot-interface can0 \
+  --teleop-interface can1 \
+  --json
+
+uv run armctrl lerobot config-plan record \
+  --model X5 \
+  --robot-interface can0 \
+  --teleop-interface can1 \
+  --dataset-repo-id circlemoon/arx5-test \
+  --task "pick cube" \
+  --episodes 10 \
+  --json
+
+uv run armctrl lerobot config-plan train \
+  --dataset-repo-id circlemoon/arx5-test \
+  --policy act \
+  --output-dir outputs/train/act_arx5_test \
+  --job-name act_arx5_test \
+  --json
+
+uv run armctrl lerobot config-plan rollout \
+  --model X5 \
+  --robot-interface can0 \
+  --policy-path outputs/train/act_arx5_test/checkpoints/last/pretrained_model \
+  --json
+```
+
+These commands do not execute native LeRobot, open CAN, connect cameras, or move
+hardware. They return the external `lerobot-record`, `lerobot-train`, or
+`lerobot-rollout` command to review and run outside `armctrl`.
+
+Bridge a LeRobot dataset to an `armctrl` SysID parameter package:
+
+```bash
+uv run armctrl lerobot export-metadata \
+  --dataset-repo-id circlemoon/arx5-test \
+  --parameter-bundle runs/sysid/processed/parameter_package.json \
+  --safe-config configs/x5.safe.yaml \
+  --output runs/lerobot/arx5-test.metadata.json \
+  --json
+```
 
 ## Online Identification Policy
 
