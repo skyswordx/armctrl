@@ -35,6 +35,13 @@ uv sync --extra dev
 uv run pytest -q
 ```
 
+On the Linux robot workstation, install the native LeRobot ARX5 integration
+surface for non-hardware CLI planning and import checks:
+
+```bash
+uv sync --extra dev --extra lerobot
+```
+
 Check the current clean rebuild release status:
 
 ```bash

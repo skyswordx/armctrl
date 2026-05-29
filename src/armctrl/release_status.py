@@ -50,9 +50,10 @@ def release_status() -> dict[str, object]:
                 "uv run pytest -q",
                 "uv run python -m compileall src tests",
                 "uv run armctrl release status --json",
+                "uv sync --extra dev --extra lerobot",
                 "uv run armctrl lerobot doctor --model X5 --robot-interface can0 --teleop-interface can1 --json",
             ],
-            "test_count": 55,
+            "test_count": 56,
             "scope": "local contracts and non-hardware safety gates through v0.6.0-rc.1",
         },
         "deferred_validation": {
@@ -76,6 +77,7 @@ def release_status() -> dict[str, object]:
             "Recipe plans are dry-run previews with machine-readable risk explanations.",
             "Recipe execution remains rejected until a verified hardware backend exists.",
             "LeRobot record/train/rollout remain native LeRobot commands; armctrl emits plans and metadata only.",
+            "Install LeRobot integrations with uv sync --extra dev --extra lerobot on Linux targets.",
             "Parameter packages require package-gated solver evidence before rollout.",
         ],
     }

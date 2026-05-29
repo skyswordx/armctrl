@@ -69,6 +69,7 @@ Release readiness: `lerobot_contracts_complete_nonhardware_verified`.
 ### v0.6.0 - LeRobot Integration
 
 - [x] 增加 `armctrl lerobot doctor`，只读检查 `lerobot`、`lerobot-robot-arx5`、`lerobot-teleoperator-arx5` 和 `arx5_interface` 导入状态，不打开 CAN、不连接相机、不移动硬件。
+- [x] 增加 `lerobot` optional extra，用 `uv sync --extra dev --extra lerobot` 在 Linux 目标机安装 LeRobot ARX5 插件。
 - [x] 增加 `armctrl lerobot config-plan record/train/rollout`，只输出原生 LeRobot CLI 命令计划，不在 `armctrl` 内执行采集、训练或推理。
 - [x] 增加 `armctrl lerobot export-metadata`，写出 LeRobot dataset 与 `armctrl` SysID 参数包、安全配置之间的 metadata bridge。
 - [x] 说明 LeRobot record/train/rollout 产物与 `armctrl` SysID 数据集、参数包之间的关系。

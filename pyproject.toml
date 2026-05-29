@@ -20,6 +20,11 @@ dependencies = [
 dev = [
   "pytest>=8.2",
 ]
+lerobot = [
+  "lerobot>=0.4.0",
+  "lerobot-robot-arx5==0.1.2; sys_platform == 'linux'",
+  "lerobot-teleoperator-arx5==0.1.1; sys_platform == 'linux'",
+]
 
 [project.scripts]
 armctrl = "armctrl.cli:main"

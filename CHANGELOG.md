@@ -9,6 +9,7 @@
 - 新增 `armctrl lerobot doctor`，只读检查 LeRobot、ARX5 LeRobot 插件和 `arx5_interface` 导入状态，不打开 CAN、不连接硬件。
 - 新增 `armctrl lerobot config-plan record/train/rollout`，把采集、训练、推理收敛为原生 LeRobot CLI 命令计划，`armctrl` 只输出 JSON 合同且不执行。
 - 新增 `armctrl lerobot export-metadata`，写出 LeRobot 数据集、SysID 参数包和安全配置之间的 metadata bridge。
+- 新增 `lerobot` optional extra，目标 Linux 主机可通过 `uv sync --extra dev --extra lerobot` 安装 LeRobot ARX5 插件并进行无硬件导入验证。
 - 将 release 状态推进为 `0.6.0-rc.1`，标注 LeRobot 非硬件合同完成，真实 record/rollout 仍等待硬件验证。
 
 ## [0.6.0-rc.1] - LeRobot Planning Bridge
@@ -22,6 +23,7 @@
 ### Added
 
 - 新增 `armctrl lerobot doctor`、`config-plan` 和 `export-metadata` 三个 CLI 合同。
+- 新增 `lerobot` optional extra，包含 `lerobot`、`lerobot-robot-arx5` 和 `lerobot-teleoperator-arx5`。
 - 新增 LeRobot CLI 合同测试，覆盖 doctor、record/train/rollout 计划和 metadata bridge。
 
 ### Changed

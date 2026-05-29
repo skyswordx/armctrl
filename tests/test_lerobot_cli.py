@@ -3,6 +3,18 @@ import subprocess
 import sys
 from pathlib import Path
 
+import tomllib
+
+
+def test_pyproject_exposes_lerobot_optional_integration_extra() -> None:
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+
+    extra = pyproject["project"]["optional-dependencies"]["lerobot"]
+
+    assert "lerobot>=0.4.0" in extra
+    assert "lerobot-robot-arx5==0.1.2; sys_platform == 'linux'" in extra
+    assert "lerobot-teleoperator-arx5==0.1.1; sys_platform == 'linux'" in extra
+
 
 def test_cli_lerobot_doctor_is_read_only_and_reports_plugin_status() -> None:
     completed = subprocess.run(
