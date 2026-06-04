@@ -139,6 +139,11 @@ class SysIdPlanner:
         safe_config = WorkspaceSafetyConfig.from_yaml(Path(request.safe_config_path))
         parameter_decision = _evaluate_sysid_parameters(request, safe_config)
         rows = trajectory_rows(request)
+        step_decision = _evaluate_trajectory_steps(
+            rows,
+            dof=request.dof,
+            max_joint_step_rad=safe_config.max_joint_step_rad,
+        )
         workspace_decision = evaluate_workspace_fk_clearance(
             Path(request.urdf_path),
             safe_config,
@@ -147,6 +152,7 @@ class SysIdPlanner:
         safety_allowed = (
             plan.safety.allowed
             and parameter_decision.status == "pass"
+            and step_decision.status == "pass"
             and limit_decision.status == "pass"
             and workspace_decision.status == "pass"
         )
@@ -156,6 +162,13 @@ class SysIdPlanner:
             writer.writeheader()
             writer.writerows(rows)
 
+        safety_reason = _safety_reason(
+            plan_reason=plan.safety.reason,
+            parameter_status=parameter_decision.status,
+            step_status=step_decision.status,
+            limit_status=limit_decision.status,
+            workspace_status=workspace_decision.status,
+        )
         manifest = {
             "schema": "armctrl.ident_plan_manifest.v1",
             "profile": plan.profile.to_json(),
@@ -170,11 +183,7 @@ class SysIdPlanner:
             },
             "safety": {
                 "allowed": safety_allowed,
-                "reason": _safety_reason(
-                    plan_reason=plan.safety.reason,
-                    limit_status=limit_decision.status,
-                    workspace_status=workspace_decision.status,
-                ),
+                "reason": safety_reason,
                 "checks": {
                     "urdf_limit_check": {
                         "status": limit_decision.status,
@@ -183,6 +192,10 @@ class SysIdPlanner:
                     "sysid_parameter_check": {
                         "status": parameter_decision.status,
                         "violations": parameter_decision.violations,
+                    },
+                    "trajectory_step_check": {
+                        "status": step_decision.status,
+                        "violations": step_decision.violations,
                     },
                     "workspace_clearance_check": {
                         "status": workspace_decision.status,
@@ -205,7 +218,7 @@ class SysIdPlanner:
         return SysIdPlan(
             schema=plan.schema,
             profile=plan.profile,
-            safety=plan.safety,
+            safety=SysIdSafety(allowed=safety_allowed, reason=safety_reason),
             handoff=plan.handoff,
             artifacts={
                 "planned_trajectory": str(trajectory_path),
@@ -220,6 +233,10 @@ class SysIdPlanner:
                 "sysid_parameter_check": {
                     "status": parameter_decision.status,
                     "violation_count": len(parameter_decision.violations),
+                },
+                "trajectory_step_check": {
+                    "status": step_decision.status,
+                    "violation_count": len(step_decision.violations),
                 },
                 "workspace_clearance_check": {
                     "status": workspace_decision.status,
@@ -259,11 +276,17 @@ def _q_samples_from_rows(
 def _safety_reason(
     *,
     plan_reason: str,
+    parameter_status: str,
+    step_status: str,
     limit_status: str,
     workspace_status: str,
 ) -> str:
     # Detailed violations are recorded in the manifest; this message stays compact
     # for CLI consumers that only need the first gate reason.
+    if parameter_status == "fail":
+        return "planned sysid parameters exceed safety config"
+    if step_status == "fail":
+        return "planned trajectory exceeds max joint step"
     if limit_status == "fail":
         return "planned trajectory violates URDF joint limits"
     if workspace_status == "fail":
@@ -300,6 +323,34 @@ def _evaluate_sysid_parameters(
                 "maximum": config.max_sysid_amplitude_rad,
             }
         )
+    return LimitDecision(
+        status="fail" if violations else "pass",
+        violations=violations,
+    )
+
+
+def _evaluate_trajectory_steps(
+    rows: list[dict[str, str]],
+    *,
+    dof: int,
+    max_joint_step_rad: float,
+) -> LimitDecision:
+    violations: list[dict[str, object]] = []
+    for row_index, (previous, current) in enumerate(zip(rows, rows[1:]), start=1):
+        for joint_index in range(dof):
+            previous_q = float(previous[f"q_cmd_{joint_index + 1}"])
+            current_q = float(current[f"q_cmd_{joint_index + 1}"])
+            step_rad = abs(current_q - previous_q)
+            if step_rad > max_joint_step_rad:
+                violations.append(
+                    {
+                        "check": "max_joint_step_rad",
+                        "sample_index": row_index,
+                        "joint": joint_index + 1,
+                        "value": step_rad,
+                        "maximum": max_joint_step_rad,
+                    }
+                )
     return LimitDecision(
         status="fail" if violations else "pass",
         violations=violations,

@@ -175,7 +175,7 @@ def test_sdk_sysid_runner_starts_recording_after_safe_state_and_lands_damping(
         dof=6,
         sample_hz=20,
         duration_s=1,
-        amplitude_rad=0.1,
+        amplitude_rad=0.02,
         q_center=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
         urdf_path="configs/models/X5_camera.urdf",
         safe_config_path="configs/x5.safe.yaml",

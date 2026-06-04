@@ -19,11 +19,11 @@ def test_cli_sysid_plan_writes_manifest_and_trajectory(tmp_path: Path) -> None:
             "--dof",
             "6",
             "--sample-hz",
-            "20",
+            "100",
             "--duration",
             "2",
             "--amplitude",
-            "0.1",
+            "0.05",
             "--q-center",
             "0",
             "0.3",
@@ -68,7 +68,7 @@ def test_cli_sysid_plan_writes_manifest_and_trajectory(tmp_path: Path) -> None:
 
     assert rows[0]["time_s"] == "0.000000"
     assert "q_cmd_6" in rows[0]
-    assert len(rows) == 41
+    assert len(rows) == 201
 
 
 def test_cli_sysid_execute_with_output_is_rejected(tmp_path: Path) -> None:

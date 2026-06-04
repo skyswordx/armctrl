@@ -16,7 +16,7 @@ cd ~/Roboclaw/references/projects/armctrl-clean-n100d
 - URDF frame-level table clearance 检查；
 - SDK handshake/preflight；
 - 最小 `arx5_interface` joint-control SDK runner 接线；
-- SDK runner 不自动 `reset_to_home`；确认后从当前姿态按 `max_joint_step_rad` 限步过渡到计划轨迹第一帧；
+- SDK runner 不自动 `reset_to_home`；计划阶段会检查相邻采样点关节步长，确认后从当前姿态按 `max_joint_step_rad` 限步过渡到计划轨迹第一帧；
 - Ctrl-C/fault 通过 `finally` 尝试落到 damping；
 - 后处理与 solver handoff；
 - Agent recipe CLI 安全门。
@@ -123,11 +123,16 @@ safety:
   settle_before_record_s: 0.5
 ```
 
+`max_joint_step_rad` 有两层作用：
+
+- `sysid plan` 会检查 planned trajectory 中相邻采样点的最大关节步长，过大则 `trajectory_step_check=fail`；
+- `sysid run --adapter sdk` 会用同一个阈值从当前姿态限步过渡到轨迹第一帧，过渡阶段不记录数据。
+
 修改原则：
 
 - 桌面更高时，提高 `workspace_min_m[2]`；
 - 末端可能碰桌时，降低 `max_sysid_amplitude_rad`；
-- 机器抖动或电流偏高时，降低 `max_sysid_sample_hz` 和 `max_sysid_amplitude_rad`；
+- 机器抖动或电流偏高时，降低 `max_sysid_amplitude_rad`，或提高 `sample-hz` / 降低 `max_joint_step_rad` 让每一拍更小；
 - 第一帧过渡太快时，降低 `max_joint_step_rad`；
 - 首次真机 smoke 建议 `amplitude <= 0.05`、`duration <= 8`。
 
@@ -157,6 +162,7 @@ cat runs/plan-gravity-smoke/manifest.json
 - `safety.allowed == true`
 - `urdf_limit_check.status == pass`
 - `sysid_parameter_check.status == pass`
+- `trajectory_step_check.status == pass`
 - `workspace_clearance_check.status == pass`
 
 如果 fail，不要运行真机。先减小 `--amplitude` 或调整 `--q-center` / `configs/x5.safe.yaml`。

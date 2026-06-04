@@ -8,7 +8,7 @@
 
 - 新增 `armctrl sysid run --adapter sdk` 的最小 `arx5_interface` 真机 smoke runner：通过显式 `--confirm` 后才会构造 SDK joint controller，并在采集完成、故障或 Ctrl-C 路径中尝试落到 damping。
 - 新增 `docs/hardware_sysid_operator_manual.md`，收束 n100d 上机步骤：USB-CAN、SDK handshake、SysID plan、SDK smoke run、postprocess/solve、Agent recipe 模拟调用和安全配置调参。
-- 新增 SysID 上机安全参数 gate：`configs/x5.safe.yaml` 现在限制最大 duration、sample rate、amplitude、首帧过渡关节步长和记录前 settle 合同。
+- 新增 SysID 上机安全参数 gate：`configs/x5.safe.yaml` 现在限制最大 duration、sample rate、amplitude、planned trajectory 相邻采样关节步长、首帧过渡关节步长和记录前 settle 合同。
 - 新增 SDK runner 首帧限步过渡：从当前关节角逐步移动到 planned trajectory 第一帧，过渡阶段不写入采样数据。
 - 新增 `armctrl lerobot doctor`，只读检查 LeRobot、ARX5 LeRobot 插件和 `arx5_interface` 导入状态，不打开 CAN、不连接硬件。
 - 新增 `armctrl lerobot config-plan record/train/rollout`，把采集、训练、推理收敛为原生 LeRobot CLI 命令计划，`armctrl` 只输出 JSON 合同且不执行。

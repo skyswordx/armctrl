@@ -55,7 +55,7 @@ def release_status() -> dict[str, object]:
                 "uv run armctrl lerobot doctor --model X5 --robot-interface can0 --teleop-interface can1 --json",
                 "uv run armctrl sysid run gravity_sweep --adapter sdk --duration 8 --amplitude 0.5 --q-center 0 0.30 0.30 0 0 0 --output runs/tmp-confirm-check --confirm 'I UNDERSTAND THIS WILL MOVE THE ARM' --json",
             ],
-            "test_count": 59,
+            "test_count": 60,
             "scope": "local contracts and non-hardware safety gates through v0.6.0-rc.2",
         },
         "deferred_validation": {
@@ -82,7 +82,8 @@ def release_status() -> dict[str, object]:
             "LeRobot record/train/rollout remain native LeRobot commands; armctrl emits plans and metadata only.",
             "Install LeRobot integrations with uv sync --extra dev --extra lerobot on Linux targets.",
             "Parameter packages require package-gated solver evidence before rollout.",
-            "The SDK sysid runner is wired for low-amplitude smoke collection, but hardware validation is still explicit deferred validation.",
+        "The SDK sysid runner is wired for low-amplitude smoke collection, but hardware validation is still explicit deferred validation.",
+        "SysID plans reject trajectories whose adjacent joint samples exceed max_joint_step_rad before any SDK backend is instantiated.",
         ],
     }
 
