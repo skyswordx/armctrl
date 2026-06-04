@@ -54,3 +54,41 @@ def test_cli_sysid_plan_outputs_json_contract() -> None:
     assert payload["schema"] == "armctrl.sysid_plan.v1"
     assert payload["profile"]["name"] == "friction_sweep"
     assert payload["handoff"]["solver_backends"] == ["pinocchio", "figaroh"]
+
+
+def test_cli_sysid_plan_marks_profile_parameter_limits_as_safety_fail(
+    tmp_path,
+) -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "sysid",
+            "plan",
+            "gravity_sweep",
+            "--duration",
+            "120",
+            "--amplitude",
+            "0.5",
+            "--q-center",
+            "0",
+            "0.3",
+            "0.3",
+            "0",
+            "0",
+            "0",
+            "--output",
+            str(tmp_path / "plan"),
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+
+    assert payload["artifact_safety"]["allowed"] is False
+    assert payload["artifact_safety"]["sysid_parameter_check"]["status"] == "fail"
+    assert payload["artifact_safety"]["sysid_parameter_check"]["violation_count"] == 2

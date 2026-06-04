@@ -17,12 +17,22 @@ class WorkspaceDecision:
 class WorkspaceSafetyConfig:
     workspace_min_m: tuple[float, float, float]
     workspace_max_m: tuple[float, float, float]
+    max_sysid_duration_s: float
+    max_sysid_sample_hz: float
+    max_sysid_amplitude_rad: float
+    max_joint_step_rad: float
+    settle_before_record_s: float
 
     @classmethod
     def from_yaml(cls, path: Path) -> "WorkspaceSafetyConfig":
         return cls(
             workspace_min_m=_read_float_triplet(path, "workspace_min_m"),
             workspace_max_m=_read_float_triplet(path, "workspace_max_m"),
+            max_sysid_duration_s=_read_float(path, "max_sysid_duration_s", default=60.0),
+            max_sysid_sample_hz=_read_float(path, "max_sysid_sample_hz", default=100.0),
+            max_sysid_amplitude_rad=_read_float(path, "max_sysid_amplitude_rad", default=0.25),
+            max_joint_step_rad=_read_float(path, "max_joint_step_rad", default=0.01),
+            settle_before_record_s=_read_float(path, "settle_before_record_s", default=0.5),
         )
 
 
@@ -109,6 +119,17 @@ def _read_float_triplet(path: Path, key: str) -> tuple[float, float, float]:
             raise ValueError(f"{key} must contain exactly three values")
         return triplet
     raise KeyError(f"{key} not found in {path}")
+
+
+def _read_float(path: Path, key: str, *, default: float) -> float:
+    prefix = f"{key}:"
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped.startswith(prefix):
+            continue
+        _, raw_value = stripped.split(":", maxsplit=1)
+        return float(raw_value.strip())
+    return default
 
 
 def _serial_joint_chain(path: Path) -> tuple[UrdfJointFrame, ...]:

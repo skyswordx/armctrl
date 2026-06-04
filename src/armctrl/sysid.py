@@ -7,7 +7,7 @@ import math
 from pathlib import Path
 from typing import Iterable
 
-from armctrl.limits import UrdfJointLimits, evaluate_joint_limits
+from armctrl.limits import LimitDecision, UrdfJointLimits, evaluate_joint_limits
 from armctrl.workspace import WorkspaceSafetyConfig, evaluate_workspace_fk_clearance
 
 
@@ -136,14 +136,17 @@ class SysIdPlanner:
             q_center=request.q_center,
             amplitude_rad=request.amplitude_rad,
         )
+        safe_config = WorkspaceSafetyConfig.from_yaml(Path(request.safe_config_path))
+        parameter_decision = _evaluate_sysid_parameters(request, safe_config)
         rows = trajectory_rows(request)
         workspace_decision = evaluate_workspace_fk_clearance(
             Path(request.urdf_path),
-            WorkspaceSafetyConfig.from_yaml(Path(request.safe_config_path)),
+            safe_config,
             samples=_q_samples_from_rows(rows, dof=request.dof),
         )
         safety_allowed = (
             plan.safety.allowed
+            and parameter_decision.status == "pass"
             and limit_decision.status == "pass"
             and workspace_decision.status == "pass"
         )
@@ -177,6 +180,10 @@ class SysIdPlanner:
                         "status": limit_decision.status,
                         "violations": limit_decision.violations,
                     },
+                    "sysid_parameter_check": {
+                        "status": parameter_decision.status,
+                        "violations": parameter_decision.violations,
+                    },
                     "workspace_clearance_check": {
                         "status": workspace_decision.status,
                         "method": workspace_decision.method,
@@ -209,6 +216,10 @@ class SysIdPlanner:
                 "urdf_limit_check": {
                     "status": limit_decision.status,
                     "violation_count": len(limit_decision.violations),
+                },
+                "sysid_parameter_check": {
+                    "status": parameter_decision.status,
+                    "violation_count": len(parameter_decision.violations),
                 },
                 "workspace_clearance_check": {
                     "status": workspace_decision.status,
@@ -251,8 +262,45 @@ def _safety_reason(
     limit_status: str,
     workspace_status: str,
 ) -> str:
+    # Detailed violations are recorded in the manifest; this message stays compact
+    # for CLI consumers that only need the first gate reason.
     if limit_status == "fail":
         return "planned trajectory violates URDF joint limits"
     if workspace_status == "fail":
         return "planned trajectory violates workspace clearance proxy"
     return plan_reason
+
+
+def _evaluate_sysid_parameters(
+    request: SysIdPlanRequest,
+    config: WorkspaceSafetyConfig,
+) -> LimitDecision:
+    violations: list[dict[str, object]] = []
+    if request.duration_s > config.max_sysid_duration_s:
+        violations.append(
+            {
+                "check": "max_sysid_duration_s",
+                "value": request.duration_s,
+                "maximum": config.max_sysid_duration_s,
+            }
+        )
+    if request.sample_hz > config.max_sysid_sample_hz:
+        violations.append(
+            {
+                "check": "max_sysid_sample_hz",
+                "value": request.sample_hz,
+                "maximum": config.max_sysid_sample_hz,
+            }
+        )
+    if request.amplitude_rad > config.max_sysid_amplitude_rad:
+        violations.append(
+            {
+                "check": "max_sysid_amplitude_rad",
+                "value": request.amplitude_rad,
+                "maximum": config.max_sysid_amplitude_rad,
+            }
+        )
+    return LimitDecision(
+        status="fail" if violations else "pass",
+        violations=violations,
+    )

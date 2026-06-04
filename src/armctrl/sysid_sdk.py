@@ -18,7 +18,7 @@ class SdkPreflightResult:
             "read_only": True,
             "movement_allowed": False,
             "sdk": self.sdk,
-            "next_gate": "real_sdk_runner_pending",
+            "next_gate": "sdk_runner_confirm_then_hardware_validation",
             "notes": [
                 "preflight only checks importability and requested session labels",
                 "it does not open CAN, instantiate hardware objects, or send motion commands",
@@ -65,11 +65,11 @@ class SdkHandshakePlanResult:
             "requires_confirm": "I UNDERSTAND THIS WILL MOVE THE ARM",
             "fault_landing_mode": "damping",
             "steps": [step.to_json() for step in self.steps],
-            "next_gate": "real_sdk_runner_pending",
+            "next_gate": "sdk_runner_confirm_then_hardware_validation",
             "notes": [
                 "handshake planning is read-only and does not import or instantiate the SDK",
                 "real collection must enter a verified hold or damping state before recording",
-                "faults and Ctrl-C must land in damping before any SDK runner can be enabled",
+                "faults and Ctrl-C must land in damping during hardware validation",
             ],
         }
 
@@ -92,7 +92,7 @@ class SdkHandshakePlanner:
                 ),
                 SdkHandshakeStep(
                     name="enter_hold_or_damping",
-                    purpose="land the arm in a known safe controller state before collection",
+                    purpose="initialize the SDK controller without reset-to-home before collection",
                     movement_allowed=False,
                 ),
                 SdkHandshakeStep(

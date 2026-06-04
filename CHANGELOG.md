@@ -6,15 +6,19 @@
 
 ### Added
 
+- 新增 `armctrl sysid run --adapter sdk` 的最小 `arx5_interface` 真机 smoke runner：通过显式 `--confirm` 后才会构造 SDK joint controller，并在采集完成、故障或 Ctrl-C 路径中尝试落到 damping。
+- 新增 `docs/hardware_sysid_operator_manual.md`，收束 n100d 上机步骤：USB-CAN、SDK handshake、SysID plan、SDK smoke run、postprocess/solve、Agent recipe 模拟调用和安全配置调参。
+- 新增 SysID 上机安全参数 gate：`configs/x5.safe.yaml` 现在限制最大 duration、sample rate、amplitude、首帧过渡关节步长和记录前 settle 合同。
+- 新增 SDK runner 首帧限步过渡：从当前关节角逐步移动到 planned trajectory 第一帧，过渡阶段不写入采样数据。
 - 新增 `armctrl lerobot doctor`，只读检查 LeRobot、ARX5 LeRobot 插件和 `arx5_interface` 导入状态，不打开 CAN、不连接硬件。
 - 新增 `armctrl lerobot config-plan record/train/rollout`，把采集、训练、推理收敛为原生 LeRobot CLI 命令计划，`armctrl` 只输出 JSON 合同且不执行。
 - 新增 `armctrl lerobot export-metadata`，写出 LeRobot 数据集、SysID 参数包和安全配置之间的 metadata bridge。
 - 新增 `lerobot` optional extra，目标 Linux 主机可通过 `uv sync --extra dev --extra lerobot` 安装 LeRobot ARX5 插件并进行无硬件导入验证。
-- 将 release 状态推进为 `0.6.0-rc.1`，标注 LeRobot 非硬件合同完成，真实 record/rollout 仍等待硬件验证。
+- 将 release 状态推进为 `0.6.0-rc.2`，标注 SDK smoke runner 已完成非硬件验证，真实硬件动作仍等待 n100d 上机验证。
 
 ### Fixed
 
-- 修复 `armctrl sysid run --adapter sdk` 的确认参数契约：CLI 现在接收 `--confirm`，并在确认后明确返回真实 SDK backend 尚未接入，而不是由 argparse 报 unknown argument。
+- 修复 `armctrl sysid run --adapter sdk` 的确认参数契约：CLI 现在接收 `--confirm`，并在确认后进入 SDK runner 或结构化安全拒绝，而不是由 argparse 报 unknown argument。
 
 ## [0.6.0-rc.1] - LeRobot Planning Bridge
 

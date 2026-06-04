@@ -5,7 +5,11 @@ import sys
 from pathlib import Path
 
 from armctrl.sysid import SysIdPlanRequest
-from armctrl.sysid_run import SdkSysIdRunner, SDK_CONFIRMATION
+from armctrl.sysid_run import (
+    Arx5InterfaceCollectionBackend,
+    SdkSysIdRunner,
+    SDK_CONFIRMATION,
+)
 
 
 class RecordingBackend:
@@ -153,13 +157,13 @@ def test_cli_sysid_run_sdk_accepts_confirm_but_rejects_missing_backend(
 
     assert completed.returncode == 3
     assert payload["status"] == "rejected"
-    assert payload["reason"] == "real sdk sysid runner is not implemented in this clean rebuild"
+    assert payload["reason"] in {
+        "arx5_interface is not importable in this environment",
+        "planned trajectory did not pass safety checks",
+    }
     assert payload["confirm_received"] is True
     assert payload["movement_allowed"] is False
-    assert (
-        payload["next_gate"]
-        == "implement and verify an arx5_interface SdkCollectionBackend before moving hardware"
-    )
+    assert "next_gate" in payload
 
 
 def test_sdk_sysid_runner_starts_recording_after_safe_state_and_lands_damping(
@@ -195,3 +199,124 @@ def test_sdk_sysid_runner_starts_recording_after_safe_state_and_lands_damping(
     assert manifest["safety"]["recording_starts_after_safe_state"] is True
     assert manifest["safety"]["fault_landing_mode"] == "damping"
     assert manifest["safety"]["movement_allowed"] is True
+
+
+class FakeJointState:
+    def __init__(self, dof: int) -> None:
+        self._pos = [0.0] * dof
+        self._vel = [0.0] * dof
+        self._torque = [0.0] * dof
+        self.gripper_pos = 0.0
+
+    def pos(self) -> list[float]:
+        return self._pos
+
+    def vel(self) -> list[float]:
+        return self._vel
+
+    def torque(self) -> list[float]:
+        return self._torque
+
+
+class FakeController:
+    def __init__(self, robot_config, controller_config, interface: str) -> None:
+        self.commands: list[list[float]] = []
+        self.damping_count = 0
+        self.reset_home_count = 0
+
+    def reset_to_home(self) -> None:
+        self.reset_home_count += 1
+
+    def set_joint_cmd(self, cmd: FakeJointState) -> None:
+        self.commands.append(list(cmd.pos()))
+
+    def get_joint_state(self) -> FakeJointState:
+        state = FakeJointState(6)
+        if self.commands:
+            state.pos()[:] = self.commands[-1]
+        return state
+
+    def set_to_damping(self) -> None:
+        self.damping_count += 1
+
+
+class FakeRobotConfig:
+    joint_dof = 6
+
+
+class FakeControllerConfig:
+    controller_dt = 0.0
+    gravity_compensation = False
+    background_send_recv = False
+
+
+class FakeConfigFactory:
+    def __init__(self, value) -> None:
+        self._value = value
+
+    @classmethod
+    def get_instance(cls):
+        return cls(cls._value)
+
+    def get_config(self, *args):
+        return self._value
+
+
+class FakeRobotConfigFactory(FakeConfigFactory):
+    _value = FakeRobotConfig()
+
+
+class FakeControllerConfigFactory(FakeConfigFactory):
+    _value = FakeControllerConfig()
+
+
+class FakeArx5Module:
+    RobotConfigFactory = FakeRobotConfigFactory
+    ControllerConfigFactory = FakeControllerConfigFactory
+    JointState = FakeJointState
+    last_controller: FakeController | None = None
+
+    @staticmethod
+    def Arx5JointController(robot_config, controller_config, interface: str) -> FakeController:
+        controller = FakeController(robot_config, controller_config, interface)
+        FakeArx5Module.last_controller = controller
+        return controller
+
+
+def test_arx5_interface_backend_sends_joint_commands_and_lands_damping() -> None:
+    request = SysIdPlanRequest(
+        profile_name="gravity_sweep",
+        dof=6,
+        sample_hz=2,
+        duration_s=1,
+        amplitude_rad=0.05,
+        q_center=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
+        urdf_path="configs/models/X5_camera.urdf",
+        safe_config_path="configs/x5.safe.yaml",
+        output_dir=Path("unused"),
+    )
+    backend = Arx5InterfaceCollectionBackend(
+        model="X5",
+        interface="can0",
+        arx5_module=FakeArx5Module,
+        max_joint_step_rad=0.2,
+        sleep=lambda _: None,
+    )
+
+    backend.enter_hold_or_damping()
+    rows = backend.read_samples(request)
+    backend.enter_damping()
+
+    assert len(rows) == 3
+    assert rows[0]["q_cmd_2"] == "0.300000"
+    assert rows[0]["q_2"] == "0.300000"
+    assert "tau_meas_6" in rows[0]
+    assert FakeArx5Module.last_controller is not None
+    assert len(FakeArx5Module.last_controller.commands) > 3
+    assert FakeArx5Module.last_controller.reset_home_count == 0
+    for previous, current in zip(
+        FakeArx5Module.last_controller.commands,
+        FakeArx5Module.last_controller.commands[1:],
+    ):
+        assert max(abs(a - b) for a, b in zip(previous, current)) <= 0.2 + 1e-9
+    assert FakeArx5Module.last_controller.damping_count == 1

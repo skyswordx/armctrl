@@ -28,9 +28,16 @@ from armctrl.sysid_evidence import SysIdEvidenceImporter
 from armctrl.sysid_figaroh_adapter import FigarohEvidenceAdapter, FigarohHandoffWriter
 from armctrl.sysid_package import SysIdPackager
 from armctrl.sysid_postprocess import SysIdPostprocessor, SysIdPostprocessResult
-from armctrl.sysid_run import FakeSysIdRunner, SdkSysIdRunnerGate
+from armctrl.sysid_run import (
+    Arx5InterfaceCollectionBackend,
+    FakeSysIdRunner,
+    SDK_CONFIRMATION,
+    SdkSysIdRunner,
+    SdkSysIdRunnerGate,
+)
 from armctrl.sysid_sdk import SdkHandshakePlanner, SdkPreflight
 from armctrl.sysid_solve import SysIdSolver
+from armctrl.workspace import WorkspaceSafetyConfig
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -113,6 +120,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     sysid_run_parser = sysid_subparsers.add_parser("run")
     sysid_run_parser.add_argument("profile")
     sysid_run_parser.add_argument("--adapter", default="fake")
+    sysid_run_parser.add_argument("--model", default="X5")
+    sysid_run_parser.add_argument("--interface", default="can0")
     sysid_run_parser.add_argument("--dof", type=int, default=6)
     sysid_run_parser.add_argument("--sample-hz", type=float, default=100.0)
     sysid_run_parser.add_argument("--duration", type=float, default=10.0)
@@ -346,12 +355,53 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "sysid" and args.sysid_command == "run":
         if args.adapter != "fake":
-            payload = SdkSysIdRunnerGate().evaluate(
-                adapter=args.adapter,
-                confirm=args.confirm,
+            if args.confirm != SDK_CONFIRMATION:
+                payload = SdkSysIdRunnerGate().reject_without_confirmation(
+                    adapter=args.adapter,
+                )
+                _emit(payload, as_json=args.as_json)
+                return 3
+            q_center = tuple(args.q_center or [0.0] * args.dof)
+            if len(q_center) != args.dof:
+                parser.error("--q-center length must match --dof")
+            request = SysIdPlanRequest(
+                profile_name=args.profile,
+                dof=args.dof,
+                sample_hz=args.sample_hz,
+                duration_s=args.duration,
+                amplitude_rad=args.amplitude,
+                q_center=q_center,
+                urdf_path=args.urdf_path,
+                safe_config_path=args.safe_config,
+                output_dir=Path(args.output),
             )
-            _emit(payload, as_json=args.as_json)
-            return 3
+            safe_config = WorkspaceSafetyConfig.from_yaml(Path(args.safe_config))
+            try:
+                result = SdkSysIdRunner(
+                    backend=Arx5InterfaceCollectionBackend(
+                        model=args.model,
+                        interface=args.interface,
+                        max_joint_step_rad=safe_config.max_joint_step_rad,
+                    )
+                ).run(request, confirm=args.confirm)
+            except ModuleNotFoundError as error:
+                if error.name != "arx5_interface":
+                    raise
+                payload = SdkSysIdRunnerGate().reject_sdk_unavailable(
+                    adapter=args.adapter,
+                )
+                _emit(payload, as_json=args.as_json)
+                return 3
+            except RuntimeError as error:
+                if str(error) != "planned trajectory did not pass safety checks":
+                    raise
+                payload = SdkSysIdRunnerGate().reject_unsafe_plan(
+                    adapter=args.adapter,
+                )
+                _emit(payload, as_json=args.as_json)
+                return 3
+            payload = {"status": "ok", **result.to_json()}
+            return _emit(payload, as_json=args.as_json)
         q_center = tuple(args.q_center or [0.0] * args.dof)
         if len(q_center) != args.dof:
             parser.error("--q-center length must match --dof")

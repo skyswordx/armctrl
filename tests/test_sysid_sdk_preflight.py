@@ -32,7 +32,7 @@ def test_cli_sysid_sdk_preflight_is_read_only_and_reports_sdk_import_status() ->
     assert payload["movement_allowed"] is False
     assert payload["sdk"]["module"] == "arx5_interface"
     assert payload["sdk"]["status"] in {"available", "missing"}
-    assert payload["next_gate"] == "real_sdk_runner_pending"
+    assert payload["next_gate"] == "sdk_runner_confirm_then_hardware_validation"
 
 
 def test_cli_sysid_sdk_handshake_plan_is_read_only_and_requires_confirmation() -> None:
@@ -63,6 +63,7 @@ def test_cli_sysid_sdk_handshake_plan_is_read_only_and_requires_confirmation() -
     assert payload["movement_allowed"] is False
     assert payload["requires_confirm"] == "I UNDERSTAND THIS WILL MOVE THE ARM"
     assert payload["fault_landing_mode"] == "damping"
+    assert payload["next_gate"] == "sdk_runner_confirm_then_hardware_validation"
     assert step_names == [
         "sdk_preflight",
         "operator_confirm",

@@ -12,6 +12,11 @@ def test_loads_workspace_bounds_from_safe_yaml() -> None:
 
     assert config.workspace_min_m == (0.05, -0.45, 0.02)
     assert config.workspace_max_m == (0.75, 0.45, 0.65)
+    assert config.max_sysid_duration_s == 60.0
+    assert config.max_sysid_sample_hz == 100.0
+    assert config.max_sysid_amplitude_rad == 0.25
+    assert config.max_joint_step_rad == 0.01
+    assert config.settle_before_record_s == 0.5
 
 
 def test_workspace_clearance_passes_for_safe_center_proxy() -> None:

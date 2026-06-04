@@ -4,9 +4,9 @@ from __future__ import annotations
 def release_status() -> dict[str, object]:
     return {
         "schema": "armctrl.release_status.v1",
-        "version": "0.6.0-rc.1",
+        "version": "0.6.0-rc.2",
         "branch": "codex/armctrl-clean-rebuild",
-        "release_readiness": "lerobot_contracts_complete_nonhardware_verified",
+        "release_readiness": "sdk_smoke_runner_nonhardware_verified",
         "milestones": [
             {
                 "id": "v0.2.0",
@@ -29,18 +29,19 @@ def release_status() -> dict[str, object]:
                 "status": "contract_complete",
             },
             {
-                "id": "v0.6.0-rc.1",
-                "name": "lerobot-cli-planning-and-metadata",
-                "status": "rc_nonhardware_contract_complete",
+                "id": "v0.6.0-rc.2",
+                "name": "sdk-smoke-runner-and-operator-manual",
+                "status": "rc_nonhardware_verified_hardware_pending",
             },
         ],
         "hardware_pending": [
             "mesh_body_collision_model",
-            "real_sdk_runner",
+            "real_sdk_runner_hardware_validation",
             "native_lerobot_record_on_target_linux",
             "native_lerobot_rollout_on_target_linux",
             "sdk_preflight_on_target_linux",
             "sdk_handshake_plan_on_target_linux",
+            "sdk_gravity_smoke_on_target_linux",
             "hold_damping_ctrl_c_hardware_landing",
             "n100d_pinocchio_figaroh_validation",
             "hardware_ab_control_benefit_test",
@@ -52,18 +53,19 @@ def release_status() -> dict[str, object]:
                 "uv run armctrl release status --json",
                 "uv sync --extra dev --extra lerobot",
                 "uv run armctrl lerobot doctor --model X5 --robot-interface can0 --teleop-interface can1 --json",
-                "uv run armctrl sysid run gravity_sweep --adapter sdk --output runs/tmp-confirm-check --confirm 'I UNDERSTAND THIS WILL MOVE THE ARM' --json",
+                "uv run armctrl sysid run gravity_sweep --adapter sdk --duration 8 --amplitude 0.5 --q-center 0 0.30 0.30 0 0 0 --output runs/tmp-confirm-check --confirm 'I UNDERSTAND THIS WILL MOVE THE ARM' --json",
             ],
-            "test_count": 57,
-            "scope": "local contracts and non-hardware safety gates through v0.6.0-rc.1",
+            "test_count": 59,
+            "scope": "local contracts and non-hardware safety gates through v0.6.0-rc.2",
         },
         "deferred_validation": {
             "requires_hardware": [
-                "real_sdk_runner",
+                "real_sdk_runner_hardware_validation",
                 "native_lerobot_record_on_target_linux",
                 "native_lerobot_rollout_on_target_linux",
                 "sdk_preflight_on_target_linux",
                 "sdk_handshake_plan_on_target_linux",
+                "sdk_gravity_smoke_on_target_linux",
                 "hold_damping_ctrl_c_hardware_landing",
                 "hardware_ab_control_benefit_test",
             ],
@@ -80,6 +82,7 @@ def release_status() -> dict[str, object]:
             "LeRobot record/train/rollout remain native LeRobot commands; armctrl emits plans and metadata only.",
             "Install LeRobot integrations with uv sync --extra dev --extra lerobot on Linux targets.",
             "Parameter packages require package-gated solver evidence before rollout.",
+            "The SDK sysid runner is wired for low-amplitude smoke collection, but hardware validation is still explicit deferred validation.",
         ],
     }
 
@@ -92,13 +95,14 @@ def release_notes() -> dict[str, object]:
         "conservative online identification policy",
         "Agent recipe CLI skill",
         "LeRobot doctor, native command plans, and dataset metadata bridge",
+        "SDK gravity smoke runner with confirmation, safety gates, and damping landing path",
     ]
     deferred = list(status["hardware_pending"])
-    title = "armctrl 0.6.0-rc.1 LeRobot planning bridge"
+    title = "armctrl 0.6.0-rc.2 SDK smoke runner"
     summary = (
-        "lerobot_contracts_complete_nonhardware_verified: native LeRobot "
-        "record/train/rollout planning and metadata bridge contracts are present, "
-        "while real robot movement remains deferred to explicit hardware validation."
+        "sdk_smoke_runner_nonhardware_verified: the SDK SysID smoke runner, "
+        "confirmation gate, first-frame ramp, and operator manual are present; "
+        "real robot movement remains deferred to explicit n100d hardware validation."
     )
     markdown = (
         f"# {title}\n\n"
