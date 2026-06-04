@@ -52,8 +52,9 @@ def release_status() -> dict[str, object]:
                 "uv run armctrl release status --json",
                 "uv sync --extra dev --extra lerobot",
                 "uv run armctrl lerobot doctor --model X5 --robot-interface can0 --teleop-interface can1 --json",
+                "uv run armctrl sysid run gravity_sweep --adapter sdk --output runs/tmp-confirm-check --confirm 'I UNDERSTAND THIS WILL MOVE THE ARM' --json",
             ],
-            "test_count": 56,
+            "test_count": 57,
             "scope": "local contracts and non-hardware safety gates through v0.6.0-rc.1",
         },
         "deferred_validation": {

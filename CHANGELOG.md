@@ -12,6 +12,10 @@
 - 新增 `lerobot` optional extra，目标 Linux 主机可通过 `uv sync --extra dev --extra lerobot` 安装 LeRobot ARX5 插件并进行无硬件导入验证。
 - 将 release 状态推进为 `0.6.0-rc.1`，标注 LeRobot 非硬件合同完成，真实 record/rollout 仍等待硬件验证。
 
+### Fixed
+
+- 修复 `armctrl sysid run --adapter sdk` 的确认参数契约：CLI 现在接收 `--confirm`，并在确认后明确返回真实 SDK backend 尚未接入，而不是由 argparse 报 unknown argument。
+
 ## [0.6.0-rc.1] - LeRobot Planning Bridge
 
 ### Status

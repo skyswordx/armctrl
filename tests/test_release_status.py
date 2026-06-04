@@ -40,8 +40,9 @@ def test_cli_release_status_reports_lerobot_rc_and_hardware_pending() -> None:
         "uv run armctrl release status --json",
         "uv sync --extra dev --extra lerobot",
         "uv run armctrl lerobot doctor --model X5 --robot-interface can0 --teleop-interface can1 --json",
+        "uv run armctrl sysid run gravity_sweep --adapter sdk --output runs/tmp-confirm-check --confirm 'I UNDERSTAND THIS WILL MOVE THE ARM' --json",
     ]
-    assert payload["verification"]["test_count"] >= 56
+    assert payload["verification"]["test_count"] >= 57
     assert payload["deferred_validation"]["requires_hardware"] == [
         "real_sdk_runner",
         "native_lerobot_record_on_target_linux",

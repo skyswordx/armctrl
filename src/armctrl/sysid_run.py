@@ -169,6 +169,11 @@ def _raw_sample_rows(request: SysIdPlanRequest) -> list[dict[str, str]]:
 
 
 class SdkSysIdRunnerGate:
+    def evaluate(self, *, adapter: str, confirm: str | None) -> dict[str, object]:
+        if confirm != SDK_CONFIRMATION:
+            return self.reject_without_confirmation(adapter=adapter)
+        return self.reject_without_backend(adapter=adapter)
+
     def reject_without_confirmation(self, *, adapter: str) -> dict[str, object]:
         return {
             "status": "rejected",
@@ -180,4 +185,18 @@ class SdkSysIdRunnerGate:
             "fault_landing_mode": "damping",
             "recording_starts_after_safe_state": True,
             "next_gate": "run sysid sdk-handshake-plan before enabling sdk runner",
+        }
+
+    def reject_without_backend(self, *, adapter: str) -> dict[str, object]:
+        return {
+            "status": "rejected",
+            "schema": "armctrl.sysid_run.v1",
+            "adapter": adapter,
+            "reason": "real sdk sysid runner is not implemented in this clean rebuild",
+            "requires_confirm": SDK_CONFIRMATION,
+            "confirm_received": True,
+            "movement_allowed": False,
+            "fault_landing_mode": "damping",
+            "recording_starts_after_safe_state": True,
+            "next_gate": "implement and verify an arx5_interface SdkCollectionBackend before moving hardware",
         }

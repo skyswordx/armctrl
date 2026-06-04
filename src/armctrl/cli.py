@@ -121,6 +121,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     sysid_run_parser.add_argument("--urdf-path", default="configs/models/X5_camera.urdf")
     sysid_run_parser.add_argument("--safe-config", default="configs/x5.safe.yaml")
     sysid_run_parser.add_argument("--output", required=True)
+    sysid_run_parser.add_argument("--confirm")
     sysid_run_parser.add_argument("--json", action="store_true", dest="as_json")
 
     sysid_postprocess_parser = sysid_subparsers.add_parser("postprocess")
@@ -345,8 +346,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "sysid" and args.sysid_command == "run":
         if args.adapter != "fake":
-            payload = SdkSysIdRunnerGate().reject_without_confirmation(
+            payload = SdkSysIdRunnerGate().evaluate(
                 adapter=args.adapter,
+                confirm=args.confirm,
             )
             _emit(payload, as_json=args.as_json)
             return 3

@@ -126,6 +126,42 @@ def test_cli_sysid_run_sdk_is_rejected_until_runner_exists(tmp_path: Path) -> No
     assert payload["next_gate"] == "run sysid sdk-handshake-plan before enabling sdk runner"
 
 
+def test_cli_sysid_run_sdk_accepts_confirm_but_rejects_missing_backend(
+    tmp_path: Path,
+) -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "sysid",
+            "run",
+            "gravity_sweep",
+            "--adapter",
+            "sdk",
+            "--output",
+            str(tmp_path / "ident-run"),
+            "--confirm",
+            SDK_CONFIRMATION,
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+
+    assert completed.returncode == 3
+    assert payload["status"] == "rejected"
+    assert payload["reason"] == "real sdk sysid runner is not implemented in this clean rebuild"
+    assert payload["confirm_received"] is True
+    assert payload["movement_allowed"] is False
+    assert (
+        payload["next_gate"]
+        == "implement and verify an arx5_interface SdkCollectionBackend before moving hardware"
+    )
+
+
 def test_sdk_sysid_runner_starts_recording_after_safe_state_and_lands_damping(
     tmp_path: Path,
 ) -> None:
