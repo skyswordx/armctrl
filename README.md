@@ -114,6 +114,11 @@ simulation backend preference, and the distal link frames used by the fallback
 FK gate. The fallback is clearly labeled; it exists only for conservative local
 checks when mature backends are unavailable.
 
+When `--backend mujoco` is selected, preview loads the model, writes each
+trajectory sample into MuJoCo `qpos`, calls `mj_forward`, and reports contact
+counts plus qpos ranges. This keeps MuJoCo as the simulator while `armctrl`
+only performs orchestration and gate reporting.
+
 ## Recipe Preview
 
 The clean rebuild starts with plan-only Agent recipes. These commands do not

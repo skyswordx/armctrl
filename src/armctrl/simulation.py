@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass
+import importlib
 import importlib.util
 from pathlib import Path
 import tempfile
@@ -270,7 +271,7 @@ def _run_backend_check(
             allowed_collision_pairs=allowed_collision_pairs,
         )
     if selected_backend == "mujoco":
-        return _mujoco_load_check(urdf_path=urdf_path)
+        return _mujoco_trajectory_check(urdf_path=urdf_path, q_samples=q_samples)
     if selected_backend == "moveit":
         return {
             "status": "not_invoked",
@@ -412,9 +413,13 @@ def _strip_pinocchio_suffix(name: str) -> str:
     return name
 
 
-def _mujoco_load_check(*, urdf_path: Path) -> dict[str, object]:
+def _mujoco_trajectory_check(
+    *,
+    urdf_path: Path,
+    q_samples: list[tuple[float, ...]],
+) -> dict[str, object]:
     try:
-        import mujoco
+        mujoco = importlib.import_module("mujoco")
     except ModuleNotFoundError as error:
         return {
             "status": "not_available",
@@ -422,17 +427,80 @@ def _mujoco_load_check(*, urdf_path: Path) -> dict[str, object]:
             "reason": f"module not importable: {error.name}",
         }
     try:
-        mujoco.MjModel.from_xml_path(str(urdf_path))
+        model = mujoco.MjModel.from_xml_path(str(urdf_path))
+        data = mujoco.MjData(model)
+        dof = len(q_samples[0]) if q_samples else 0
+        if dof > int(model.nq):
+            return {
+                "status": "not_evaluated",
+                "method": "mujoco_trajectory_rollout",
+                "reason": f"trajectory dof {dof} exceeds MuJoCo qpos dimension {model.nq}",
+            }
+        max_contact_count = 0
+        first_contact: dict[str, object] | None = None
+        for sample_index, sample in enumerate(q_samples):
+            data.qpos[:dof] = sample
+            mujoco.mj_forward(model, data)
+            contact_count = int(getattr(data, "ncon", 0))
+            max_contact_count = max(max_contact_count, contact_count)
+            if contact_count > 0 and first_contact is None:
+                first_contact = _mujoco_first_contact(model, data, mujoco)
     except Exception as error:  # pragma: no cover - depends on MuJoCo/native meshes
         return {
             "status": "not_evaluated",
-            "method": "mujoco",
+            "method": "mujoco_trajectory_rollout",
             "reason": str(error),
         }
+    status = "fail" if max_contact_count > 0 else "pass"
+    result: dict[str, object] = {
+        "status": status,
+        "method": "mujoco_trajectory_rollout",
+        "checked_samples": len(q_samples),
+        "qpos_dimension": int(model.nq),
+        "max_contact_count": max_contact_count,
+        "qpos_range_rad": _qpos_ranges(q_samples),
+    }
+    if first_contact is not None:
+        result["first_contact"] = first_contact
+    return result
+
+
+def _mujoco_first_contact(
+    model: object,
+    data: object,
+    mujoco: object,
+) -> dict[str, object] | None:
+    try:
+        contact = data.contact[0]
+        geom1 = int(contact.geom1)
+        geom2 = int(contact.geom2)
+    except Exception:
+        return None
     return {
-        "status": "pass",
-        "method": "mujoco_load",
-        "reason": "MuJoCo loaded the URDF model; contact rollout is reserved for a calibrated MJCF scene.",
+        "geom1": geom1,
+        "geom2": geom2,
+        "geom1_name": _mujoco_geom_name(model, mujoco, geom1),
+        "geom2_name": _mujoco_geom_name(model, mujoco, geom2),
+    }
+
+
+def _mujoco_geom_name(model: object, mujoco: object, geom_id: int) -> str | None:
+    try:
+        return mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, geom_id)
+    except Exception:
+        return None
+
+
+def _qpos_ranges(q_samples: list[tuple[float, ...]]) -> dict[str, float]:
+    if not q_samples:
+        return {}
+    dof = len(q_samples[0])
+    return {
+        f"joint_{joint_index + 1}": (
+            max(sample[joint_index] for sample in q_samples)
+            - min(sample[joint_index] for sample in q_samples)
+        )
+        for joint_index in range(dof)
     }
 
 

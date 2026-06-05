@@ -15,6 +15,7 @@
 - 新增 `sim` optional extra：Linux 目标主机可通过 `uv sync --extra dev --extra sim` 安装 MuJoCo 预览依赖。
 - 新增 ROS 2 MoveIt/Jazzy doctor 检测：未 source ROS 环境但 `/opt/ros/jazzy` 存在时，报告 `installed_not_sourced` 和 `source /opt/ros/jazzy/setup.bash` 提示。
 - 新增 X5 显式 allowed collision pairs：仅忽略 n100d Pinocchio/coal 实测出的相邻装配 mesh 重叠对，其他碰撞仍保持 hard gate。
+- 新增 MuJoCo trajectory rollout：`sim preview --backend mujoco` 现在按 `planned_trajectory.csv` 逐帧设置 `qpos`、调用 `mj_forward` 并报告 contact/qpos 指标，不再只是证明 URDF 可加载。
 
 - 新增 `armctrl sysid run --adapter sdk` 的最小 `arx5_interface` 真机 smoke runner：通过显式 `--confirm` 后才会构造 SDK joint controller，并在采集完成、故障或 Ctrl-C 路径中尝试落到 damping。
 - 新增 `docs/hardware_sysid_operator_manual.md`，收束 n100d 上机步骤：USB-CAN、SDK handshake、SysID plan、SDK smoke run、postprocess/solve、Agent recipe 模拟调用和安全配置调参。

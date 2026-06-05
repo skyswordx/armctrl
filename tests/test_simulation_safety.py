@@ -2,6 +2,7 @@ import json
 import importlib.util
 import subprocess
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -120,6 +121,53 @@ def test_native_geometry_urdf_rewrites_relative_mesh_paths_to_absolute(
     assert filenames
     assert all(Path(filename).is_absolute() for filename in filenames)
     assert any(Path(filename).name == "base_link.STL" for filename in filenames)
+
+
+def test_mujoco_preview_rolls_trajectory_forward_and_reports_contacts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    forwarded_qpos: list[tuple[float, ...]] = []
+
+    class FakeModel:
+        nq = 6
+
+        @classmethod
+        def from_xml_path(cls, path: str) -> "FakeModel":
+            assert path.endswith("X5_camera.urdf")
+            return cls()
+
+    class FakeData:
+        def __init__(self, model: FakeModel) -> None:
+            self.qpos = [0.0] * model.nq
+            self.ncon = 0
+
+    def fake_forward(model: FakeModel, data: FakeData) -> None:
+        forwarded_qpos.append(tuple(data.qpos))
+        data.ncon = 0
+
+    fake_mujoco = types.SimpleNamespace(
+        MjModel=FakeModel,
+        MjData=FakeData,
+        mj_forward=fake_forward,
+    )
+    monkeypatch.setitem(sys.modules, "mujoco", fake_mujoco)
+
+    result = simulation._mujoco_trajectory_check(
+        urdf_path=Path("configs/models/X5_camera.urdf"),
+        q_samples=[
+            (0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
+            (0.1, 0.2, 0.4, 0.0, 0.0, 0.0),
+        ],
+    )
+
+    assert result["status"] == "pass"
+    assert result["method"] == "mujoco_trajectory_rollout"
+    assert result["checked_samples"] == 2
+    assert result["max_contact_count"] == 0
+    assert forwarded_qpos == [
+        (0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
+        (0.1, 0.2, 0.4, 0.0, 0.0, 0.0),
+    ]
 
 
 def test_sysid_plan_writes_trajectory_preview_and_includes_simulation_gate(
