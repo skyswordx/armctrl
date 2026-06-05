@@ -271,7 +271,11 @@ def _run_backend_check(
             allowed_collision_pairs=allowed_collision_pairs,
         )
     if selected_backend == "mujoco":
-        return _mujoco_trajectory_check(urdf_path=urdf_path, q_samples=q_samples)
+        return _mujoco_trajectory_check(
+            urdf_path=urdf_path,
+            q_samples=q_samples,
+            allowed_collision_pairs=allowed_collision_pairs,
+        )
     if selected_backend == "moveit":
         return {
             "status": "not_invoked",
@@ -417,6 +421,7 @@ def _mujoco_trajectory_check(
     *,
     urdf_path: Path,
     q_samples: list[tuple[float, ...]],
+    allowed_collision_pairs: tuple[tuple[str, str], ...] = (),
 ) -> dict[str, object]:
     try:
         mujoco = importlib.import_module("mujoco")
@@ -437,14 +442,33 @@ def _mujoco_trajectory_check(
                 "reason": f"trajectory dof {dof} exceeds MuJoCo qpos dimension {model.nq}",
             }
         max_contact_count = 0
+        raw_max_contact_count = 0
         first_contact: dict[str, object] | None = None
+        ignored_contacts: set[tuple[str, str]] = set()
         for sample_index, sample in enumerate(q_samples):
             data.qpos[:dof] = sample
             mujoco.mj_forward(model, data)
-            contact_count = int(getattr(data, "ncon", 0))
+            raw_contact_count = int(getattr(data, "ncon", 0))
+            raw_max_contact_count = max(raw_max_contact_count, raw_contact_count)
+            unallowed_contacts = _mujoco_unallowed_contacts(
+                model,
+                data,
+                mujoco,
+                contact_count=raw_contact_count,
+                allowed_collision_pairs=allowed_collision_pairs,
+            )
+            for contact_pair in _mujoco_allowed_contacts(
+                model,
+                data,
+                mujoco,
+                contact_count=raw_contact_count,
+                allowed_collision_pairs=allowed_collision_pairs,
+            ):
+                ignored_contacts.add(contact_pair)
+            contact_count = len(unallowed_contacts)
             max_contact_count = max(max_contact_count, contact_count)
-            if contact_count > 0 and first_contact is None:
-                first_contact = _mujoco_first_contact(model, data, mujoco)
+            if unallowed_contacts and first_contact is None:
+                first_contact = unallowed_contacts[0]
     except Exception as error:  # pragma: no cover - depends on MuJoCo/native meshes
         return {
             "status": "not_evaluated",
@@ -458,6 +482,11 @@ def _mujoco_trajectory_check(
         "checked_samples": len(q_samples),
         "qpos_dimension": int(model.nq),
         "max_contact_count": max_contact_count,
+        "raw_max_contact_count": raw_max_contact_count,
+        "ignored_allowed_collision_pairs": [
+            {"first": first, "second": second}
+            for first, second in sorted(ignored_contacts)
+        ],
         "qpos_range_rad": _qpos_ranges(q_samples),
     }
     if first_contact is not None:
@@ -465,22 +494,89 @@ def _mujoco_trajectory_check(
     return result
 
 
-def _mujoco_first_contact(
+def _mujoco_unallowed_contacts(
     model: object,
     data: object,
     mujoco: object,
+    *,
+    contact_count: int,
+    allowed_collision_pairs: tuple[tuple[str, str], ...],
+) -> list[dict[str, object]]:
+    contacts: list[dict[str, object]] = []
+    for contact_index in range(contact_count):
+        contact = _mujoco_contact_pair(
+            model,
+            data,
+            mujoco,
+            contact_index=contact_index,
+        )
+        if contact is None:
+            continue
+        first = str(contact["body1_name"])
+        second = str(contact["body2_name"])
+        if _is_allowed_collision_pair(first, second, allowed_collision_pairs):
+            continue
+        contacts.append(contact)
+    return contacts
+
+
+def _mujoco_allowed_contacts(
+    model: object,
+    data: object,
+    mujoco: object,
+    *,
+    contact_count: int,
+    allowed_collision_pairs: tuple[tuple[str, str], ...],
+) -> list[tuple[str, str]]:
+    contacts: list[tuple[str, str]] = []
+    for contact_index in range(contact_count):
+        contact = _mujoco_contact_pair(
+            model,
+            data,
+            mujoco,
+            contact_index=contact_index,
+        )
+        if contact is None:
+            continue
+        first = str(contact["body1_name"])
+        second = str(contact["body2_name"])
+        if _is_allowed_collision_pair(first, second, allowed_collision_pairs):
+            contacts.append(
+                tuple(sorted((_normalize_mujoco_body_name(first), _normalize_mujoco_body_name(second))))
+            )
+    return contacts
+
+
+def _mujoco_contact_pair(
+    model: object,
+    data: object,
+    mujoco: object,
+    *,
+    contact_index: int,
 ) -> dict[str, object] | None:
     try:
-        contact = data.contact[0]
+        contact = data.contact[contact_index]
         geom1 = int(contact.geom1)
         geom2 = int(contact.geom2)
+        body1 = int(model.geom_bodyid[geom1])
+        body2 = int(model.geom_bodyid[geom2])
     except Exception:
         return None
+    body1_name = _normalize_mujoco_body_name(
+        _mujoco_body_name(model, mujoco, body1)
+    )
+    body2_name = _normalize_mujoco_body_name(
+        _mujoco_body_name(model, mujoco, body2)
+    )
     return {
         "geom1": geom1,
         "geom2": geom2,
         "geom1_name": _mujoco_geom_name(model, mujoco, geom1),
         "geom2_name": _mujoco_geom_name(model, mujoco, geom2),
+        "body1": body1,
+        "body2": body2,
+        "body1_name": body1_name,
+        "body2_name": body2_name,
     }
 
 
@@ -489,6 +585,19 @@ def _mujoco_geom_name(model: object, mujoco: object, geom_id: int) -> str | None
         return mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, geom_id)
     except Exception:
         return None
+
+
+def _mujoco_body_name(model: object, mujoco: object, body_id: int) -> str | None:
+    try:
+        return mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, body_id)
+    except Exception:
+        return None
+
+
+def _normalize_mujoco_body_name(name: str | None) -> str:
+    if name in {None, "world"}:
+        return "base_link"
+    return name
 
 
 def _qpos_ranges(q_samples: list[tuple[float, ...]]) -> dict[str, float]:

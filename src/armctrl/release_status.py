@@ -58,7 +58,7 @@ def release_status() -> dict[str, object]:
                 "uv run armctrl lerobot doctor --model X5 --robot-interface can0 --teleop-interface can1 --json",
                 "uv run armctrl sysid run gravity_sweep --adapter sdk --duration 8 --amplitude 0.5 --q-center 0 0.30 0.30 0 0 0 --output runs/tmp-confirm-check --confirm 'I UNDERSTAND THIS WILL MOVE THE ARM' --json",
             ],
-            "test_count": 72,
+            "test_count": 73,
             "scope": "local contracts and non-hardware simulation safety gates through v0.6.0-rc.3",
         },
         "deferred_validation": {
@@ -89,6 +89,7 @@ def release_status() -> dict[str, object]:
             "X5_camera.urdf now has project-local STL assets so Pinocchio/coal can load native geometry without SDK wheel paths.",
             "Known adjacent X5 assembly mesh overlaps are configured as named allowed collision pairs; every other Pinocchio/coal collision remains a hard gate.",
             "MuJoCo preview now performs a qpos trajectory rollout with mj_forward and reports contact counts instead of only loading the URDF.",
+            "MuJoCo rollout reuses the named allowed collision pairs; unlisted contacts still fail the safety gate.",
             "The SDK sysid runner is wired for low-amplitude smoke collection, but hardware validation is still explicit deferred validation.",
             "SysID plans reject trajectories whose adjacent joint samples exceed max_joint_step_rad before any SDK backend is instantiated.",
             "SysID plans now write trajectory_preview.json and gate motion through the simulation safety preview before SDK execution.",

@@ -170,6 +170,58 @@ def test_mujoco_preview_rolls_trajectory_forward_and_reports_contacts(
     ]
 
 
+def test_mujoco_preview_ignores_only_named_allowed_contacts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeModel:
+        nq = 6
+        geom_bodyid = [0, 1]
+
+        @classmethod
+        def from_xml_path(cls, path: str) -> "FakeModel":
+            return cls()
+
+    class FakeContact:
+        geom1 = 0
+        geom2 = 1
+
+    class FakeData:
+        def __init__(self, model: FakeModel) -> None:
+            self.qpos = [0.0] * model.nq
+            self.ncon = 1
+            self.contact = [FakeContact()]
+
+    def fake_forward(model: FakeModel, data: FakeData) -> None:
+        data.ncon = 1
+
+    def fake_name(model: FakeModel, obj_type: object, object_id: int) -> str | None:
+        if obj_type == "body":
+            return {0: "world", 1: "link1"}[object_id]
+        return None
+
+    fake_mujoco = types.SimpleNamespace(
+        MjModel=FakeModel,
+        MjData=FakeData,
+        mj_forward=fake_forward,
+        mj_id2name=fake_name,
+        mjtObj=types.SimpleNamespace(mjOBJ_GEOM="geom", mjOBJ_BODY="body"),
+    )
+    monkeypatch.setitem(sys.modules, "mujoco", fake_mujoco)
+
+    result = simulation._mujoco_trajectory_check(
+        urdf_path=Path("configs/models/X5_camera.urdf"),
+        q_samples=[(0.0, 0.3, 0.3, 0.0, 0.0, 0.0)],
+        allowed_collision_pairs=(("base_link", "link1"),),
+    )
+
+    assert result["status"] == "pass"
+    assert result["raw_max_contact_count"] == 1
+    assert result["max_contact_count"] == 0
+    assert result["ignored_allowed_collision_pairs"] == [
+        {"first": "base_link", "second": "link1"}
+    ]
+
+
 def test_sysid_plan_writes_trajectory_preview_and_includes_simulation_gate(
     tmp_path: Path,
 ) -> None:

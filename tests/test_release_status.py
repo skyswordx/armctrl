@@ -47,7 +47,7 @@ def test_cli_release_status_reports_simulation_safety_rc_and_hardware_pending() 
         "uv run armctrl lerobot doctor --model X5 --robot-interface can0 --teleop-interface can1 --json",
         "uv run armctrl sysid run gravity_sweep --adapter sdk --duration 8 --amplitude 0.5 --q-center 0 0.30 0.30 0 0 0 --output runs/tmp-confirm-check --confirm 'I UNDERSTAND THIS WILL MOVE THE ARM' --json",
     ]
-    assert payload["verification"]["test_count"] == 72
+    assert payload["verification"]["test_count"] == 73
     assert payload["deferred_validation"]["requires_hardware"] == [
         "real_sdk_runner_hardware_validation",
         "native_lerobot_record_on_target_linux",
