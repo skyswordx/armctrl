@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import html
 import importlib
 import importlib.util
+import json
 from pathlib import Path
 import tempfile
 from typing import Iterable
@@ -136,7 +137,7 @@ class TrajectoryPreviewer:
             ),
         }
         if render_path is not None:
-            _write_trajectory_svg(
+            render_format = _write_trajectory_render(
                 output_path=render_path,
                 preview=payload,
                 urdf_path=urdf_path,
@@ -146,7 +147,7 @@ class TrajectoryPreviewer:
             payload["render"] = {
                 "status": "written",
                 "path": str(render_path),
-                "format": "svg",
+                "format": render_format,
             }
         return payload
 
@@ -661,6 +662,338 @@ def _write_trajectory_svg(
         '</svg>',
     ]
     output_path.write_text("\n".join(svg), encoding="utf-8")
+
+
+def _write_trajectory_render(
+    *,
+    output_path: Path,
+    preview: dict[str, object],
+    urdf_path: Path,
+    config: WorkspaceSafetyConfig,
+    q_samples: list[tuple[float, ...]],
+) -> str:
+    suffix = output_path.suffix.lower()
+    if suffix in {".html", ".htm"}:
+        _write_trajectory_animation_html(
+            output_path=output_path,
+            preview=preview,
+            urdf_path=urdf_path,
+            config=config,
+            q_samples=q_samples,
+        )
+        return "html"
+    _write_trajectory_svg(
+        output_path=output_path,
+        preview=preview,
+        urdf_path=urdf_path,
+        config=config,
+        q_samples=q_samples,
+    )
+    return "svg"
+
+
+def _write_trajectory_animation_html(
+    *,
+    output_path: Path,
+    preview: dict[str, object],
+    urdf_path: Path,
+    config: WorkspaceSafetyConfig,
+    q_samples: list[tuple[float, ...]],
+) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    safety = preview["safety"]
+    assert isinstance(safety, dict)
+    allowed = safety["allowed"] is True
+    status_text = "PASS" if allowed else "WARNING"
+    status_color = "#15803d" if allowed else "#b91c1c"
+    reasons = _preview_warning_reasons(safety)
+    frames = link_frame_positions(urdf_path, samples=q_samples)
+    selected_indices = _animation_sample_indices(len(q_samples))
+    link_order = list(frames[0]) if frames else []
+    payload = {
+        "title": "URDF kinematic animation",
+        "status": status_text,
+        "statusColor": status_color,
+        "trajectoryPath": str(preview["trajectory_path"]),
+        "urdfPath": str(urdf_path),
+        "urdfXml": urdf_path.read_text(encoding="utf-8"),
+        "urdfDirectoryUrl": _directory_file_url(urdf_path.parent),
+        "warningReasons": reasons,
+        "qSamples": [list(q_samples[index]) for index in selected_indices],
+        "linkOrder": link_order,
+        "linkFrames": [
+            {
+                name: list(position)
+                for name, position in frames[index].items()
+                if not config.simulation_link_frames
+                or name in config.simulation_link_frames
+                or name == link_order[0]
+            }
+            for index in selected_indices
+        ],
+        "allowedBoxes": [
+            {
+                "name": box.name,
+                "min": list(box.min_m),
+                "max": list(box.max_m),
+            }
+            for box in config.allowed_workspace_boxes
+        ],
+        "forbiddenBoxes": [
+            {
+                "name": box.name,
+                "min": list(box.min_m),
+                "max": list(box.max_m),
+            }
+            for box in config.forbidden_workspace_boxes
+        ],
+        "workspaceMinZ": config.workspace_min_m[2],
+    }
+    data_json = json.dumps(payload, ensure_ascii=True).replace("</", "<\\/")
+    reasons_text = html.escape("; ".join(reasons) if reasons else "all configured gates passed")
+    html_doc = _URDF_ANIMATION_HTML_TEMPLATE
+    html_doc = html_doc.replace("__TITLE__", "armctrl URDF trajectory preview")
+    html_doc = html_doc.replace("__STATUS__", status_text)
+    html_doc = html_doc.replace("__STATUS_COLOR__", status_color)
+    html_doc = html_doc.replace(
+        "__TRAJECTORY_PATH__",
+        html.escape(str(preview["trajectory_path"])),
+    )
+    html_doc = html_doc.replace("__REASONS__", reasons_text)
+    html_doc = html_doc.replace("__PREVIEW_DATA__", data_json)
+    output_path.write_text(html_doc, encoding="utf-8")
+
+
+def _animation_sample_indices(sample_count: int, *, max_frames: int = 300) -> list[int]:
+    if sample_count <= 0:
+        return []
+    if sample_count <= max_frames:
+        return list(range(sample_count))
+    return sorted(
+        {
+            round(index * (sample_count - 1) / (max_frames - 1))
+            for index in range(max_frames)
+        }
+    )
+
+
+def _directory_file_url(path: Path) -> str:
+    return path.resolve().as_uri().rstrip("/") + "/"
+
+
+_URDF_ANIMATION_HTML_TEMPLATE = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>__TITLE__</title>
+  <style>
+    body { margin: 0; font-family: Arial, sans-serif; background: #f8fafc; color: #0f172a; }
+    header { padding: 18px 22px 10px; background: #ffffff; border-bottom: 1px solid #cbd5e1; }
+    h1 { margin: 0 0 6px; font-size: 22px; color: __STATUS_COLOR__; }
+    .meta { font-size: 13px; color: #475569; overflow-wrap: anywhere; }
+    #viewer { width: 100vw; height: calc(100vh - 126px); display: block; }
+    #hud { position: fixed; left: 16px; bottom: 14px; right: 16px; display: flex; gap: 12px; align-items: center; }
+    #hud > div { background: rgba(255,255,255,0.92); border: 1px solid #cbd5e1; padding: 10px 12px; border-radius: 8px; box-shadow: 0 8px 24px rgba(15,23,42,0.12); }
+    input[type="range"] { width: min(54vw, 560px); }
+    button { border: 1px solid #94a3b8; background: #ffffff; color: #0f172a; padding: 7px 10px; border-radius: 6px; cursor: pointer; }
+    button:hover { background: #f1f5f9; }
+    .warn { color: __STATUS_COLOR__; font-weight: 700; }
+  </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <header>
+    <h1>__STATUS__: URDF kinematic animation</h1>
+    <div class="meta">Trajectory: __TRAJECTORY_PATH__</div>
+    <div class="meta warn">__REASONS__</div>
+  </header>
+  <canvas id="viewer"></canvas>
+  <div id="hud">
+    <div><button id="play">Pause</button></div>
+    <div>Frame <span id="frame">0</span>/<span id="frameCount">0</span></div>
+    <div><input id="slider" type="range" min="0" max="0" value="0"></div>
+  </div>
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+    const previewData = __PREVIEW_DATA__;
+    const canvas = document.getElementById('viewer');
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    renderer.setPixelRatio(window.devicePixelRatio);
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0xf8fafc);
+    const camera = new THREE.PerspectiveCamera(48, 1, 0.02, 20);
+    camera.position.set(1.2, -1.4, 0.9);
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.target.set(0.2, 0, 0.24);
+    controls.update();
+
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x94a3b8, 2.4));
+    const dir = new THREE.DirectionalLight(0xffffff, 1.1);
+    dir.position.set(1, -1, 2);
+    scene.add(dir);
+    scene.add(new THREE.GridHelper(1.6, 16, 0x94a3b8, 0xcbd5e1));
+    scene.add(new THREE.AxesHelper(0.18));
+
+    const robotGroup = new THREE.Group();
+    scene.add(robotGroup);
+    let urdfRobot = null;
+    let useUrdfRobot = false;
+
+    function addBox(box, color, opacity) {
+      const min = box.min;
+      const max = box.max;
+      const size = new THREE.Vector3(max[0] - min[0], max[1] - min[1], max[2] - min[2]);
+      const center = new THREE.Vector3((max[0] + min[0]) / 2, (max[1] + min[1]) / 2, (max[2] + min[2]) / 2);
+      const geom = new THREE.BoxGeometry(size.x, size.y, size.z);
+      const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false });
+      const mesh = new THREE.Mesh(geom, mat);
+      mesh.position.copy(center);
+      scene.add(mesh);
+      const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geom), new THREE.LineBasicMaterial({ color }));
+      edges.position.copy(center);
+      scene.add(edges);
+    }
+
+    previewData.allowedBoxes.forEach(box => addBox(box, 0x16a34a, 0.045));
+    previewData.forbiddenBoxes.forEach(box => addBox(box, 0xdc2626, 0.12));
+
+    function sphere(position, radius, color) {
+      const mesh = new THREE.Mesh(
+        new THREE.SphereGeometry(radius, 20, 12),
+        new THREE.MeshStandardMaterial({ color, roughness: 0.55 })
+      );
+      mesh.position.fromArray(position);
+      return mesh;
+    }
+
+    function cylinderBetween(start, end, color) {
+      const a = new THREE.Vector3().fromArray(start);
+      const b = new THREE.Vector3().fromArray(end);
+      const delta = new THREE.Vector3().subVectors(b, a);
+      const length = delta.length();
+      if (length < 1e-6) return null;
+      const mesh = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.018, 0.018, length, 16),
+        new THREE.MeshStandardMaterial({ color, roughness: 0.45 })
+      );
+      mesh.position.copy(a).addScaledVector(delta, 0.5);
+      mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), delta.normalize());
+      return mesh;
+    }
+
+    async function tryLoadUrdfRobot() {
+      try {
+        const module = await import('https://unpkg.com/urdf-loader@0.12.6/src/URDFLoader.js');
+        const URDFLoader = module.default || module.URDFLoader;
+        const loader = new URDFLoader();
+        loader.workingPath = previewData.urdfDirectoryUrl;
+        urdfRobot = loader.parse(previewData.urdfXml);
+        urdfRobot.traverse(child => {
+          if (child.isMesh) {
+            child.castShadow = false;
+            child.receiveShadow = false;
+          }
+        });
+        scene.add(urdfRobot);
+        useUrdfRobot = true;
+      } catch (error) {
+        const note = document.createElement('div');
+        note.className = 'meta';
+        note.textContent = 'URDFLoader mesh view unavailable in this browser context; showing FK skeleton fallback.';
+        document.querySelector('header').appendChild(note);
+      }
+    }
+
+    function setUrdfJoints(index) {
+      if (!urdfRobot) return;
+      const q = previewData.qSamples[index] || [];
+      q.forEach((value, jointIndex) => {
+        const names = [`joint${jointIndex + 1}`, `joint_${jointIndex + 1}`];
+        names.forEach(name => {
+          if (urdfRobot.joints && urdfRobot.joints[name]) {
+            urdfRobot.joints[name].setJointValue(value);
+          }
+        });
+      });
+    }
+
+    function drawFrame(index) {
+      robotGroup.clear();
+      if (useUrdfRobot) {
+        setUrdfJoints(index);
+        robotGroup.visible = false;
+      } else {
+        robotGroup.visible = true;
+      }
+      const frames = previewData.linkFrames[index] || {};
+      const points = [[0, 0, 0]];
+      previewData.linkOrder.forEach(name => {
+        if (frames[name]) points.push(frames[name]);
+      });
+      points.forEach((point, pointIndex) => {
+        robotGroup.add(sphere(point, pointIndex === points.length - 1 ? 0.032 : 0.024, pointIndex === points.length - 1 ? 0xf97316 : 0x2563eb));
+        if (pointIndex > 0) {
+          const link = cylinderBetween(points[pointIndex - 1], point, 0x334155);
+          if (link) robotGroup.add(link);
+        }
+      });
+      frameLabel.textContent = String(index);
+      slider.value = String(index);
+    }
+
+    const slider = document.getElementById('slider');
+    const frameLabel = document.getElementById('frame');
+    const frameCount = document.getElementById('frameCount');
+    const playButton = document.getElementById('play');
+    const lastFrame = Math.max(0, previewData.linkFrames.length - 1);
+    slider.max = String(lastFrame);
+    frameCount.textContent = String(lastFrame);
+    let frame = 0;
+    let playing = true;
+    slider.addEventListener('input', () => { frame = Number(slider.value); drawFrame(frame); });
+    playButton.addEventListener('click', () => {
+      playing = !playing;
+      playButton.textContent = playing ? 'Pause' : 'Play';
+    });
+
+    function resize() {
+      const width = canvas.clientWidth || window.innerWidth;
+      const height = canvas.clientHeight || Math.max(300, window.innerHeight - 126);
+      renderer.setSize(width, height, false);
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+    }
+    window.addEventListener('resize', resize);
+    resize();
+    await tryLoadUrdfRobot();
+    drawFrame(0);
+
+    let previous = 0;
+    function animate(now) {
+      requestAnimationFrame(animate);
+      if (playing && now - previous > 80 && lastFrame > 0) {
+        frame = (frame + 1) % (lastFrame + 1);
+        drawFrame(frame);
+        previous = now;
+      }
+      controls.update();
+      renderer.render(scene, camera);
+    }
+    requestAnimationFrame(animate);
+  </script>
+</body>
+</html>
+"""
 
 
 def _preview_warning_reasons(safety: dict[str, object]) -> list[str]:

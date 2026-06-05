@@ -398,6 +398,92 @@ def test_cli_sim_preview_can_render_unsafe_trajectory_warning_svg(
     assert "outside_allowed_workspace" in svg
 
 
+def test_cli_sim_preview_can_render_urdf_animation_html(tmp_path: Path) -> None:
+    trajectory_path = tmp_path / "planned_trajectory.csv"
+    render_path = tmp_path / "preview.html"
+    trajectory_path.write_text(
+        "time_s,q_cmd_1,q_cmd_2,q_cmd_3,q_cmd_4,q_cmd_5,q_cmd_6\n"
+        "0.000000,0,0.3,0.3,0,0,0\n"
+        "0.010000,0.02,0.31,0.29,0.01,0,0\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "sim",
+            "preview",
+            "--trajectory",
+            str(trajectory_path),
+            "--urdf-path",
+            "configs/models/X5_camera.urdf",
+            "--safe-config",
+            "configs/x5.safe.yaml",
+            "--render",
+            str(render_path),
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+    html = render_path.read_text(encoding="utf-8")
+
+    assert payload["render"]["format"] == "html"
+    assert payload["render"]["path"] == str(render_path)
+    assert "URDF kinematic animation" in html
+    assert "three.module.js" in html
+    assert "URDFLoader" in html
+    assert '"urdfXml"' in html
+    assert '"linkFrames"' in html
+
+
+def test_cli_sim_preview_renders_unsafe_urdf_animation_warning_html(
+    tmp_path: Path,
+) -> None:
+    trajectory_path = tmp_path / "planned_trajectory.csv"
+    render_path = tmp_path / "preview.html"
+    trajectory_path.write_text(
+        "time_s,q_cmd_1,q_cmd_2,q_cmd_3,q_cmd_4,q_cmd_5,q_cmd_6\n"
+        "0.000000,0,3.0,1.0,0,0,0\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "sim",
+            "preview",
+            "--trajectory",
+            str(trajectory_path),
+            "--urdf-path",
+            "configs/models/X5_camera.urdf",
+            "--safe-config",
+            "configs/x5.safe.yaml",
+            "--render",
+            str(render_path),
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+    html = render_path.read_text(encoding="utf-8")
+
+    assert payload["render"]["format"] == "html"
+    assert payload["safety"]["allowed"] is False
+    assert "WARNING" in html
+    assert "outside_allowed_workspace" in html
+
+
 def test_auto_preview_records_failed_mature_backend_attempt_and_falls_back(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

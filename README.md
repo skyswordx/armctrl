@@ -110,6 +110,17 @@ uv run armctrl sim preview \
   --json
 ```
 
+Render an interactive URDF-FK animation instead of the compact SVG report:
+
+```bash
+uv run armctrl sim preview \
+  --trajectory runs/ident-plan-preview/planned_trajectory.csv \
+  --urdf-path configs/models/X5_camera.urdf \
+  --safe-config configs/x5.safe.yaml \
+  --render runs/ident-plan-preview/trajectory_preview.html \
+  --json
+```
+
 `configs/x5.safe.yaml` defines named allowed and forbidden workspace boxes,
 simulation backend preference, and the distal link frames used by the fallback
 FK gate. The fallback is clearly labeled; it exists only for conservative local
@@ -124,6 +135,13 @@ only performs orchestration and gate reporting.
 end-effector side-view clearance. Unsafe trajectories are still rendered, but
 the SVG is marked with `WARNING` and the first gate reasons so the operator or
 Agent can inspect why execution was blocked.
+
+`--render <path.html>` writes a browser-openable 3D URDF kinematic animation
+using a mature Three.js-style viewer surface. The safety decision still comes
+from the configured simulation gate; the HTML is an operator/Agent preview
+artifact, not a replacement for MoveIt, MuJoCo, or Pinocchio/coal checks.
+Dangerous trajectories are rendered too, with `WARNING` and the first gate
+reasons shown in the page header.
 
 ## Recipe Preview
 

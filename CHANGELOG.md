@@ -17,6 +17,7 @@
 - 新增 X5 显式 allowed collision pairs：仅忽略 n100d Pinocchio/coal 实测出的相邻装配 mesh 重叠对，其他碰撞仍保持 hard gate。
 - 新增 MuJoCo trajectory rollout：`sim preview --backend mujoco` 现在按 `planned_trajectory.csv` 逐帧设置 `qpos`、调用 `mj_forward` 并报告 contact/qpos 指标，不再只是证明 URDF 可加载。
 - 新增 CLI SVG 可视化：`sim preview --render path.svg` 与 `sysid plan --render` 会渲染轨迹预览；危险轨迹也会出图并带 `WARNING` 与 gate 原因。
+- 新增 CLI HTML 动画可视化：`sim preview --render path.html` 会生成可交互 URDF-FK 轨迹动画；被 gate 拒绝的危险轨迹也会渲染并标出 `WARNING` 与原因。
 
 - 新增 `armctrl sysid run --adapter sdk` 的最小 `arx5_interface` 真机 smoke runner：通过显式 `--confirm` 后才会构造 SDK joint controller，并在采集完成、故障或 Ctrl-C 路径中尝试落到 damping。
 - 新增 `docs/hardware_sysid_operator_manual.md`，收束 n100d 上机步骤：USB-CAN、SDK handshake、SysID plan、SDK smoke run、postprocess/solve、Agent recipe 模拟调用和安全配置调参。
