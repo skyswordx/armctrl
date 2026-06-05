@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "armctrl"
-version = "0.6.0rc1"
+version = "0.6.0rc3"
 description = "Safe ARX5 arm control interface for Roboclaw"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -13,6 +13,7 @@ dependencies = [
   "figaroh==0.3.1; sys_platform == 'linux'",
   "numpy>=1.26",
   "pin==4.0.0; sys_platform == 'linux'",
+  "PyYAML>=6.0.2",
   "scipy>=1.13",
 ]
 

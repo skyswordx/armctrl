@@ -85,6 +85,8 @@ uv run armctrl sysid sdk-handshake-plan \
   --model X5 \
   --interface can0 \
   --json
+
+uv run armctrl sim doctor --json
 ```
 
 预期：
@@ -93,6 +95,7 @@ uv run armctrl sysid sdk-handshake-plan \
 - `sdk.status == available`
 - `movement_allowed == false`
 - `requires_confirm == "I UNDERSTAND THIS WILL MOVE THE ARM"`
+- `sim doctor` 只读检查 `pinocchio_coal`、`mujoco`、`moveit`、`figaroh` 的可用性，不打开 CAN，不实例化 SDK，不移动硬件。
 
 ## 3. 安全中心位与安全配置
 
@@ -116,6 +119,21 @@ configs/x5.safe.yaml
 safety:
   workspace_min_m: [0.05, -0.45, 0.02]
   workspace_max_m: [0.75, 0.45, 0.65]
+  allowed_workspace_boxes:
+    - name: main_body_sweep_volume
+      min_m: [-0.35, -0.45, 0.02]
+      max_m: [0.75, 0.45, 0.65]
+  forbidden_workspace_boxes:
+    - name: table_surface
+      min_m: [-1.0, -1.0, -0.20]
+      max_m: [1.0, 1.0, 0.02]
+    - name: base_keepout
+      min_m: [-0.08, -0.08, -0.05]
+      max_m: [0.08, 0.08, 0.15]
+  simulation:
+    backend_preference: [pinocchio_coal, mujoco, moveit, urdf_fk_fallback]
+    link_frames: [link5, link6, eef_link]
+    min_clearance_m: 0.02
   max_sysid_duration_s: 60.0
   max_sysid_sample_hz: 100.0
   max_sysid_amplitude_rad: 0.25
@@ -155,6 +173,7 @@ uv run armctrl sysid plan gravity_sweep \
 
 ```bash
 cat runs/plan-gravity-smoke/manifest.json
+cat runs/plan-gravity-smoke/trajectory_preview.json
 ```
 
 必须满足：
@@ -164,6 +183,8 @@ cat runs/plan-gravity-smoke/manifest.json
 - `sysid_parameter_check.status == pass`
 - `trajectory_step_check.status == pass`
 - `workspace_clearance_check.status == pass`
+- `simulation_check.status == pass`
+- `trajectory_preview.json.backend.selected` 记录实际使用的成熟后端，或在后端缺失时明确标成 `urdf_fk_fallback`
 
 如果 fail，不要运行真机。先减小 `--amplitude` 或调整 `--q-center` / `configs/x5.safe.yaml`。
 
@@ -344,6 +365,7 @@ ls /dev/ttyACM*
 ip link show can0
 uv run armctrl sysid sdk-preflight --model X5 --interface can0 --json
 uv run armctrl sysid sdk-handshake-plan --model X5 --interface can0 --json
+uv run armctrl sim doctor --json
 uv run armctrl sysid plan gravity_sweep --dof 6 --sample-hz 100 --duration 8 --amplitude 0.05 --q-center $SAFE_CENTER --urdf-path configs/models/X5_camera.urdf --safe-config configs/x5.safe.yaml --output runs/plan-gravity-smoke --json
 uv run armctrl sysid run gravity_sweep --adapter sdk --model X5 --interface can0 --dof 6 --sample-hz 100 --duration 8 --amplitude 0.05 --q-center $SAFE_CENTER --urdf-path configs/models/X5_camera.urdf --safe-config configs/x5.safe.yaml --output runs/ident-sdk-gravity-smoke --confirm "I UNDERSTAND THIS WILL MOVE THE ARM" --json
 uv run armctrl sysid postprocess --dataset runs/ident-sdk-gravity-smoke --solve --json

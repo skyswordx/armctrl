@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Iterable
 
 from armctrl.limits import LimitDecision, UrdfJointLimits, evaluate_joint_limits
+from armctrl.simulation import TrajectoryPreviewer
 from armctrl.workspace import WorkspaceSafetyConfig, evaluate_workspace_fk_clearance
 
 
@@ -131,6 +132,7 @@ class SysIdPlanner:
         request.output_dir.mkdir(parents=True, exist_ok=True)
         trajectory_path = request.output_dir / "planned_trajectory.csv"
         manifest_path = request.output_dir / "manifest.json"
+        preview_path = request.output_dir / "trajectory_preview.json"
         limit_decision = evaluate_joint_limits(
             UrdfJointLimits.from_urdf(Path(request.urdf_path)),
             q_center=request.q_center,
@@ -162,12 +164,27 @@ class SysIdPlanner:
             writer.writeheader()
             writer.writerows(rows)
 
+        preview = TrajectoryPreviewer().preview(
+            trajectory_path=trajectory_path,
+            urdf_path=Path(request.urdf_path),
+            safe_config_path=Path(request.safe_config_path),
+        )
+        preview_path.write_text(
+            json.dumps(preview, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        simulation_status = (
+            "pass" if preview["safety"]["allowed"] is True else "fail"
+        )
+        safety_allowed = safety_allowed and simulation_status == "pass"
+
         safety_reason = _safety_reason(
             plan_reason=plan.safety.reason,
             parameter_status=parameter_decision.status,
             step_status=step_decision.status,
             limit_status=limit_decision.status,
             workspace_status=workspace_decision.status,
+            simulation_status=simulation_status,
         )
         manifest = {
             "schema": "armctrl.ident_plan_manifest.v1",
@@ -202,12 +219,19 @@ class SysIdPlanner:
                         "method": workspace_decision.method,
                         "violations": workspace_decision.violations,
                     },
+                    "simulation_check": {
+                        "status": simulation_status,
+                        "backend": preview["backend"],
+                        "zone_check": preview["safety"]["zone_check"],
+                        "clearance_check": preview["safety"]["clearance_check"],
+                    },
                     "hardware_execution": "not_requested",
                 },
             },
             "handoff": plan.handoff,
             "artifacts": {
                 "planned_trajectory": str(trajectory_path),
+                "trajectory_preview": str(preview_path),
                 "manifest": str(manifest_path),
             },
         }
@@ -222,6 +246,7 @@ class SysIdPlanner:
             handoff=plan.handoff,
             artifacts={
                 "planned_trajectory": str(trajectory_path),
+                "trajectory_preview": str(preview_path),
                 "manifest": str(manifest_path),
             },
             artifact_safety={
@@ -242,6 +267,14 @@ class SysIdPlanner:
                     "status": workspace_decision.status,
                     "method": workspace_decision.method,
                     "violation_count": len(workspace_decision.violations),
+                },
+                "simulation_check": {
+                    "status": simulation_status,
+                    "backend": preview["backend"]["selected"],
+                    "violation_count": len(
+                        preview["safety"]["zone_check"]["violations"]
+                    )
+                    + len(preview["safety"]["clearance_check"]["violations"]),
                 },
             },
         )
@@ -280,6 +313,7 @@ def _safety_reason(
     step_status: str,
     limit_status: str,
     workspace_status: str,
+    simulation_status: str,
 ) -> str:
     # Detailed violations are recorded in the manifest; this message stays compact
     # for CLI consumers that only need the first gate reason.
@@ -291,6 +325,8 @@ def _safety_reason(
         return "planned trajectory violates URDF joint limits"
     if workspace_status == "fail":
         return "planned trajectory violates workspace clearance proxy"
+    if simulation_status == "fail":
+        return "planned trajectory failed simulation safety preview"
     return plan_reason
 
 

@@ -23,6 +23,7 @@ from armctrl.online_id import (
     ParameterUpdate,
 )
 from armctrl.safety import SafetyGate
+from armctrl.simulation import SimulationDoctor, TrajectoryPreviewer
 from armctrl.sysid import SysIdPlanner, SysIdPlanRequest
 from armctrl.sysid_evidence import SysIdEvidenceImporter
 from armctrl.sysid_figaroh_adapter import FigarohEvidenceAdapter, FigarohHandoffWriter
@@ -103,6 +104,19 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     sysid_parser = subparsers.add_parser("sysid")
     sysid_subparsers = sysid_parser.add_subparsers(dest="sysid_command", required=True)
+
+    sim_parser = subparsers.add_parser("sim")
+    sim_subparsers = sim_parser.add_subparsers(dest="sim_command", required=True)
+
+    sim_doctor_parser = sim_subparsers.add_parser("doctor")
+    sim_doctor_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    sim_preview_parser = sim_subparsers.add_parser("preview")
+    sim_preview_parser.add_argument("--trajectory", required=True)
+    sim_preview_parser.add_argument("--urdf-path", default="configs/models/X5_camera.urdf")
+    sim_preview_parser.add_argument("--safe-config", default="configs/x5.safe.yaml")
+    sim_preview_parser.add_argument("--backend", default="auto")
+    sim_preview_parser.add_argument("--json", action="store_true", dest="as_json")
 
     sysid_plan_parser = sysid_subparsers.add_parser("plan")
     sysid_plan_parser.add_argument("profile")
@@ -320,6 +334,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                 safe_config=args.safe_config,
                 output=Path(args.output),
             )
+        )
+        payload = {"status": "ok", **result}
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "sim" and args.sim_command == "doctor":
+        payload = {"status": "ok", **SimulationDoctor().run()}
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "sim" and args.sim_command == "preview":
+        result = TrajectoryPreviewer().preview(
+            trajectory_path=Path(args.trajectory),
+            urdf_path=Path(args.urdf_path),
+            safe_config_path=Path(args.safe_config),
+            backend=args.backend,
         )
         payload = {"status": "ok", **result}
         return _emit(payload, as_json=args.as_json)

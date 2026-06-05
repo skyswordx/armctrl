@@ -14,9 +14,9 @@
 
 ## Release Track
 
-Current package version: `0.6.0-rc.1`.
+Current package version: `0.6.0-rc.3`.
 
-Release readiness: `lerobot_contracts_complete_nonhardware_verified`.
+Release readiness: `simulation_safety_preview_nonhardware_verified`.
 
 ### v0.2.0 - Governance And Safety Boundary
 

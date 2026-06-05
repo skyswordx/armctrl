@@ -25,6 +25,8 @@ to rebuild the system with explicit boundaries.
 
 - ARX5 SDK / `arx5-interface` for hardware sessions and low-level control;
 - Pinocchio for deterministic dynamics regressors;
+- Pinocchio + coal/hpp-fcl, MuJoCo, and MoveIt as mature simulation/safety
+  oracles when available;
 - FIGAROH for mature identification math and excitation tooling;
 - LeRobot ARX5 integrations for data collection, training, and policy rollout.
 
@@ -49,13 +51,48 @@ uv run armctrl release status --json
 uv run armctrl release notes --json
 ```
 
-Version `0.6.0-rc.1` means the clean contracts through Agent recipes plus the
-LeRobot planning bridge are present. Hardware execution, real SDK collection,
-native LeRobot record/rollout on hardware, and n100d Pinocchio/FIGAROH
-validation are still explicitly marked pending. The JSON includes local
+Version `0.6.0-rc.3` means safety-space config, simulation backend discovery,
+SysID trajectory preview artifacts, Agent recipes, SDK smoke-runner contracts,
+and the LeRobot planning bridge are present. Hardware execution, native LeRobot
+record/rollout on hardware, and n100d mature backend validation are still
+explicitly marked pending. The JSON includes local
 verification commands plus separate `deferred_validation` buckets for hardware,
 external tools, and geometry upgrades. Release notes are generated from the same
 status surface, so the repository does not need another release-note document.
+
+## Simulation Safety Preview
+
+`armctrl` is a thin safety orchestration shell. It does not reimplement MoveIt,
+MuJoCo, Pinocchio/coal, or FIGAROH. It converts planned motion into inputs that
+mature backends can inspect, then gates motion from their results.
+
+Read-only backend check:
+
+```bash
+uv run armctrl sim doctor --json
+```
+
+The doctor reports importability for:
+
+- `pinocchio_coal`: lightweight URDF geometry collision checks;
+- `mujoco`: contact and dynamics preview;
+- `moveit`: ROS planning-scene state validity and collision oracle;
+- `figaroh`: SysID excitation optimization and identification handoff.
+
+Preview an already generated trajectory without hardware:
+
+```bash
+uv run armctrl sim preview \
+  --trajectory runs/ident-plan-preview/planned_trajectory.csv \
+  --urdf-path configs/models/X5_camera.urdf \
+  --safe-config configs/x5.safe.yaml \
+  --json
+```
+
+`configs/x5.safe.yaml` defines named allowed and forbidden workspace boxes,
+simulation backend preference, and the distal link frames used by the fallback
+FK gate. The fallback is clearly labeled; it exists only for conservative local
+checks when mature backends are unavailable.
 
 ## Recipe Preview
 
@@ -102,10 +139,12 @@ uv run armctrl sysid plan gravity_sweep \
   --json
 ```
 
-This writes `planned_trajectory.csv` and `manifest.json`. URDF joint-limit
-checks are evaluated from `--urdf-path`; workspace clearance uses a URDF
-frame-level FK table-height check from `--safe-config`. Mesh/body collision is
-still pending before hardware execution can be enabled.
+This writes `planned_trajectory.csv`, `trajectory_preview.json`, and
+`manifest.json`. URDF joint-limit checks are evaluated from `--urdf-path`;
+workspace clearance and named allowed/forbidden spaces are evaluated through the
+simulation preview gate from `--safe-config`. When mature backends are
+importable, the preview selects them by config preference; otherwise it records
+`urdf_fk_fallback` and keeps the decision machine-readable.
 
 Run the fake data path:
 

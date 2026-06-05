@@ -6,6 +6,12 @@
 
 ### Added
 
+- 新增 `armctrl sim doctor`，只读检测 `pinocchio_coal`、`mujoco`、`moveit`、`figaroh` 成熟后端可用性，不打开 CAN，不实例化 SDK，不移动硬件。
+- 新增安全空间 DSL：`configs/x5.safe.yaml` 现在支持 `allowed_workspace_boxes`、`forbidden_workspace_boxes` 和 `simulation.backend_preference`，用于统一约束 Agent recipe、SysID 和后续 LeRobot rollout safety bridge。
+- 新增 SysID 轨迹仿真安全预览：`sysid plan --output` 现在写出 `trajectory_preview.json`，并把 `simulation_check` 纳入 `manifest.json` 与 stdout safety gate。
+- 新增 `armctrl sim preview`，可对已生成的 `planned_trajectory.csv` 做无硬件安全预览；成熟后端缺失时明确标记 `urdf_fk_fallback`，不会伪装成完整碰撞仿真。
+- 将 release 状态推进为 `0.6.0-rc.3`，标记 safety-space config、simulation doctor 和 SysID trajectory preview gate 已完成本地非硬件验证。
+
 - 新增 `armctrl sysid run --adapter sdk` 的最小 `arx5_interface` 真机 smoke runner：通过显式 `--confirm` 后才会构造 SDK joint controller，并在采集完成、故障或 Ctrl-C 路径中尝试落到 damping。
 - 新增 `docs/hardware_sysid_operator_manual.md`，收束 n100d 上机步骤：USB-CAN、SDK handshake、SysID plan、SDK smoke run、postprocess/solve、Agent recipe 模拟调用和安全配置调参。
 - 新增 SysID 上机安全参数 gate：`configs/x5.safe.yaml` 现在限制最大 duration、sample rate、amplitude、planned trajectory 相邻采样关节步长、首帧过渡关节步长和记录前 settle 合同。

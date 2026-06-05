@@ -4,9 +4,9 @@ from __future__ import annotations
 def release_status() -> dict[str, object]:
     return {
         "schema": "armctrl.release_status.v1",
-        "version": "0.6.0-rc.2",
+        "version": "0.6.0-rc.3",
         "branch": "codex/armctrl-clean-rebuild",
-        "release_readiness": "sdk_smoke_runner_nonhardware_verified",
+        "release_readiness": "simulation_safety_preview_nonhardware_verified",
         "milestones": [
             {
                 "id": "v0.2.0",
@@ -29,13 +29,12 @@ def release_status() -> dict[str, object]:
                 "status": "contract_complete",
             },
             {
-                "id": "v0.6.0-rc.2",
-                "name": "sdk-smoke-runner-and-operator-manual",
-                "status": "rc_nonhardware_verified_hardware_pending",
+                "id": "v0.6.0-rc.3",
+                "name": "simulation-safety-preview-gate",
+                "status": "rc_nonhardware_verified_remote_backend_pending",
             },
         ],
         "hardware_pending": [
-            "mesh_body_collision_model",
             "real_sdk_runner_hardware_validation",
             "native_lerobot_record_on_target_linux",
             "native_lerobot_rollout_on_target_linux",
@@ -44,6 +43,7 @@ def release_status() -> dict[str, object]:
             "sdk_gravity_smoke_on_target_linux",
             "hold_damping_ctrl_c_hardware_landing",
             "n100d_pinocchio_figaroh_validation",
+            "n100d_mujoco_moveit_pinocchio_coal_doctor",
             "hardware_ab_control_benefit_test",
         ],
         "verification": {
@@ -51,12 +51,14 @@ def release_status() -> dict[str, object]:
                 "uv run pytest -q",
                 "uv run python -m compileall src tests",
                 "uv run armctrl release status --json",
+                "uv run armctrl sim doctor --json",
+                "uv run armctrl sysid plan gravity_sweep --dof 6 --sample-hz 100 --duration 2 --amplitude 0.05 --q-center 0 0.30 0.30 0 0 0 --urdf-path configs/models/X5_camera.urdf --safe-config configs/x5.safe.yaml --output runs/plan-preview-smoke --json",
                 "uv sync --extra dev --extra lerobot",
                 "uv run armctrl lerobot doctor --model X5 --robot-interface can0 --teleop-interface can1 --json",
                 "uv run armctrl sysid run gravity_sweep --adapter sdk --duration 8 --amplitude 0.5 --q-center 0 0.30 0.30 0 0 0 --output runs/tmp-confirm-check --confirm 'I UNDERSTAND THIS WILL MOVE THE ARM' --json",
             ],
-            "test_count": 60,
-            "scope": "local contracts and non-hardware safety gates through v0.6.0-rc.2",
+            "test_count": 66,
+            "scope": "local contracts and non-hardware simulation safety gates through v0.6.0-rc.3",
         },
         "deferred_validation": {
             "requires_hardware": [
@@ -71,10 +73,9 @@ def release_status() -> dict[str, object]:
             ],
             "requires_external_tool": [
                 "n100d_pinocchio_figaroh_validation",
+                "n100d_mujoco_moveit_pinocchio_coal_doctor",
             ],
-            "requires_geometry_upgrade": [
-                "mesh_body_collision_model",
-            ],
+            "requires_geometry_upgrade": [],
         },
         "notes": [
             "Recipe plans are dry-run previews with machine-readable risk explanations.",
@@ -84,6 +85,7 @@ def release_status() -> dict[str, object]:
             "Parameter packages require package-gated solver evidence before rollout.",
         "The SDK sysid runner is wired for low-amplitude smoke collection, but hardware validation is still explicit deferred validation.",
         "SysID plans reject trajectories whose adjacent joint samples exceed max_joint_step_rad before any SDK backend is instantiated.",
+        "SysID plans now write trajectory_preview.json and gate motion through the simulation safety preview before SDK execution.",
         ],
     }
 
@@ -97,13 +99,14 @@ def release_notes() -> dict[str, object]:
         "Agent recipe CLI skill",
         "LeRobot doctor, native command plans, and dataset metadata bridge",
         "SDK gravity smoke runner with confirmation, safety gates, and damping landing path",
+        "Safety-space config plus simulation doctor and SysID trajectory preview gate",
     ]
     deferred = list(status["hardware_pending"])
-    title = "armctrl 0.6.0-rc.2 SDK smoke runner"
+    title = "armctrl 0.6.0-rc.3 simulation safety preview"
     summary = (
-        "sdk_smoke_runner_nonhardware_verified: the SDK SysID smoke runner, "
-        "confirmation gate, first-frame ramp, and operator manual are present; "
-        "real robot movement remains deferred to explicit n100d hardware validation."
+        "simulation_safety_preview_nonhardware_verified: safety-space config, "
+        "simulation backend doctor, and SysID trajectory preview gates are present; "
+        "real robot movement and target-host mature backend validation remain deferred."
     )
     markdown = (
         f"# {title}\n\n"

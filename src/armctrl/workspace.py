@@ -5,6 +5,8 @@ import math
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
+import yaml
+
 
 @dataclass(frozen=True)
 class WorkspaceDecision:
@@ -14,9 +16,27 @@ class WorkspaceDecision:
 
 
 @dataclass(frozen=True)
+class WorkspaceBox:
+    name: str
+    min_m: tuple[float, float, float]
+    max_m: tuple[float, float, float]
+
+    def contains(self, point_m: tuple[float, float, float]) -> bool:
+        return all(
+            lower <= value <= upper
+            for value, lower, upper in zip(point_m, self.min_m, self.max_m)
+        )
+
+
+@dataclass(frozen=True)
 class WorkspaceSafetyConfig:
     workspace_min_m: tuple[float, float, float]
     workspace_max_m: tuple[float, float, float]
+    allowed_workspace_boxes: tuple[WorkspaceBox, ...]
+    forbidden_workspace_boxes: tuple[WorkspaceBox, ...]
+    simulation_backend_preference: tuple[str, ...]
+    simulation_link_frames: tuple[str, ...]
+    min_clearance_m: float
     max_sysid_duration_s: float
     max_sysid_sample_hz: float
     max_sysid_amplitude_rad: float
@@ -25,14 +45,47 @@ class WorkspaceSafetyConfig:
 
     @classmethod
     def from_yaml(cls, path: Path) -> "WorkspaceSafetyConfig":
+        safety = _read_safety_mapping(path)
+        workspace_min_m = _float_triplet_from_value(safety["workspace_min_m"], "workspace_min_m")
+        workspace_max_m = _float_triplet_from_value(safety["workspace_max_m"], "workspace_max_m")
+        allowed_boxes = _read_workspace_boxes(
+            safety.get("allowed_workspace_boxes"),
+            default=(
+                WorkspaceBox(
+                    name="legacy_workspace_bounds",
+                    min_m=workspace_min_m,
+                    max_m=workspace_max_m,
+                ),
+            ),
+        )
+        forbidden_boxes = _read_workspace_boxes(
+            safety.get("forbidden_workspace_boxes"),
+            default=(),
+        )
+        simulation = safety.get("simulation", {}) or {}
         return cls(
-            workspace_min_m=_read_float_triplet(path, "workspace_min_m"),
-            workspace_max_m=_read_float_triplet(path, "workspace_max_m"),
-            max_sysid_duration_s=_read_float(path, "max_sysid_duration_s", default=60.0),
-            max_sysid_sample_hz=_read_float(path, "max_sysid_sample_hz", default=100.0),
-            max_sysid_amplitude_rad=_read_float(path, "max_sysid_amplitude_rad", default=0.25),
-            max_joint_step_rad=_read_float(path, "max_joint_step_rad", default=0.01),
-            settle_before_record_s=_read_float(path, "settle_before_record_s", default=0.5),
+            workspace_min_m=workspace_min_m,
+            workspace_max_m=workspace_max_m,
+            allowed_workspace_boxes=allowed_boxes,
+            forbidden_workspace_boxes=forbidden_boxes,
+            simulation_backend_preference=tuple(
+                simulation.get(
+                    "backend_preference",
+                    ["pinocchio_coal", "mujoco", "moveit", "urdf_fk_fallback"],
+                )
+            ),
+            simulation_link_frames=tuple(
+                simulation.get(
+                    "link_frames",
+                    ["link2", "link3", "link4", "link5", "link6", "eef_link"],
+                )
+            ),
+            min_clearance_m=float(simulation.get("min_clearance_m", 0.02)),
+            max_sysid_duration_s=float(safety.get("max_sysid_duration_s", 60.0)),
+            max_sysid_sample_hz=float(safety.get("max_sysid_sample_hz", 100.0)),
+            max_sysid_amplitude_rad=float(safety.get("max_sysid_amplitude_rad", 0.25)),
+            max_joint_step_rad=float(safety.get("max_joint_step_rad", 0.01)),
+            settle_before_record_s=float(safety.get("settle_before_record_s", 0.5)),
         )
 
 
@@ -104,6 +157,102 @@ def evaluate_workspace_fk_clearance(
         violations=violations,
         method="urdf_fk_frame_clearance",
     )
+
+
+def evaluate_workspace_zones(
+    urdf_path: Path,
+    config: WorkspaceSafetyConfig,
+    *,
+    samples: list[tuple[float, ...]],
+) -> WorkspaceDecision:
+    violations: list[dict[str, object]] = []
+    for sample_index, frame_positions in enumerate(
+        link_frame_positions(urdf_path, samples=samples)
+    ):
+        for link_name, position in frame_positions.items():
+            if config.simulation_link_frames and link_name not in config.simulation_link_frames:
+                continue
+            allowed = any(box.contains(position) for box in config.allowed_workspace_boxes)
+            if not allowed:
+                violations.append(
+                    {
+                        "check": "outside_allowed_workspace",
+                        "sample_index": sample_index,
+                        "link": link_name,
+                        "position_m": list(position),
+                        "allowed_boxes": [box.name for box in config.allowed_workspace_boxes],
+                    }
+                )
+                break
+            forbidden_box = next(
+                (box for box in config.forbidden_workspace_boxes if box.contains(position)),
+                None,
+            )
+            if forbidden_box is not None:
+                violations.append(
+                    {
+                        "check": "inside_forbidden_workspace",
+                        "sample_index": sample_index,
+                        "link": link_name,
+                        "position_m": list(position),
+                        "forbidden_box": forbidden_box.name,
+                    }
+                )
+                break
+    return WorkspaceDecision(
+        status="fail" if violations else "pass",
+        violations=violations,
+        method="workspace_box_zones",
+    )
+
+
+def link_frame_positions(
+    urdf_path: Path,
+    *,
+    samples: list[tuple[float, ...]],
+) -> list[dict[str, tuple[float, float, float]]]:
+    chain = _serial_joint_chain(urdf_path)
+    return [_forward_kinematics(chain, q_sample) for q_sample in samples]
+
+
+def _read_safety_mapping(path: Path) -> dict[str, object]:
+    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    safety = raw.get("safety", raw)
+    if not isinstance(safety, dict):
+        raise ValueError(f"safety config must contain a mapping: {path}")
+    return safety
+
+
+def _float_triplet_from_value(value: object, key: str) -> tuple[float, float, float]:
+    if not isinstance(value, (list, tuple)):
+        raise ValueError(f"{key} must contain exactly three values")
+    triplet = tuple(float(item) for item in value)
+    if len(triplet) != 3:
+        raise ValueError(f"{key} must contain exactly three values")
+    return triplet
+
+
+def _read_workspace_boxes(
+    raw_boxes: object,
+    *,
+    default: tuple[WorkspaceBox, ...],
+) -> tuple[WorkspaceBox, ...]:
+    if raw_boxes is None:
+        return default
+    if not isinstance(raw_boxes, list):
+        raise ValueError("workspace boxes must be a list")
+    boxes: list[WorkspaceBox] = []
+    for raw_box in raw_boxes:
+        if not isinstance(raw_box, dict):
+            raise ValueError("workspace box must be a mapping")
+        boxes.append(
+            WorkspaceBox(
+                name=str(raw_box["name"]),
+                min_m=_float_triplet_from_value(raw_box["min_m"], "min_m"),
+                max_m=_float_triplet_from_value(raw_box["max_m"], "max_m"),
+            )
+        )
+    return tuple(boxes)
 
 
 def _read_float_triplet(path: Path, key: str) -> tuple[float, float, float]:
