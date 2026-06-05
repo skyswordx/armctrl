@@ -48,11 +48,18 @@ safety:
         # regressor condition number. This wider range is still plan/sim/OED
         # only; SDK execution remains gated by URDF/workspace/simulation checks.
         max_sysid_amplitude_rad: 0.8
+        oed_velocity_limits_rad_s: [2.0, 1.2, 1.2, 2.0, 2.0, 2.0]
+        oed_acceleration_limits_rad_s2: [4.0, 2.5, 2.5, 4.0, 4.0, 4.0]
       friction_sweep:
         max_sysid_amplitude_rad: 0.35
+        oed_velocity_limits_rad_s: [1.5, 1.0, 1.0, 1.8, 1.8, 1.8]
+        oed_acceleration_limits_rad_s2: [3.0, 2.0, 2.0, 3.5, 3.5, 3.5]
       gravity_sweep:
         max_sysid_amplitude_rad: 0.45
+        oed_velocity_limits_rad_s: [0.8, 0.6, 0.6, 0.8, 0.8, 0.8]
+        oed_acceleration_limits_rad_s2: [1.5, 1.0, 1.0, 1.5, 1.5, 1.5]
     oed:
+      execution_sample_hz: 100.0
       # FIGAROH waypoint count for one cubic-spline segment. A larger value can
       # improve excitation shape freedom, but it increases IPOPT dimension.
       n_wps: 5

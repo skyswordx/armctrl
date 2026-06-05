@@ -12,6 +12,8 @@
 - Added first-class OED scan evidence artifacts: `oed_scan_attempts.json` flattens per-attempt safety/OED/optimizer fields for external review, and `oed_scan_report.md` gives a compact Markdown table.
 - Added `--attempt-timeout-s` and `--ipopt-print-level` to `scripts/x5_oed_scan.py`, so long FIGAROH/IPOPT attempts can be bounded without wrapping the mature backend command in a shell-specific `timeout`.
 - Added `representative_ipopt_stdout.txt` for OED scans when a diagnostic attempt exposes IPOPT stdout, plus last-iteration `objective/inf_pr/inf_du` extraction from IPOPT iteration tails for timeout cases without a final solver summary.
+- Added SysID frequency layering artifacts: `planned_trajectory.csv` remains the low-rate FIGAROH/OED plan, while `execution_trajectory.csv` is resampled at the configured high-rate rollout frequency for final safety gates.
+- Added configurable X5 profile OED velocity and acceleration limits for Fourier, friction, and gravity profiles, avoiding URDF placeholder velocities such as `1000 rad/s` while keeping the values scan-tunable.
 
 ### Changed
 
@@ -19,6 +21,8 @@
 - Updated the OED quality gate to prefer FIGAROH base-regressor condition when the mature backend reports it, with Pinocchio full-regressor condition retained as a fallback diagnostic.
 - WSL evidence from `runs/oed-scan-profile-relaxed-smoke-20260605-v4` shows the relaxed Fourier request removes `joint_relation_constraints`, raises the Fourier profile amplitude ceiling to `0.8 rad`, and captures `oed_scan_summary.json`, `oed_scan_attempts.json`, `oed_scan_report.md`, and `representative_ipopt_stdout.txt`. The bounded `amplitude=0.3, n_wps=5, stack_reps=1, sample_hz=20` smoke still timed out after 120s without a candidate, but the captured IPOPT iteration log moved objective from `1.049e5` to `2.263e4`, kept `inf_pr=0`, and reduced `inf_du` from `1.13e2` to `1.04e1`; the current bottleneck is runtime/problem size, not the earlier `q2-q3` hard-lock restoration failure.
 - OED scan reproduction should now use armctrl's built-in per-attempt timeout plumbing; `trajectory_command` should point directly at the FIGAROH wrapper.
+- Removed the incorrect `max_joint_step_rad * planning_sample_hz` OED velocity derivation. `max_joint_step_rad` is now an execution-trajectory safety gate, not a FIGAROH velocity limit.
+- WSL evidence from `runs/oed-scan-frequency-layering-smoke-20260606` shows the same `duration=1, amplitude=0.3, n_wps=5, stack_reps=1, sample_hz=20` smoke now keeps `effective_duration_s=1.0`, `effective_sample_count=21`, `execution_sample_count=101`, and reduces IPOPT inequality constraints from `5796` to `276`. The attempt returned `status=ok` with rank `36` and Pinocchio full-regressor condition about `167.43`, but OED quality still fails because optimizer convergence is not yet clean and the external safety gate is not passing.
 
 ### Reproduce
 

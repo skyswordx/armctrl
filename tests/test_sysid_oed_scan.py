@@ -45,7 +45,8 @@ def test_oed_scan_writes_candidate_safe_configs_and_summary(tmp_path: Path) -> N
     first = result["attempts"][0]
     assert first["status"] == "ok"
     assert first["safety_allowed"] is True
-    assert first["timing_contract"]["execution_sample_hz"] == 20.0
+    assert first["timing_contract"]["planning_sample_hz"] == 20.0
+    assert first["timing_contract"]["execution_sample_hz"] == 100.0
     assert first["oed_quality_gate"]["condition_number_threshold"] == 500.0
 
     safe_config = yaml.safe_load(

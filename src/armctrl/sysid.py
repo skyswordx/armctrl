@@ -147,6 +147,7 @@ class SysIdPlanner:
         plan = self.plan(request.profile_name, execute=False)
         request.output_dir.mkdir(parents=True, exist_ok=True)
         trajectory_path = request.output_dir / "planned_trajectory.csv"
+        execution_trajectory_path = request.output_dir / "execution_trajectory.csv"
         manifest_path = request.output_dir / "manifest.json"
         preview_path = request.output_dir / "trajectory_preview.json"
         preview_html_path = request.output_dir / "preview.html"
@@ -155,13 +156,14 @@ class SysIdPlanner:
         parameter_decision = _evaluate_sysid_parameters(request, safe_config)
         trajectory_plan = plan_sysid_trajectory(request)
         rows = trajectory_plan.rows
-        q_samples = _q_samples_from_rows(rows, dof=request.dof)
+        execution_rows = trajectory_plan.execution_rows or rows
+        q_samples = _q_samples_from_rows(execution_rows, dof=request.dof)
         limit_decision = evaluate_joint_limit_samples(
             UrdfJointLimits.from_urdf(Path(request.urdf_path)),
             samples=q_samples,
         )
         step_decision = _evaluate_trajectory_steps(
-            rows,
+            execution_rows,
             dof=request.dof,
             max_joint_step_rad=safe_config.max_joint_step_rad,
         )
@@ -188,10 +190,14 @@ class SysIdPlanner:
             writer = csv.DictWriter(file, fieldnames=list(rows[0]))
             writer.writeheader()
             writer.writerows(rows)
+        with execution_trajectory_path.open("w", newline="", encoding="utf-8") as file:
+            writer = csv.DictWriter(file, fieldnames=list(execution_rows[0]))
+            writer.writeheader()
+            writer.writerows(execution_rows)
 
         previewer = TrajectoryPreviewer()
         preview = previewer.preview(
-            trajectory_path=trajectory_path,
+            trajectory_path=execution_trajectory_path,
             urdf_path=Path(request.urdf_path),
             safe_config_path=Path(request.safe_config_path),
             render_path=preview_html_path,
@@ -199,7 +205,7 @@ class SysIdPlanner:
         extra_render: dict[str, object] | None = None
         if render_path is not None and render_path != preview_html_path:
             extra_preview = previewer.preview(
-                trajectory_path=trajectory_path,
+                trajectory_path=execution_trajectory_path,
                 urdf_path=Path(request.urdf_path),
                 safe_config_path=Path(request.safe_config_path),
                 render_path=render_path,
@@ -227,6 +233,7 @@ class SysIdPlanner:
         )
         artifacts = {
             "planned_trajectory": str(trajectory_path),
+            "execution_trajectory": str(execution_trajectory_path),
             "trajectory_preview": str(preview_path),
             "preview_html": str(preview_html_path),
             "manifest": str(manifest_path),
@@ -259,6 +266,7 @@ class SysIdPlanner:
                     },
                     "trajectory_step_check": {
                         "status": step_decision.status,
+                        "trajectory": "execution_trajectory",
                         "violations": step_decision.violations,
                     },
                     "joint_relation_check": relation_decision,
@@ -304,6 +312,7 @@ class SysIdPlanner:
                 },
                 "trajectory_step_check": {
                     "status": step_decision.status,
+                    "trajectory": "execution_trajectory",
                     "violation_count": len(step_decision.violations),
                 },
                 "joint_relation_check": {

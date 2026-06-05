@@ -225,15 +225,28 @@ def test_figaroh_handoff_embeds_numeric_safety_limits(tmp_path: Path) -> None:
 
     constraints = figaroh_config["constraints"]
     assert constraints["max_joint_step_rad"] == 0.01
-    assert constraints["derived_velocity_limit_rad_s"] == 0.2
+    assert constraints["derived_velocity_limit_rad_s"] is None
+    assert constraints["oed_velocity_limit_source"] == "profile_oed_velocity_limits_rad_s"
     assert constraints["joint_limits_rad"][0] == [-0.05, 0.05]
     assert constraints["joint_limits_rad"][1] == [0.25, 0.35]
-    assert constraints["velocity_limits_rad_s"][0] == [-0.2, 0.2]
-    assert constraints["velocity_limits_rad_s"][5] == [-0.2, 0.2]
+    assert constraints["velocity_limits_rad_s"][0] == [-2.0, 2.0]
+    assert constraints["velocity_limits_rad_s"][1] == [-1.2, 1.2]
+    assert constraints["velocity_limits_rad_s"][2] == [-1.2, 1.2]
+    assert constraints["velocity_limits_rad_s"][5] == [-2.0, 2.0]
+    assert constraints["acceleration_limits_rad_s2"] == [
+        [-4.0, 4.0],
+        [-2.5, 2.5],
+        [-2.5, 2.5],
+        [-4.0, 4.0],
+        [-4.0, 4.0],
+        [-4.0, 4.0],
+    ]
     assert constraints["effort_limits_nm"][2] == [-30.0, 30.0]
     timing = figaroh_config["figaroh"]["timing"]
-    assert timing["execution_sample_hz"] == 20.0
-    assert timing["execution_sample_period_s"] == 0.05
+    assert timing["planning_sample_hz"] == 20.0
+    assert timing["planning_sample_period_s"] == 0.05
+    assert timing["execution_sample_hz"] == 100.0
+    assert timing["execution_sample_period_s"] == 0.01
     assert timing["n_wps"] == 5
     assert timing["stack_reps"] == 1
     assert timing["requested_duration_s"] == 2.0
@@ -264,11 +277,13 @@ def test_figaroh_handoff_records_effective_execution_sample_count(
     )
 
     timing = figaroh_config["figaroh"]["timing"]
-    assert timing["duration_adjusted_for_safety"] is True
-    assert timing["effective_duration_s"] == 8.0
+    assert timing["duration_adjusted_for_safety"] is False
+    assert timing["effective_duration_s"] == 1.0
     assert figaroh_config["sampling"]["requested_sample_count"] == 21
-    assert figaroh_config["sampling"]["effective_sample_count"] == 161
-    assert figaroh_config["sampling"]["sample_count"] == 161
+    assert figaroh_config["sampling"]["effective_sample_count"] == 21
+    assert figaroh_config["sampling"]["execution_sample_hz"] == 100.0
+    assert figaroh_config["sampling"]["execution_sample_count"] == 101
+    assert figaroh_config["sampling"]["sample_count"] == 21
 
 
 def test_figaroh_handoff_uses_safe_config_oed_timing_and_quality_gate(
@@ -327,9 +342,9 @@ def test_fallback_smoke_trajectory_uses_effective_timing_contract(
 
     plan = plan_sysid_trajectory(request)
 
-    assert len(plan.rows) == 161
-    assert plan.rows[-1]["time_s"] == "8.000000"
-    assert plan.backend["fallback"]["sample_count"] == 161
+    assert len(plan.rows) == 21
+    assert plan.rows[-1]["time_s"] == "1.000000"
+    assert plan.backend["fallback"]["sample_count"] == 21
 
 
 def test_external_candidate_is_resampled_to_execution_sample_rate(
@@ -450,6 +465,69 @@ def test_cli_sysid_plan_uses_external_candidate_trajectory(
     assert manifest["trajectory_backend"]["candidate_source"]["path"] == str(candidate_path)
     assert manifest["trajectory_backend"]["fallback"]["status"] == "not_used"
     assert manifest["trajectory_backend"]["regressor_score"]["backend"] == "pinocchio"
+
+
+def test_sysid_plan_writes_execution_trajectory_at_configured_frequency(
+    tmp_path: Path,
+) -> None:
+    output_dir = tmp_path / "plan"
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "sysid",
+            "plan",
+            "fourier_multisine",
+            "--dof",
+            "6",
+            "--sample-hz",
+            "20",
+            "--duration",
+            "1",
+            "--amplitude",
+            "0.05",
+            "--q-center",
+            "0",
+            "0.3",
+            "0.3",
+            "0",
+            "0",
+            "0",
+            "--urdf-path",
+            "configs/models/X5_camera.urdf",
+            "--safe-config",
+            "configs/x5.safe.yaml",
+            "--output",
+            str(output_dir),
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    with (output_dir / "planned_trajectory.csv").open(newline="", encoding="utf-8") as file:
+        planned_rows = list(csv.DictReader(file))
+    with (output_dir / "execution_trajectory.csv").open(newline="", encoding="utf-8") as file:
+        execution_rows = list(csv.DictReader(file))
+
+    assert len(planned_rows) == 21
+    assert len(execution_rows) == 101
+    assert execution_rows[-1]["time_s"] == "1.000000"
+    assert payload["artifacts"]["execution_trajectory"] == str(
+        output_dir / "execution_trajectory.csv"
+    )
+    execution = manifest["trajectory_backend"]["execution_trajectory"]
+    assert execution["planning_sample_hz"] == 20.0
+    assert execution["execution_sample_hz"] == 100.0
+    assert execution["sample_count"] == 101
+    assert manifest["safety"]["checks"]["trajectory_step_check"][
+        "trajectory"
+    ] == "execution_trajectory"
 
 
 def test_cli_sysid_plan_runs_external_oed_command_then_imports_candidate(

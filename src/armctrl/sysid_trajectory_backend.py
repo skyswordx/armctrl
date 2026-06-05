@@ -24,6 +24,7 @@ from armctrl.workspace import WorkspaceSafetyConfig
 class SysIdTrajectoryPlan:
     rows: list[dict[str, str]]
     backend: dict[str, Any]
+    execution_rows: list[dict[str, str]] | None = None
 
 
 @dataclass(frozen=True)
@@ -100,7 +101,24 @@ def plan_sysid_trajectory(
         figaroh_config_path=figaroh_config_path,
         figaroh_config=figaroh_config,
     )
-    return SysIdTrajectoryPlan(rows=rows, backend=backend)
+    execution_sample_hz = float(figaroh_config["figaroh"]["timing"]["execution_sample_hz"])
+    execution_rows = _resample_candidate_rows(
+        rows,
+        dof=int(request.dof),
+        sample_hz=execution_sample_hz,
+    )
+    backend["execution_trajectory"] = _execution_trajectory_metadata(
+        planning_rows=rows,
+        execution_rows=execution_rows,
+        planning_sample_hz=float(request.sample_hz),
+        execution_sample_hz=execution_sample_hz,
+        dof=int(request.dof),
+    )
+    return SysIdTrajectoryPlan(
+        rows=rows,
+        backend=backend,
+        execution_rows=execution_rows,
+    )
 
 
 def _backend_metadata(
@@ -544,6 +562,10 @@ def _figaroh_request_config(request: object) -> dict[str, Any]:
         float(timing["effective_duration_s"]),
         sample_hz=float(request.sample_hz),
     )
+    execution_sample_count = _sample_count_for_duration(
+        float(timing["effective_duration_s"]),
+        sample_hz=float(timing["execution_sample_hz"]),
+    )
     return {
         "schema": "armctrl.figaroh_optimal_trajectory_request.v1",
         "profile": str(request.profile_name),
@@ -554,10 +576,13 @@ def _figaroh_request_config(request: object) -> dict[str, Any]:
         },
         "sampling": {
             "sample_hz": float(request.sample_hz),
+            "planning_sample_hz": float(request.sample_hz),
+            "execution_sample_hz": float(timing["execution_sample_hz"]),
             "duration_s": float(request.duration_s),
             "requested_sample_count": requested_sample_count,
             "effective_duration_s": float(timing["effective_duration_s"]),
             "effective_sample_count": effective_sample_count,
+            "execution_sample_count": execution_sample_count,
             "sample_count": effective_sample_count,
         },
         "seed": {
@@ -604,6 +629,7 @@ def _figaroh_timing(
     n_wps = int(oed_config["n_wps"])
     stack_reps = int(oed_config["stack_reps"])
     sample_hz = float(request.sample_hz)
+    execution_sample_hz = float(oed_config["execution_sample_hz"])
     requested_duration_s = float(request.duration_s)
     requested_segment_duration_s = requested_duration_s / stack_reps
     requested_t_s = requested_segment_duration_s / max(1, n_wps - 1)
@@ -613,8 +639,10 @@ def _figaroh_timing(
     effective_duration_s = segment_duration_s * stack_reps
     adjusted = effective_duration_s > requested_duration_s + 1e-9
     return {
-        "execution_sample_hz": round(sample_hz, 12),
-        "execution_sample_period_s": round(1.0 / sample_hz, 12),
+        "planning_sample_hz": round(sample_hz, 12),
+        "planning_sample_period_s": round(1.0 / sample_hz, 12),
+        "execution_sample_hz": round(execution_sample_hz, 12),
+        "execution_sample_period_s": round(1.0 / execution_sample_hz, 12),
         "n_wps": n_wps,
         "stack_reps": stack_reps,
         "requested_duration_s": round(requested_duration_s, 12),
@@ -625,7 +653,7 @@ def _figaroh_timing(
         "effective_duration_s": round(effective_duration_s, 12),
         "duration_adjusted_for_safety": adjusted,
         "duration_adjustment_reason": (
-            "max_joint_step_velocity_limit"
+            "oed_velocity_limit"
             if adjusted
             else "requested_duration_satisfied"
         ),
@@ -633,20 +661,10 @@ def _figaroh_timing(
 
 
 def _minimum_waypoint_duration_from_limits(constraints: dict[str, Any]) -> float:
-    minimum = 0.0
-    for q_pair, dq_pair in zip(
-        constraints["joint_limits_rad"],
-        constraints["velocity_limits_rad_s"],
-    ):
-        span = abs(float(q_pair[1]) - float(q_pair[0]))
-        velocity = max(abs(float(dq_pair[0])), abs(float(dq_pair[1])))
-        if span <= 0.0 or velocity <= 0.0:
-            continue
-        # Cubic rest-to-rest profiles need margin above average velocity;
-        # keeping this conservative prevents FIGAROH from optimizing inside an
-        # infeasible safety box.
-        minimum = max(minimum, 2.0 * span / velocity)
-    return minimum
+    # Do not time-stretch OED from armctrl's safety gate. FIGAROH/IPOPT owns
+    # feasibility under the provided physical/profile velocity limits; armctrl
+    # validates the generated high-rate execution trajectory before hardware.
+    return 0.0
 
 
 def _figaroh_numeric_constraints(request: object) -> dict[str, Any]:
@@ -664,12 +682,21 @@ def _figaroh_numeric_constraints(request: object) -> dict[str, Any]:
         abs(float(request.amplitude_rad)),
         float(profile_safety["max_sysid_amplitude_rad"]),
     )
-    sample_hz = float(request.sample_hz)
     max_joint_step_rad = float(safe_config.max_joint_step_rad)
-    derived_velocity_limit = max_joint_step_rad * sample_hz
     joint_limits = []
     velocity_limits = []
+    acceleration_limits = []
     effort_limits = []
+    profile_velocity_limits = _profile_limit_vector(
+        profile_safety,
+        "oed_velocity_limits_rad_s",
+        dof=int(request.dof),
+    )
+    profile_acceleration_limits = _profile_limit_vector(
+        profile_safety,
+        "oed_acceleration_limits_rad_s2",
+        dof=int(request.dof),
+    )
     for index, joint in enumerate(urdf_limits):
         center = q_center[index]
         lower = max(float(joint["lower"]), center - amplitude)
@@ -679,8 +706,13 @@ def _figaroh_numeric_constraints(request: object) -> dict[str, Any]:
             lower = clamped
             upper = clamped
         joint_limits.append([round(lower, 12), round(upper, 12)])
-        velocity = min(abs(float(joint["velocity"])), derived_velocity_limit)
+        velocity = _safe_oed_limit_from_urdf_or_profile(
+            urdf_value=abs(float(joint["velocity"])),
+            profile_value=abs(profile_velocity_limits[index]),
+        )
         velocity_limits.append([-round(velocity, 12), round(velocity, 12)])
+        acceleration = abs(profile_acceleration_limits[index])
+        acceleration_limits.append([-round(acceleration, 12), round(acceleration, 12)])
         effort = abs(float(joint["effort"]))
         effort_limits.append([-round(effort, 12), round(effort, 12)])
     return {
@@ -690,9 +722,11 @@ def _figaroh_numeric_constraints(request: object) -> dict[str, Any]:
         "collision_gate": True,
         "torque_gate": True,
         "max_joint_step_rad": max_joint_step_rad,
-        "derived_velocity_limit_rad_s": round(derived_velocity_limit, 12),
+        "derived_velocity_limit_rad_s": None,
+        "oed_velocity_limit_source": "profile_oed_velocity_limits_rad_s",
         "joint_limits_rad": joint_limits,
         "velocity_limits_rad_s": velocity_limits,
+        "acceleration_limits_rad_s2": acceleration_limits,
         "effort_limits_nm": effort_limits,
         "profile_safety": profile_safety,
         "joint_relation_constraints": read_sysid_joint_relation_constraints(
@@ -712,7 +746,7 @@ def read_sysid_profile_safety(path: Path, *, profile_name: str) -> dict[str, Any
     override = profile_overrides.get(profile_name, {}) or {}
     if not isinstance(override, dict):
         raise ValueError(f"safety.sysid.profile_overrides.{profile_name} must be a mapping")
-    return {
+    result: dict[str, Any] = {
         "profile_name": profile_name,
         "max_sysid_amplitude_rad": float(
             override.get(
@@ -721,6 +755,44 @@ def read_sysid_profile_safety(path: Path, *, profile_name: str) -> dict[str, Any
             )
         ),
     }
+    for key in (
+        "oed_velocity_limits_rad_s",
+        "oed_acceleration_limits_rad_s2",
+    ):
+        if key in override:
+            result[key] = [float(value) for value in override[key]]
+    return result
+
+
+def _profile_limit_vector(
+    profile_safety: dict[str, Any],
+    key: str,
+    *,
+    dof: int,
+) -> list[float]:
+    raw = profile_safety.get(key)
+    if not isinstance(raw, list) or len(raw) != dof:
+        raise ValueError(
+            f"safety.sysid.profile_overrides.{profile_safety['profile_name']}.{key} "
+            f"must contain {dof} values"
+        )
+    values = [abs(float(value)) for value in raw]
+    if any(value <= 0.0 for value in values):
+        raise ValueError(f"{key} values must be positive")
+    return values
+
+
+def _safe_oed_limit_from_urdf_or_profile(
+    *,
+    urdf_value: float,
+    profile_value: float,
+) -> float:
+    # Some X5 URDF limits use large placeholders such as 1000 rad/s. Treat
+    # those as non-authoritative and let the profile override carry the OED
+    # physical-speed envelope.
+    if 0.0 < urdf_value < 100.0:
+        return min(urdf_value, profile_value)
+    return profile_value
 
 
 def read_sysid_joint_relation_constraints(
@@ -788,6 +860,7 @@ def read_sysid_oed_config(path: Path) -> dict[str, Any]:
     stack_reps = int(oed.get("stack_reps", 1))
     ipopt_max_iterations = int(oed.get("ipopt_max_iterations", 200))
     ipopt_print_level = int(oed.get("ipopt_print_level", 7))
+    execution_sample_hz = float(oed.get("execution_sample_hz", 100.0))
     condition_number_threshold = float(
         oed.get("condition_number_threshold", 1000.0)
     )
@@ -800,6 +873,8 @@ def read_sysid_oed_config(path: Path) -> dict[str, Any]:
         raise ValueError("safety.sysid.oed.ipopt_max_iterations must be >= 1")
     if ipopt_print_level < 0:
         raise ValueError("safety.sysid.oed.ipopt_print_level must be >= 0")
+    if execution_sample_hz <= 0.0:
+        raise ValueError("safety.sysid.oed.execution_sample_hz must be positive")
     if condition_number_threshold <= 0.0:
         raise ValueError(
             "safety.sysid.oed.condition_number_threshold must be positive"
@@ -809,6 +884,7 @@ def read_sysid_oed_config(path: Path) -> dict[str, Any]:
         "stack_reps": stack_reps,
         "ipopt_max_iterations": ipopt_max_iterations,
         "ipopt_print_level": ipopt_print_level,
+        "execution_sample_hz": execution_sample_hz,
         "condition_number_threshold": condition_number_threshold,
         "random_seed": random_seed,
     }
@@ -943,6 +1019,33 @@ def _candidate_rows(path: Path, *, dof: int, sample_hz: float) -> CandidateTraje
         rows=_resample_candidate_rows(rows, dof=dof, sample_hz=sample_hz),
         raw_sample_count=len(rows),
     )
+
+
+def _execution_trajectory_metadata(
+    *,
+    planning_rows: list[dict[str, str]],
+    execution_rows: list[dict[str, str]],
+    planning_sample_hz: float,
+    execution_sample_hz: float,
+    dof: int,
+) -> dict[str, Any]:
+    q_matrix = _q_matrix_from_rows(execution_rows, dof=dof)
+    dt = 1.0 / execution_sample_hz
+    dq_matrix = _finite_difference(q_matrix, dt=dt)
+    ddq_matrix = _finite_difference(dq_matrix, dt=dt)
+    max_step = 0.0
+    if len(q_matrix) > 1:
+        max_step = float(np.max(np.abs(np.diff(q_matrix, axis=0))))
+    return {
+        "interpolation_method": "linear_interpolation",
+        "planning_sample_hz": float(planning_sample_hz),
+        "execution_sample_hz": float(execution_sample_hz),
+        "planning_sample_count": len(planning_rows),
+        "sample_count": len(execution_rows),
+        "max_joint_step_rad": max_step,
+        "max_velocity_rad_s": float(np.max(np.abs(dq_matrix))) if dq_matrix.size else 0.0,
+        "max_acceleration_rad_s2": float(np.max(np.abs(ddq_matrix))) if ddq_matrix.size else 0.0,
+    }
 
 
 def _resample_candidate_rows(
