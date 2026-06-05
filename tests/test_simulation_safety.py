@@ -224,6 +224,8 @@ def test_auto_preview_records_failed_mature_backend_attempt_and_falls_back(
     def fake_find_spec(name: str) -> object | None:
         if name in {"pinocchio", "coal"}:
             return object()
+        if name in {"mujoco", "rclpy", "moveit_msgs", "moveit_configs_utils"}:
+            return None
         return original_find_spec(name)
 
     monkeypatch.setattr(simulation.importlib.util, "find_spec", fake_find_spec)
