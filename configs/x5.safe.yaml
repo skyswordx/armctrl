@@ -42,6 +42,19 @@ safety:
   max_sysid_amplitude_rad: 0.25
   max_joint_step_rad: 0.01
   sysid:
+    oed:
+      # FIGAROH waypoint count for one cubic-spline segment. A larger value can
+      # improve excitation shape freedom, but it increases IPOPT dimension.
+      n_wps: 5
+      # Number of optimized segments stacked for regressor conditioning. Raise
+      # this on WSL/workstation OED searches before using larger hardware motion.
+      stack_reps: 1
+      # Armctrl passes this into the X5 FIGAROH IPOPT problem instead of relying
+      # on FIGAROH's library default, so convergence evidence is reproducible.
+      ipopt_max_iterations: 200
+      # Offline OED quality gate. This is intentionally stricter than the
+      # simulation safety gate and does not by itself allow SDK execution.
+      condition_number_threshold: 1000.0
     joint_relation_constraints:
       # X5 hardware bringup showed that keeping joint2 and joint3 close helps
       # preserve the safe horizontal torso posture around q_center=(0, 0.30,

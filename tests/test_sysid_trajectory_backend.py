@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 from armctrl.sysid import SysIdPlanRequest, trajectory_rows
 from armctrl.sysid_trajectory_backend import plan_sysid_trajectory
@@ -42,6 +43,17 @@ def _write_relation_violation_candidate(path: Path) -> None:
         "0.010000,0.000000,0.500000,0.250000,0.000000,0.000000,0.000000\n",
         encoding="utf-8",
     )
+
+
+def _write_oed_safe_config(path: Path) -> None:
+    safe_config = yaml.safe_load(Path("configs/x5.safe.yaml").read_text(encoding="utf-8"))
+    safe_config["safety"]["sysid"]["oed"] = {
+        "n_wps": 7,
+        "stack_reps": 3,
+        "ipopt_max_iterations": 900,
+        "condition_number_threshold": 250.0,
+    }
+    path.write_text(yaml.safe_dump(safe_config, sort_keys=False), encoding="utf-8")
 
 
 def test_fourier_backend_prefers_figaroh_oed_and_labels_fallback(
@@ -254,6 +266,42 @@ def test_figaroh_handoff_records_effective_execution_sample_count(
     assert figaroh_config["sampling"]["requested_sample_count"] == 21
     assert figaroh_config["sampling"]["effective_sample_count"] == 161
     assert figaroh_config["sampling"]["sample_count"] == 161
+
+
+def test_figaroh_handoff_uses_safe_config_oed_timing_and_quality_gate(
+    tmp_path: Path,
+) -> None:
+    safe_config_path = tmp_path / "x5.oed.safe.yaml"
+    _write_oed_safe_config(safe_config_path)
+    request = _request("fourier_multisine", tmp_path)
+    request = SysIdPlanRequest(
+        profile_name=request.profile_name,
+        dof=request.dof,
+        sample_hz=20,
+        duration_s=12,
+        amplitude_rad=0.01,
+        q_center=request.q_center,
+        urdf_path=request.urdf_path,
+        safe_config_path=str(safe_config_path),
+        output_dir=tmp_path,
+    )
+
+    plan = plan_sysid_trajectory(request)
+    figaroh_config = json.loads(
+        (tmp_path / "figaroh_trajectory_request.json").read_text(encoding="utf-8")
+    )
+
+    timing = figaroh_config["figaroh"]["timing"]
+    assert timing["n_wps"] == 7
+    assert timing["stack_reps"] == 3
+    assert timing["requested_segment_duration_s"] == 4.0
+    assert timing["waypoint_duration_s"] == pytest.approx(4.0 / 6.0)
+    assert timing["effective_duration_s"] == 12.0
+    assert figaroh_config["figaroh"]["optimizer"]["ipopt_max_iterations"] == 900
+    assert figaroh_config["figaroh"]["quality_gate"][
+        "condition_number_threshold"
+    ] == 250.0
+    assert plan.backend["oed_quality_gate"]["condition_number_threshold"] == 250.0
 
 
 def test_fallback_smoke_trajectory_uses_effective_timing_contract(

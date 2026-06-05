@@ -9,8 +9,10 @@ import yaml
 
 from armctrl.x5_figaroh_oed import (
     X5JointRelationConstraintManager,
+    X5TrajectoryIPOPTProblem,
     _apply_request_limits_to_robot_model,
     _active_joint_indices,
+    _request_ipopt_max_iterations,
     _write_figaroh_config,
     main,
     run_oed,
@@ -160,6 +162,71 @@ def test_figaroh_config_uses_armctrl_safety_limits(tmp_path: Path) -> None:
     trajectory_params = config["identification"]["trajectory_params"][0]
     assert trajectory_params["n_wps"] == 5
     assert trajectory_params["t_s"] == 0.5
+
+
+def test_figaroh_config_uses_armctrl_oed_knobs(tmp_path: Path) -> None:
+    request_path = tmp_path / "figaroh_request.json"
+    candidate_path = tmp_path / "candidate.csv"
+    _write_request(request_path)
+    request = json.loads(request_path.read_text(encoding="utf-8"))
+    request["figaroh"]["timing"].update(
+        {
+            "n_wps": 7,
+            "stack_reps": 3,
+            "waypoint_duration_s": 0.25,
+            "segment_duration_s": 1.5,
+        }
+    )
+    request["figaroh"]["optimizer"] = {"ipopt_max_iterations": 900}
+
+    config_path = _write_figaroh_config(request, candidate_path=candidate_path)
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+
+    trajectory_params = config["identification"]["trajectory_params"][0]
+    assert trajectory_params["n_wps"] == 7
+    assert trajectory_params["freq"] == 100.0
+    assert trajectory_params["t_s"] == 0.25
+    assert trajectory_params["ipopt_max_iterations"] == 900
+    assert _request_ipopt_max_iterations(request) == 900
+
+
+def test_x5_ipopt_problem_applies_request_max_iterations(monkeypatch) -> None:
+    captured = {}
+
+    class FakeConfig:
+        def __init__(self) -> None:
+            self.tolerance = None
+            self.acceptable_tolerance = None
+            self.max_iterations = None
+            self.print_level = None
+            self.custom_options = {}
+
+        @classmethod
+        def for_trajectory_optimization(cls):
+            return cls()
+
+    class FakeSolver:
+        def __init__(self, _problem, config) -> None:
+            captured["max_iterations"] = config.max_iterations
+
+        def solve(self):
+            return False, {"status": "forced_stop"}
+
+    monkeypatch.setattr("armctrl.x5_figaroh_oed.IPOPTConfig", FakeConfig)
+    monkeypatch.setattr("armctrl.x5_figaroh_oed.RobotIPOPTSolver", FakeSolver)
+    problem = object.__new__(X5TrajectoryIPOPTProblem)
+    problem.ipopt_max_iterations = 900
+    problem.logger = type(
+        "Logger",
+        (),
+        {"error": lambda self, _message: None},
+    )()
+
+    success, result = problem.solve_with_waypoints([[0.0]])
+
+    assert success is False
+    assert result["status"] == "forced_stop"
+    assert captured["max_iterations"] == 900
 
 
 def test_joint_relation_constraint_manager_appends_relation_bounds() -> None:

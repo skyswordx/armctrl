@@ -11,10 +11,60 @@ import numpy as np
 
 
 OptimizerFactory = Callable[[dict[str, Any]], Any]
+IPOPTConfig: Any | None = None
+RobotIPOPTSolver: Any | None = None
 
 
 class FigarohOedError(RuntimeError):
     pass
+
+
+class X5TrajectoryIPOPTProblem:
+    """Mixin that keeps FIGAROH's problem math but lets armctrl set IPOPT knobs."""
+
+    ipopt_max_iterations = 200
+
+    def solve_with_waypoints(self, wps):
+        try:
+            self._initial_wps = wps
+            if IPOPTConfig is None or RobotIPOPTSolver is None:
+                raise FigarohOedError("FIGAROH IPOPT solver classes are not loaded")
+            config = IPOPTConfig.for_trajectory_optimization()
+            config.tolerance = 1e-3
+            config.acceptable_tolerance = 1e-2
+            config.max_iterations = int(self.ipopt_max_iterations)
+            config.print_level = 3
+            config.custom_options = {
+                b"mu_strategy": b"adaptive",
+            }
+            solver = RobotIPOPTSolver(self, config)
+            success, results = solver.solve()
+            if not success:
+                self.logger.error("Optimization failed")
+                return False, results
+
+            X_opt = results["x_opt"]
+            wps_X = np.reshape(np.array(X_opt), (self.n_wps - 1, self.n_joints))
+            final_waypoint = wps_X[-1, :]
+            results.update(
+                {
+                    "t_f": self.opt_cb["t_f"],
+                    "p_f": self.opt_cb["p_f"],
+                    "v_f": self.opt_cb["v_f"],
+                    "a_f": self.opt_cb["a_f"],
+                    "iter_data": {
+                        "iterations": self.iteration_data["iterations"],
+                        "obj_values": self.iteration_data["obj_values"],
+                        "solve_time": results["solve_time"],
+                        "status": results["status"],
+                        "final_waypoint": final_waypoint,
+                    },
+                }
+            )
+            return True, results
+        except Exception as exc:
+            self.logger.error(f"Error in IPOPT solve: {exc}")
+            return False, {"error": str(exc)}
 
 
 class X5JointRelationConstraintManager:
@@ -169,11 +219,16 @@ def _build_figaroh_optimizer(
     *,
     candidate_path: Path,
 ) -> Any:
+    global IPOPTConfig, RobotIPOPTSolver
     _ensure_vendor_figaroh_on_path()
     try:
         from figaroh.optimal.base_optimal_trajectory import (
             BaseOptimalTrajectory,
             BaseTrajectoryIPOPTProblem,
+        )
+        from figaroh.tools.robotipopt import (
+            IPOPTConfig as FigarohIPOPTConfig,
+            RobotIPOPTSolver as FigarohRobotIPOPTSolver,
         )
         from figaroh.tools.load_robot import load_robot
     except Exception as exc:  # pragma: no cover - environment dependent.
@@ -181,6 +236,13 @@ def _build_figaroh_optimizer(
             "FIGAROH optimal trajectory modules are not importable: "
             f"{type(exc).__name__}: {exc}"
         ) from exc
+    IPOPTConfig = FigarohIPOPTConfig
+    RobotIPOPTSolver = FigarohRobotIPOPTSolver
+    x5_problem_cls = type(
+        "X5FigarohTrajectoryIPOPTProblem",
+        (X5TrajectoryIPOPTProblem, BaseTrajectoryIPOPTProblem),
+        {},
+    )
 
     class X5OptimalTrajectory(BaseOptimalTrajectory):
         def create_ipopt_problem(
@@ -196,7 +258,7 @@ def _build_figaroh_optimizer(
             acc_wp_init,
             W_stack,
         ):
-            return BaseTrajectoryIPOPTProblem(
+            problem = x5_problem_cls(
                 self,
                 n_joints,
                 n_wps,
@@ -210,6 +272,8 @@ def _build_figaroh_optimizer(
                 W_stack,
                 problem_name="X5TrajectoryOptimization",
             )
+            problem.ipopt_max_iterations = _request_ipopt_max_iterations(request)
+            return problem
 
     config_path = _write_figaroh_config(request, candidate_path=candidate_path)
     urdf_path = _resolve_path(str(request["model"]["urdf_path"]))
@@ -304,6 +368,7 @@ def _write_figaroh_config(
                     "t_s": timing["waypoint_duration_s"],
                     "soft_lim": 0.05,
                     "max_attempts": 1000,
+                    "ipopt_max_iterations": _request_ipopt_max_iterations(request),
                     "x5_joint_relation_constraints": _request_joint_relation_constraints(
                         request
                     ),
@@ -321,6 +386,13 @@ def _request_stack_reps(request: dict[str, Any]) -> int:
     if not isinstance(timing, dict):
         return 1
     return max(1, int(timing.get("stack_reps", 1)))
+
+
+def _request_ipopt_max_iterations(request: dict[str, Any]) -> int:
+    optimizer = request.get("figaroh", {}).get("optimizer", {})
+    if not isinstance(optimizer, dict):
+        return 200
+    return max(1, int(optimizer.get("ipopt_max_iterations", 200)))
 
 
 def _request_timing(

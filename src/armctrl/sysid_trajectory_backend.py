@@ -134,6 +134,11 @@ def _backend_metadata(
         selected=selected,
         command_result=command_result,
         regressor_score=regressor_score,
+        condition_number_threshold=float(
+            figaroh_config["figaroh"]["quality_gate"][
+                "condition_number_threshold"
+            ]
+        ),
     )
     metadata: dict[str, Any] = {
         "requested": "figaroh_optimal_trajectory",
@@ -192,6 +197,7 @@ def _oed_quality_gate(
     selected: str,
     command_result: dict[str, Any] | None,
     regressor_score: dict[str, Any],
+    condition_number_threshold: float,
 ) -> dict[str, Any]:
     reasons: list[str] = []
     if selected != "external_oed_command":
@@ -212,12 +218,12 @@ def _oed_quality_gate(
         rank = int(regressor_score.get("rank", 0))
         if rank <= 0:
             reasons.append("regressor_rank_zero")
-        if condition > 1000.0:
+        if condition > condition_number_threshold:
             reasons.append("regressor_condition_too_high")
     return {
         "status": "fail" if reasons else "pass",
         "reasons": reasons,
-        "condition_number_threshold": 1000.0,
+        "condition_number_threshold": condition_number_threshold,
         "note": (
             "This gate is for offline OED quality only. Passing simulation safety "
             "does not imply identified parameters are valid."
@@ -358,6 +364,7 @@ def _fallback_metadata(
 def _figaroh_request_config(request: object) -> dict[str, Any]:
     constraints = _figaroh_numeric_constraints(request)
     timing = _figaroh_timing(request, constraints=constraints)
+    oed_config = read_sysid_oed_config(Path(str(request.safe_config_path)))
     requested_sample_count = _sample_count_for_duration(
         float(request.duration_s),
         sample_hz=float(request.sample_hz),
@@ -393,6 +400,14 @@ def _figaroh_request_config(request: object) -> dict[str, Any]:
             "parameterization": "cubic_spline",
             "constraint_manager": "figaroh.optimal.contraints.TrajectoryConstraintManager",
             "timing": timing,
+            "optimizer": {
+                "ipopt_max_iterations": oed_config["ipopt_max_iterations"],
+            },
+            "quality_gate": {
+                "condition_number_threshold": oed_config[
+                    "condition_number_threshold"
+                ],
+            },
             "expected_outputs": [
                 "optimized_waypoints",
                 "planned_trajectory",
@@ -412,8 +427,9 @@ def _figaroh_timing(
     *,
     constraints: dict[str, Any],
 ) -> dict[str, Any]:
-    n_wps = 5
-    stack_reps = 1
+    oed_config = read_sysid_oed_config(Path(str(request.safe_config_path)))
+    n_wps = int(oed_config["n_wps"])
+    stack_reps = int(oed_config["stack_reps"])
     sample_hz = float(request.sample_hz)
     requested_duration_s = float(request.duration_s)
     requested_segment_duration_s = requested_duration_s / stack_reps
@@ -538,6 +554,37 @@ def read_sysid_joint_relation_constraints(path: Path) -> list[dict[str, Any]]:
             }
         )
     return parsed
+
+
+def read_sysid_oed_config(path: Path) -> dict[str, Any]:
+    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    safety = raw.get("safety", {}) or {}
+    sysid = safety.get("sysid", {}) or {}
+    oed = sysid.get("oed", {}) or {}
+    if not isinstance(oed, dict):
+        raise ValueError("safety.sysid.oed must be a mapping")
+    n_wps = int(oed.get("n_wps", 5))
+    stack_reps = int(oed.get("stack_reps", 1))
+    ipopt_max_iterations = int(oed.get("ipopt_max_iterations", 200))
+    condition_number_threshold = float(
+        oed.get("condition_number_threshold", 1000.0)
+    )
+    if n_wps < 2:
+        raise ValueError("safety.sysid.oed.n_wps must be >= 2")
+    if stack_reps < 1:
+        raise ValueError("safety.sysid.oed.stack_reps must be >= 1")
+    if ipopt_max_iterations < 1:
+        raise ValueError("safety.sysid.oed.ipopt_max_iterations must be >= 1")
+    if condition_number_threshold <= 0.0:
+        raise ValueError(
+            "safety.sysid.oed.condition_number_threshold must be positive"
+        )
+    return {
+        "n_wps": n_wps,
+        "stack_reps": stack_reps,
+        "ipopt_max_iterations": ipopt_max_iterations,
+        "condition_number_threshold": condition_number_threshold,
+    }
 
 
 def evaluate_sysid_joint_relation_samples(
