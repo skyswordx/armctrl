@@ -106,6 +106,7 @@ uv run armctrl sim preview \
   --trajectory runs/ident-plan-preview/planned_trajectory.csv \
   --urdf-path configs/models/X5_camera.urdf \
   --safe-config configs/x5.safe.yaml \
+  --render runs/ident-plan-preview/trajectory_preview.svg \
   --json
 ```
 
@@ -118,6 +119,11 @@ When `--backend mujoco` is selected, preview loads the model, writes each
 trajectory sample into MuJoCo `qpos`, calls `mj_forward`, and reports contact
 counts plus qpos ranges. This keeps MuJoCo as the simulator while `armctrl`
 only performs orchestration and gate reporting.
+
+`--render <path.svg>` writes a lightweight SVG preview of joint traces and
+end-effector side-view clearance. Unsafe trajectories are still rendered, but
+the SVG is marked with `WARNING` and the first gate reasons so the operator or
+Agent can inspect why execution was blocked.
 
 ## Recipe Preview
 
@@ -161,11 +167,13 @@ uv run armctrl sysid plan gravity_sweep \
   --q-center 0 0.3 0.3 0 0 0 \
   --urdf-path configs/models/X5_camera.urdf \
   --output runs/ident-plan-preview \
+  --render \
   --json
 ```
 
-This writes `planned_trajectory.csv`, `trajectory_preview.json`, and
-`manifest.json`. URDF joint-limit checks are evaluated from `--urdf-path`;
+This writes `planned_trajectory.csv`, `trajectory_preview.json`,
+`trajectory_preview.svg` when `--render` is present, and `manifest.json`.
+URDF joint-limit checks are evaluated from `--urdf-path`;
 workspace clearance and named allowed/forbidden spaces are evaluated through the
 simulation preview gate from `--safe-config`. When mature backends are
 importable, the preview selects them by config preference; otherwise it records

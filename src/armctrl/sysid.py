@@ -69,6 +69,7 @@ class SysIdPlanRequest:
     urdf_path: str
     safe_config_path: str
     output_dir: Path
+    render_path: Path | None = None
 
 
 class SysIdPlanner:
@@ -133,6 +134,7 @@ class SysIdPlanner:
         trajectory_path = request.output_dir / "planned_trajectory.csv"
         manifest_path = request.output_dir / "manifest.json"
         preview_path = request.output_dir / "trajectory_preview.json"
+        render_path = request.render_path
         limit_decision = evaluate_joint_limits(
             UrdfJointLimits.from_urdf(Path(request.urdf_path)),
             q_center=request.q_center,
@@ -168,6 +170,7 @@ class SysIdPlanner:
             trajectory_path=trajectory_path,
             urdf_path=Path(request.urdf_path),
             safe_config_path=Path(request.safe_config_path),
+            render_path=render_path,
         )
         preview_path.write_text(
             json.dumps(preview, ensure_ascii=False, indent=2),
@@ -186,6 +189,13 @@ class SysIdPlanner:
             workspace_status=workspace_decision.status,
             simulation_status=simulation_status,
         )
+        artifacts = {
+            "planned_trajectory": str(trajectory_path),
+            "trajectory_preview": str(preview_path),
+            "manifest": str(manifest_path),
+        }
+        if render_path is not None:
+            artifacts["trajectory_render"] = str(render_path)
         manifest = {
             "schema": "armctrl.ident_plan_manifest.v1",
             "profile": plan.profile.to_json(),
@@ -229,11 +239,7 @@ class SysIdPlanner:
                 },
             },
             "handoff": plan.handoff,
-            "artifacts": {
-                "planned_trajectory": str(trajectory_path),
-                "trajectory_preview": str(preview_path),
-                "manifest": str(manifest_path),
-            },
+            "artifacts": artifacts,
         }
         manifest_path.write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2),
@@ -244,11 +250,7 @@ class SysIdPlanner:
             profile=plan.profile,
             safety=SysIdSafety(allowed=safety_allowed, reason=safety_reason),
             handoff=plan.handoff,
-            artifacts={
-                "planned_trajectory": str(trajectory_path),
-                "trajectory_preview": str(preview_path),
-                "manifest": str(manifest_path),
-            },
+            artifacts=artifacts,
             artifact_safety={
                 "allowed": safety_allowed,
                 "urdf_limit_check": {

@@ -285,6 +285,54 @@ def test_sysid_plan_writes_trajectory_preview_and_includes_simulation_gate(
     assert preview["trajectory_metrics"]["joint_ranges_rad"]["joint_1"] > 0.09
 
 
+def test_sysid_plan_can_render_trajectory_preview_svg(tmp_path: Path) -> None:
+    output_dir = tmp_path / "ident-plan"
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "sysid",
+            "plan",
+            "gravity_sweep",
+            "--dof",
+            "6",
+            "--sample-hz",
+            "100",
+            "--duration",
+            "2",
+            "--amplitude",
+            "0.05",
+            "--q-center",
+            "0",
+            "0.3",
+            "0.3",
+            "0",
+            "0",
+            "0",
+            "--urdf-path",
+            "configs/models/X5_camera.urdf",
+            "--safe-config",
+            "configs/x5.safe.yaml",
+            "--output",
+            str(output_dir),
+            "--render",
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+    render_path = output_dir / "trajectory_preview.svg"
+
+    assert payload["artifacts"]["trajectory_render"] == str(render_path)
+    assert render_path.exists()
+    assert "armctrl trajectory preview" in render_path.read_text(encoding="utf-8")
+
+
 def test_trajectory_preview_rejects_forbidden_workspace_entry(tmp_path: Path) -> None:
     trajectory_path = tmp_path / "planned_trajectory.csv"
     trajectory_path.write_text(
@@ -305,6 +353,49 @@ def test_trajectory_preview_rejects_forbidden_workspace_entry(tmp_path: Path) ->
         "outside_allowed_workspace",
         "inside_forbidden_workspace",
     }
+
+
+def test_cli_sim_preview_can_render_unsafe_trajectory_warning_svg(
+    tmp_path: Path,
+) -> None:
+    trajectory_path = tmp_path / "planned_trajectory.csv"
+    render_path = tmp_path / "preview.svg"
+    trajectory_path.write_text(
+        "time_s,q_cmd_1,q_cmd_2,q_cmd_3,q_cmd_4,q_cmd_5,q_cmd_6\n"
+        "0.000000,0,3.0,1.0,0,0,0\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "sim",
+            "preview",
+            "--trajectory",
+            str(trajectory_path),
+            "--urdf-path",
+            "configs/models/X5_camera.urdf",
+            "--safe-config",
+            "configs/x5.safe.yaml",
+            "--render",
+            str(render_path),
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+    svg = render_path.read_text(encoding="utf-8")
+
+    assert payload["render"]["path"] == str(render_path)
+    assert payload["render"]["status"] == "written"
+    assert payload["safety"]["allowed"] is False
+    assert "WARNING" in svg
+    assert "outside_allowed_workspace" in svg
 
 
 def test_auto_preview_records_failed_mature_backend_attempt_and_falls_back(

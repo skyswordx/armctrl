@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass
+import html
 import importlib
 import importlib.util
 from pathlib import Path
@@ -74,6 +75,7 @@ class TrajectoryPreviewer:
         urdf_path: Path,
         safe_config_path: Path,
         backend: str = "auto",
+        render_path: Path | None = None,
     ) -> dict[str, object]:
         rows = _read_trajectory_rows(trajectory_path)
         q_samples = _q_samples_from_rows(rows)
@@ -101,7 +103,7 @@ class TrajectoryPreviewer:
             and clearance.status == "pass"
             and zones.status == "pass"
         )
-        return {
+        payload: dict[str, object] = {
             "schema": "armctrl.trajectory_preview.v1",
             "movement_allowed": False,
             "trajectory_path": str(trajectory_path),
@@ -133,6 +135,20 @@ class TrajectoryPreviewer:
                 q_samples=q_samples,
             ),
         }
+        if render_path is not None:
+            _write_trajectory_svg(
+                output_path=render_path,
+                preview=payload,
+                urdf_path=urdf_path,
+                config=config,
+                q_samples=q_samples,
+            )
+            payload["render"] = {
+                "status": "written",
+                "path": str(render_path),
+                "format": "svg",
+            }
+        return payload
 
 
 def _backend_status(spec: BackendSpec) -> dict[str, object]:
@@ -611,6 +627,115 @@ def _qpos_ranges(q_samples: list[tuple[float, ...]]) -> dict[str, float]:
         )
         for joint_index in range(dof)
     }
+
+
+def _write_trajectory_svg(
+    *,
+    output_path: Path,
+    preview: dict[str, object],
+    urdf_path: Path,
+    config: WorkspaceSafetyConfig,
+    q_samples: list[tuple[float, ...]],
+) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    safety = preview["safety"]
+    assert isinstance(safety, dict)
+    allowed = safety["allowed"] is True
+    status_color = "#15803d" if allowed else "#b91c1c"
+    status_text = "PASS" if allowed else "WARNING"
+    reasons = _preview_warning_reasons(safety)
+    joint_paths = _joint_svg_paths(q_samples)
+    eef_path = _eef_side_svg_path(urdf_path, config=config, q_samples=q_samples)
+    svg = [
+        '<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540" viewBox="0 0 960 540">',
+        '<rect width="960" height="540" fill="#fafafa"/>',
+        f'<text x="32" y="42" font-family="Arial" font-size="24" font-weight="700" fill="{status_color}">{status_text}: armctrl trajectory preview</text>',
+        f'<text x="32" y="72" font-family="Arial" font-size="13" fill="#334155">{html.escape(str(preview["trajectory_path"]))}</text>',
+        '<rect x="32" y="100" width="896" height="180" fill="#ffffff" stroke="#cbd5e1"/>',
+        '<text x="48" y="126" font-family="Arial" font-size="15" font-weight="700" fill="#0f172a">Joint command traces</text>',
+        *joint_paths,
+        '<rect x="32" y="310" width="896" height="150" fill="#ffffff" stroke="#cbd5e1"/>',
+        '<text x="48" y="336" font-family="Arial" font-size="15" font-weight="700" fill="#0f172a">End-effector side-view z trace</text>',
+        eef_path,
+        f'<text x="48" y="498" font-family="Arial" font-size="14" fill="{status_color}">{html.escape("; ".join(reasons) if reasons else "all configured gates passed")}</text>',
+        '</svg>',
+    ]
+    output_path.write_text("\n".join(svg), encoding="utf-8")
+
+
+def _preview_warning_reasons(safety: dict[str, object]) -> list[str]:
+    reasons: list[str] = []
+    for check_name in ("clearance_check", "zone_check"):
+        check = safety.get(check_name)
+        if not isinstance(check, dict) or check.get("status") == "pass":
+            continue
+        violations = check.get("violations", [])
+        if isinstance(violations, list) and violations:
+            first = violations[0]
+            if isinstance(first, dict):
+                reasons.append(str(first.get("check", check_name)))
+                continue
+        reasons.append(check_name)
+    return reasons
+
+
+def _joint_svg_paths(q_samples: list[tuple[float, ...]]) -> list[str]:
+    if not q_samples:
+        return []
+    colors = ("#2563eb", "#dc2626", "#16a34a", "#9333ea", "#ea580c", "#0891b2")
+    dof = len(q_samples[0])
+    all_values = [value for sample in q_samples for value in sample]
+    min_value = min(all_values)
+    max_value = max(all_values)
+    if max_value == min_value:
+        max_value = min_value + 1.0
+    paths: list[str] = []
+    for joint_index in range(dof):
+        points = []
+        for sample_index, sample in enumerate(q_samples):
+            x = 48 + sample_index * 848 / max(1, len(q_samples) - 1)
+            y = 260 - (sample[joint_index] - min_value) * 112 / (max_value - min_value)
+            points.append(f"{x:.2f},{y:.2f}")
+        color = colors[joint_index % len(colors)]
+        paths.append(
+            f'<polyline points="{" ".join(points)}" fill="none" stroke="{color}" stroke-width="2"/>'
+        )
+        paths.append(
+            f'<text x="{48 + joint_index * 90}" y="276" font-family="Arial" font-size="11" fill="{color}">joint_{joint_index + 1}</text>'
+        )
+    return paths
+
+
+def _eef_side_svg_path(
+    urdf_path: Path,
+    *,
+    config: WorkspaceSafetyConfig,
+    q_samples: list[tuple[float, ...]],
+) -> str:
+    frames = link_frame_positions(urdf_path, samples=q_samples)
+    values = [
+        positions.get("eef_link", positions.get("link6", (0.0, 0.0, 0.0)))[2]
+        for positions in frames
+    ]
+    if not values:
+        return '<text x="48" y="390" font-family="Arial" font-size="12" fill="#64748b">no FK samples</text>'
+    min_z = min(min(values), config.workspace_min_m[2])
+    max_z = max(values)
+    if max_z == min_z:
+        max_z = min_z + 1.0
+    points = []
+    for index, value in enumerate(values):
+        x = 48 + index * 848 / max(1, len(values) - 1)
+        y = 438 - (value - min_z) * 82 / (max_z - min_z)
+        points.append(f"{x:.2f},{y:.2f}")
+    clearance_y = 438 - (config.workspace_min_m[2] - min_z) * 82 / (max_z - min_z)
+    return "\n".join(
+        [
+            f'<line x1="48" y1="{clearance_y:.2f}" x2="896" y2="{clearance_y:.2f}" stroke="#ef4444" stroke-dasharray="6 4"/>',
+            f'<polyline points="{" ".join(points)}" fill="none" stroke="#0f766e" stroke-width="3"/>',
+            f'<text x="48" y="{clearance_y - 6:.2f}" font-family="Arial" font-size="11" fill="#ef4444">workspace min z</text>',
+        ]
+    )
 
 
 def _read_trajectory_rows(path: Path) -> list[dict[str, str]]:

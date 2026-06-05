@@ -116,6 +116,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     sim_preview_parser.add_argument("--urdf-path", default="configs/models/X5_camera.urdf")
     sim_preview_parser.add_argument("--safe-config", default="configs/x5.safe.yaml")
     sim_preview_parser.add_argument("--backend", default="auto")
+    sim_preview_parser.add_argument("--render")
     sim_preview_parser.add_argument("--json", action="store_true", dest="as_json")
 
     sysid_plan_parser = sysid_subparsers.add_parser("plan")
@@ -129,6 +130,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     sysid_plan_parser.add_argument("--urdf-path", default="configs/models/X5_camera.urdf")
     sysid_plan_parser.add_argument("--safe-config", default="configs/x5.safe.yaml")
     sysid_plan_parser.add_argument("--output")
+    sysid_plan_parser.add_argument("--render", nargs="?", const="trajectory_preview.svg")
     sysid_plan_parser.add_argument("--json", action="store_true", dest="as_json")
 
     sysid_run_parser = sysid_subparsers.add_parser("run")
@@ -348,6 +350,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             urdf_path=Path(args.urdf_path),
             safe_config_path=Path(args.safe_config),
             backend=args.backend,
+            render_path=Path(args.render) if args.render else None,
         )
         payload = {"status": "ok", **result}
         return _emit(payload, as_json=args.as_json)
@@ -363,6 +366,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             q_center = tuple(args.q_center or [0.0] * args.dof)
             if len(q_center) != args.dof:
                 parser.error("--q-center length must match --dof")
+            render_path = None
+            if args.render is not None:
+                render_candidate = Path(args.render)
+                render_path = (
+                    Path(args.output) / render_candidate
+                    if not render_candidate.is_absolute()
+                    else render_candidate
+                )
             plan = planner.write_plan(
                 SysIdPlanRequest(
                     profile_name=args.profile,
@@ -374,6 +385,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     urdf_path=args.urdf_path,
                     safe_config_path=args.safe_config,
                     output_dir=Path(args.output),
+                    render_path=render_path,
                 )
             )
         else:
