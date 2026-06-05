@@ -57,7 +57,11 @@ def test_oed_scan_records_trajectory_command_fault_and_continues(
     tmp_path: Path,
 ) -> None:
     class FaultingPlanner:
+        def __init__(self) -> None:
+            self.calls = 0
+
         def write_plan(self, _request):
+            self.calls += 1
             raise TrajectoryCommandError(
                 {
                     "exit_code": 1,
@@ -65,6 +69,12 @@ def test_oed_scan_records_trajectory_command_fault_and_continues(
                     "optimizer_convergence": {
                         "status": "fail",
                         "reason": "restoration_failed",
+                    },
+                    "optimizer_diagnostics": {
+                        "constraint_violation_unscaled": 0.0,
+                        "dual_infeasibility_unscaled": (
+                            3916.7 if self.calls == 1 else 92408.9
+                        ),
                     },
                 }
             )
@@ -92,10 +102,36 @@ def test_oed_scan_records_trajectory_command_fault_and_continues(
     assert len(result["attempts"]) == 2
     assert all(attempt["status"] == "faulted" for attempt in result["attempts"])
     assert result["best_attempt"] is None
+    assert result["best_diagnostic_attempt"] == {
+        "attempt_id": "attempt-001",
+        "status": "faulted",
+        "failure_classification": {
+            "kind": "optimizer_dual_infeasible",
+            "next_action": "tune IPOPT scaling/initialization or reduce objective ill-conditioning before changing hardware safety limits",
+        },
+        "optimizer_diagnostics": {
+            "constraint_violation_unscaled": 0.0,
+            "dual_infeasibility_unscaled": 3916.7,
+        },
+        "parameters": {
+            "duration_s": 1.0,
+            "amplitude_rad": 0.02,
+            "n_wps": 5,
+            "stack_reps": 1,
+            "random_seed": 10,
+            "ipopt_max_iterations": 300,
+            "condition_number_threshold": 500.0,
+        },
+        "output_dir": str(tmp_path / "attempt-001"),
+    }
     assert result["attempts"][0]["error"]["code"] == "trajectory_command_failed"
     assert result["attempts"][0]["error"]["detail"]["optimizer_convergence"][
         "reason"
     ] == "restoration_failed"
+    assert result["attempts"][0]["failure_classification"] == {
+        "kind": "optimizer_dual_infeasible",
+        "next_action": "tune IPOPT scaling/initialization or reduce objective ill-conditioning before changing hardware safety limits",
+    }
 
 
 def test_oed_scan_surfaces_trajectory_command_diagnostics(
@@ -158,3 +194,6 @@ def test_oed_scan_surfaces_trajectory_command_diagnostics(
     assert result["attempts"][0]["trajectory_command"]["optimizer_diagnostics"][
         "dual_infeasibility_unscaled"
     ] == 3500000.0
+    assert result["attempts"][0]["failure_classification"]["kind"] == (
+        "optimizer_dual_infeasible"
+    )

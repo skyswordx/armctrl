@@ -74,6 +74,7 @@ class OedScanRunner:
             "attempt_count": len(attempts),
             "attempts": attempts,
             "best_attempt": _best_attempt(attempts),
+            "best_diagnostic_attempt": _best_diagnostic_attempt(attempts),
             "artifacts": {
                 "summary": str(request.output_dir / "oed_scan_summary.json"),
             },
@@ -135,6 +136,7 @@ class OedScanRunner:
         try:
             plan = self._planner.write_plan(plan_request)
         except TrajectoryCommandError as exc:
+            classification = _classify_optimizer_failure(exc.detail)
             return {
                 "attempt_id": attempt_id,
                 "status": "faulted",
@@ -146,6 +148,7 @@ class OedScanRunner:
                     "message": str(exc),
                     "detail": exc.detail,
                 },
+                "failure_classification": classification,
             }
         payload = plan.to_json()
         backend = payload.get("trajectory_backend", {}) or {}
@@ -175,6 +178,9 @@ class OedScanRunner:
             dict,
         ):
             attempt["trajectory_command"] = candidate_source["generated_by"]
+            attempt["failure_classification"] = _classify_optimizer_failure(
+                candidate_source["generated_by"]
+            )
         return attempt
 
 
@@ -239,3 +245,122 @@ def _best_attempt(attempts: list[dict[str, Any]]) -> dict[str, Any] | None:
         "parameters": best.get("parameters"),
         "output_dir": best.get("output_dir"),
     }
+
+
+def _best_diagnostic_attempt(attempts: list[dict[str, Any]]) -> dict[str, Any] | None:
+    candidates = [
+        attempt
+        for attempt in attempts
+        if _attempt_optimizer_diagnostics(attempt) is not None
+        or isinstance(attempt.get("failure_classification"), dict)
+    ]
+    if not candidates:
+        return None
+    best = min(candidates, key=_diagnostic_attempt_key)
+    return {
+        "attempt_id": best["attempt_id"],
+        "status": best["status"],
+        "failure_classification": best.get("failure_classification"),
+        "optimizer_diagnostics": _attempt_optimizer_diagnostics(best),
+        "parameters": best.get("parameters"),
+        "output_dir": best.get("output_dir"),
+    }
+
+
+def _diagnostic_attempt_key(attempt: dict[str, Any]) -> tuple[int, float, float, float]:
+    classification = attempt.get("failure_classification")
+    kind = (
+        str(classification.get("kind"))
+        if isinstance(classification, dict)
+        else "unknown"
+    )
+    kind_rank = {
+        "optimizer_converged": 0,
+        "optimizer_dual_infeasible": 1,
+        "optimizer_not_converged": 2,
+        "optimizer_constraint_infeasible": 3,
+        "optimizer_not_reported": 4,
+    }.get(kind, 5)
+    diagnostics = _attempt_optimizer_diagnostics(attempt) or {}
+    constraint_violation = _diagnostic_float(
+        diagnostics,
+        "constraint_violation_unscaled",
+    )
+    dual_infeasibility = _diagnostic_float(
+        diagnostics,
+        "dual_infeasibility_unscaled",
+    )
+    objective = _diagnostic_float(diagnostics, "objective_unscaled")
+    return (
+        kind_rank,
+        constraint_violation if constraint_violation is not None else float("inf"),
+        dual_infeasibility if dual_infeasibility is not None else float("inf"),
+        objective if objective is not None else float("inf"),
+    )
+
+
+def _attempt_optimizer_diagnostics(attempt: dict[str, Any]) -> dict[str, Any] | None:
+    error = attempt.get("error")
+    if isinstance(error, dict):
+        detail = error.get("detail")
+        if isinstance(detail, dict) and isinstance(
+            detail.get("optimizer_diagnostics"),
+            dict,
+        ):
+            return detail["optimizer_diagnostics"]
+    trajectory_command = attempt.get("trajectory_command")
+    if isinstance(trajectory_command, dict) and isinstance(
+        trajectory_command.get("optimizer_diagnostics"),
+        dict,
+    ):
+        return trajectory_command["optimizer_diagnostics"]
+    return None
+
+
+def _classify_optimizer_failure(command_result: dict[str, Any]) -> dict[str, str]:
+    convergence = command_result.get("optimizer_convergence")
+    diagnostics = command_result.get("optimizer_diagnostics")
+    if not isinstance(convergence, dict):
+        return {
+            "kind": "optimizer_not_reported",
+            "next_action": "capture FIGAROH/IPOPT stdout before changing trajectory parameters",
+        }
+    if convergence.get("status") == "pass":
+        return {
+            "kind": "optimizer_converged",
+            "next_action": "check regressor condition and simulation gates",
+        }
+    if not isinstance(diagnostics, dict):
+        return {
+            "kind": "optimizer_not_converged",
+            "next_action": "inspect FIGAROH/IPOPT diagnostics before changing hardware safety limits",
+        }
+    constraint_violation = _diagnostic_float(
+        diagnostics,
+        "constraint_violation_unscaled",
+    )
+    dual_infeasibility = _diagnostic_float(
+        diagnostics,
+        "dual_infeasibility_unscaled",
+    )
+    if constraint_violation is not None and constraint_violation > 1e-6:
+        return {
+            "kind": "optimizer_constraint_infeasible",
+            "next_action": "relax or repair trajectory constraints before increasing motion amplitude",
+        }
+    if dual_infeasibility is not None and dual_infeasibility > 1e-3:
+        return {
+            "kind": "optimizer_dual_infeasible",
+            "next_action": "tune IPOPT scaling/initialization or reduce objective ill-conditioning before changing hardware safety limits",
+        }
+    return {
+        "kind": "optimizer_not_converged",
+        "next_action": "scan seeds and timing knobs, then compare optimizer diagnostics and regressor condition",
+    }
+
+
+def _diagnostic_float(diagnostics: dict[str, Any], key: str) -> float | None:
+    value = diagnostics.get(key)
+    if isinstance(value, int | float):
+        return float(value)
+    return None
