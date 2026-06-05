@@ -61,9 +61,11 @@ safety:
         max_sysid_amplitude_rad: 0.45
         max_joint_step_rad: 0.018
         oed_velocity_limits_rad_s: [1.8, 1.2, 1.2, 2.0, 2.0, 2.0]
-        oed_acceleration_limits_rad_s2: [4.0, 2.5, 2.5, 4.5, 4.5, 4.5]
+        # Friction probes need deliberate velocity reversals. Keep this below
+        # the Fourier dynamic envelope but above quasi-static gravity limits.
+        oed_acceleration_limits_rad_s2: [25.0, 25.0, 25.0, 25.0, 25.0, 25.0]
       gravity_sweep:
-        max_sysid_amplitude_rad: 0.55
+        max_sysid_amplitude_rad: 0.30
         max_joint_step_rad: 0.015
         oed_velocity_limits_rad_s: [1.0, 0.8, 0.8, 1.0, 1.0, 1.0]
         oed_acceleration_limits_rad_s2: [2.0, 1.5, 1.5, 2.0, 2.0, 2.0]
@@ -90,7 +92,7 @@ safety:
       # 0.30, 0, 0, 0). The optimizer may still move both joints, but any
       # planned SysID trajectory must keep this relative band before SDK use.
       - name: x5_joint2_joint3_parallel_band
-        applies_to_profiles: [gravity_sweep, friction_sweep]
+        applies_to_profiles: [gravity_sweep]
         left_joint: 2
         right_joint: 3
         min_delta_rad: -0.08

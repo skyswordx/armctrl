@@ -1172,7 +1172,9 @@ def _fallback_coefficients(profile_name: str, u: float, dof: int) -> tuple[float
         active_joint = min(dof - 1, int(u * dof))
         local = (u * dof) - active_joint
         values = [0.0] * dof
-        values[active_joint] = math.sin(2.0 * math.pi * local)
+        values[active_joint] = (math.sin(math.pi * local) ** 2) * math.sin(
+            2.0 * math.pi * local
+        )
         return tuple(values)
     if profile_name == "gravity_sweep":
         envelope = math.sin(math.pi * u) ** 2

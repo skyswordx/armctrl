@@ -391,3 +391,56 @@ def test_cli_sysid_plan_rejects_execution_acceleration_limit_violation(
     assert manifest["safety"]["checks"]["trajectory_acceleration_check"][
         "violations"
     ][0]["check"] == "oed_acceleration_limits_rad_s2"
+
+
+def test_cli_sysid_plan_default_gravity_and_friction_smoke_profiles_are_safe(
+    tmp_path,
+) -> None:
+    cases = [
+        ("gravity_sweep", "0.30"),
+        ("friction_sweep", "0.10"),
+    ]
+
+    for profile_name, amplitude in cases:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "armctrl.cli",
+                "sysid",
+                "plan",
+                profile_name,
+                "--sample-hz",
+                "100",
+                "--duration",
+                "8",
+                "--amplitude",
+                amplitude,
+                "--q-center",
+                "0",
+                "0.3",
+                "0.3",
+                "0",
+                "0",
+                "0",
+                "--output",
+                str(tmp_path / profile_name),
+                "--json",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        payload = json.loads(completed.stdout)
+        manifest = json.loads(
+            (tmp_path / profile_name / "manifest.json").read_text(encoding="utf-8")
+        )
+
+        assert payload["safety"]["allowed"] is True
+        assert payload["artifact_safety"]["trajectory_step_check"]["status"] == "pass"
+        assert payload["artifact_safety"]["trajectory_velocity_check"]["status"] == "pass"
+        assert (
+            payload["artifact_safety"]["trajectory_acceleration_check"]["status"]
+            == "pass"
+        )
+        assert manifest["safety"]["checks"]["joint_relation_check"]["status"] == "pass"
