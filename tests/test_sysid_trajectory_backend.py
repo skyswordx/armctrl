@@ -52,6 +52,7 @@ def _write_oed_safe_config(path: Path) -> None:
         "stack_reps": 3,
         "ipopt_max_iterations": 900,
         "condition_number_threshold": 250.0,
+        "random_seed": 42,
     }
     path.write_text(yaml.safe_dump(safe_config, sort_keys=False), encoding="utf-8")
 
@@ -237,6 +238,7 @@ def test_figaroh_handoff_embeds_numeric_safety_limits(tmp_path: Path) -> None:
     assert timing["requested_duration_s"] == 2.0
     assert timing["segment_duration_s"] >= 0.5
     assert timing["effective_duration_s"] >= timing["requested_duration_s"]
+    assert figaroh_config["figaroh"]["optimizer"]["random_seed"] == 1
 
 
 def test_figaroh_handoff_records_effective_execution_sample_count(
@@ -298,6 +300,7 @@ def test_figaroh_handoff_uses_safe_config_oed_timing_and_quality_gate(
     assert timing["waypoint_duration_s"] == pytest.approx(4.0 / 6.0)
     assert timing["effective_duration_s"] == 12.0
     assert figaroh_config["figaroh"]["optimizer"]["ipopt_max_iterations"] == 900
+    assert figaroh_config["figaroh"]["optimizer"]["random_seed"] == 42
     assert figaroh_config["figaroh"]["quality_gate"][
         "condition_number_threshold"
     ] == 250.0

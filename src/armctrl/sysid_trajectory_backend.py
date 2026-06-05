@@ -402,6 +402,7 @@ def _figaroh_request_config(request: object) -> dict[str, Any]:
             "timing": timing,
             "optimizer": {
                 "ipopt_max_iterations": oed_config["ipopt_max_iterations"],
+                "random_seed": oed_config["random_seed"],
             },
             "quality_gate": {
                 "condition_number_threshold": oed_config[
@@ -569,6 +570,7 @@ def read_sysid_oed_config(path: Path) -> dict[str, Any]:
     condition_number_threshold = float(
         oed.get("condition_number_threshold", 1000.0)
     )
+    random_seed = int(oed.get("random_seed", 1))
     if n_wps < 2:
         raise ValueError("safety.sysid.oed.n_wps must be >= 2")
     if stack_reps < 1:
@@ -584,6 +586,7 @@ def read_sysid_oed_config(path: Path) -> dict[str, Any]:
         "stack_reps": stack_reps,
         "ipopt_max_iterations": ipopt_max_iterations,
         "condition_number_threshold": condition_number_threshold,
+        "random_seed": random_seed,
     }
 
 

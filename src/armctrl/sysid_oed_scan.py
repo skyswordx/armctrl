@@ -32,6 +32,7 @@ class OedScanRequest:
     stack_reps_values: tuple[int, ...]
     ipopt_max_iterations: int
     condition_number_threshold: float
+    random_seed_values: tuple[int, ...] = (1,)
     trajectory_command_argv: tuple[str, ...] | None = None
 
 
@@ -48,10 +49,11 @@ class OedScanRunner:
                 request.amplitudes_rad,
                 request.n_wps_values,
                 request.stack_reps_values,
+                request.random_seed_values,
             ),
             start=1,
         ):
-            duration_s, amplitude_rad, n_wps, stack_reps = values
+            duration_s, amplitude_rad, n_wps, stack_reps, random_seed = values
             attempts.append(
                 self._run_attempt(
                     request,
@@ -60,6 +62,7 @@ class OedScanRunner:
                     amplitude_rad=float(amplitude_rad),
                     n_wps=int(n_wps),
                     stack_reps=int(stack_reps),
+                    random_seed=int(random_seed),
                 )
             )
         result = {
@@ -94,6 +97,7 @@ class OedScanRunner:
         amplitude_rad: float,
         n_wps: int,
         stack_reps: int,
+        random_seed: int,
     ) -> dict[str, Any]:
         attempt_dir = request.output_dir / attempt_id
         attempt_dir.mkdir(parents=True, exist_ok=True)
@@ -103,6 +107,7 @@ class OedScanRunner:
             safe_config_path,
             n_wps=n_wps,
             stack_reps=stack_reps,
+            random_seed=random_seed,
             ipopt_max_iterations=request.ipopt_max_iterations,
             condition_number_threshold=request.condition_number_threshold,
         )
@@ -111,6 +116,7 @@ class OedScanRunner:
             "amplitude_rad": amplitude_rad,
             "n_wps": n_wps,
             "stack_reps": stack_reps,
+            "random_seed": random_seed,
             "ipopt_max_iterations": request.ipopt_max_iterations,
             "condition_number_threshold": request.condition_number_threshold,
         }
@@ -171,6 +177,7 @@ def _write_attempt_safe_config(
     *,
     n_wps: int,
     stack_reps: int,
+    random_seed: int,
     ipopt_max_iterations: int,
     condition_number_threshold: float,
 ) -> None:
@@ -184,6 +191,7 @@ def _write_attempt_safe_config(
     sysid["oed"] = {
         "n_wps": n_wps,
         "stack_reps": stack_reps,
+        "random_seed": random_seed,
         "ipopt_max_iterations": ipopt_max_iterations,
         "condition_number_threshold": condition_number_threshold,
     }

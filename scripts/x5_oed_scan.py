@@ -21,6 +21,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--amplitude", nargs="+", type=float, required=True)
     parser.add_argument("--n-wps", nargs="+", type=int, default=[5])
     parser.add_argument("--stack-reps", nargs="+", type=int, default=[1])
+    parser.add_argument("--seed", nargs="+", type=int, default=[1])
     parser.add_argument("--ipopt-max-iterations", type=int, default=200)
     parser.add_argument("--condition-number-threshold", type=float, default=1000.0)
     parser.add_argument("--trajectory-command", nargs=argparse.REMAINDER)
@@ -41,6 +42,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             amplitudes_rad=tuple(args.amplitude),
             n_wps_values=tuple(args.n_wps),
             stack_reps_values=tuple(args.stack_reps),
+            random_seed_values=tuple(args.seed),
             ipopt_max_iterations=args.ipopt_max_iterations,
             condition_number_threshold=args.condition_number_threshold,
             trajectory_command_argv=(

@@ -162,6 +162,9 @@ def run_oed(
         if optimizer_factory is not None
         else _build_figaroh_optimizer(request, candidate_path=candidate_path)
     )
+    random_seed = _request_random_seed(request)
+    if random_seed is not None:
+        np.random.seed(random_seed)
     stack_reps = _request_stack_reps(request)
     results = optimizer.solve(stack_reps=stack_reps)
     rows = _rows_from_figaroh_results(results, dof=int(request["model"]["dof"]))
@@ -174,6 +177,7 @@ def run_oed(
         "candidate_trajectory": str(candidate_path),
         "sample_count": len(rows),
         "stack_reps": stack_reps,
+        "random_seed": random_seed,
         "final_regressor_shape": _jsonable_shape(results.get("final_regressor_shape")),
     }
 
@@ -369,6 +373,7 @@ def _write_figaroh_config(
                     "soft_lim": 0.05,
                     "max_attempts": 1000,
                     "ipopt_max_iterations": _request_ipopt_max_iterations(request),
+                    "random_seed": _request_random_seed(request),
                     "x5_joint_relation_constraints": _request_joint_relation_constraints(
                         request
                     ),
@@ -393,6 +398,16 @@ def _request_ipopt_max_iterations(request: dict[str, Any]) -> int:
     if not isinstance(optimizer, dict):
         return 200
     return max(1, int(optimizer.get("ipopt_max_iterations", 200)))
+
+
+def _request_random_seed(request: dict[str, Any]) -> int | None:
+    optimizer = request.get("figaroh", {}).get("optimizer", {})
+    if not isinstance(optimizer, dict):
+        return None
+    value = optimizer.get("random_seed")
+    if value is None:
+        return None
+    return int(value)
 
 
 def _request_timing(

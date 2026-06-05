@@ -20,6 +20,7 @@ def test_oed_scan_writes_candidate_safe_configs_and_summary(tmp_path: Path) -> N
         amplitudes_rad=(0.01, 0.02),
         n_wps_values=(5,),
         stack_reps_values=(1,),
+        random_seed_values=(10, 11),
         ipopt_max_iterations=300,
         condition_number_threshold=500.0,
     )
@@ -30,7 +31,7 @@ def test_oed_scan_writes_candidate_safe_configs_and_summary(tmp_path: Path) -> N
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     assert result["schema"] == "armctrl.sysid_oed_scan.v1"
     assert summary == result
-    assert len(result["attempts"]) == 2
+    assert len(result["attempts"]) == 4
     first = result["attempts"][0]
     assert first["status"] == "ok"
     assert first["safety_allowed"] is True
@@ -43,6 +44,7 @@ def test_oed_scan_writes_candidate_safe_configs_and_summary(tmp_path: Path) -> N
     assert safe_config["safety"]["sysid"]["oed"] == {
         "n_wps": 5,
         "stack_reps": 1,
+        "random_seed": 10,
         "ipopt_max_iterations": 300,
         "condition_number_threshold": 500.0,
     }
@@ -79,6 +81,7 @@ def test_oed_scan_records_trajectory_command_fault_and_continues(
         amplitudes_rad=(0.02,),
         n_wps_values=(5,),
         stack_reps_values=(1,),
+        random_seed_values=(10,),
         ipopt_max_iterations=300,
         condition_number_threshold=500.0,
         trajectory_command_argv=("python", "scripts/x5_figaroh_oed.py"),

@@ -52,6 +52,9 @@ safety:
       # Armctrl passes this into the X5 FIGAROH IPOPT problem instead of relying
       # on FIGAROH's library default, so convergence evidence is reproducible.
       ipopt_max_iterations: 200
+      # FIGAROH waypoint initialization is stochastic; keep a default seed so
+      # WSL OED scans can be reproduced and compared across commits.
+      random_seed: 1
       # Offline OED quality gate. This is intentionally stricter than the
       # simulation safety gate and does not by itself allow SDK execution.
       condition_number_threshold: 1000.0

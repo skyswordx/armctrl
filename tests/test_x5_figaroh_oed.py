@@ -190,6 +190,48 @@ def test_figaroh_config_uses_armctrl_oed_knobs(tmp_path: Path) -> None:
     assert _request_ipopt_max_iterations(request) == 900
 
 
+def test_run_oed_seeds_numpy_from_request_optimizer(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    request_path = tmp_path / "figaroh_request.json"
+    candidate_path = tmp_path / "candidate.csv"
+    _write_request(request_path)
+    request = json.loads(request_path.read_text(encoding="utf-8"))
+    request["figaroh"]["optimizer"] = {
+        "ipopt_max_iterations": 900,
+        "random_seed": 42,
+    }
+    request_path.write_text(json.dumps(request), encoding="utf-8")
+    captured = {}
+    monkeypatch.setattr(
+        "armctrl.x5_figaroh_oed.np.random.seed",
+        lambda seed: captured.setdefault("seed", seed),
+    )
+
+    class FakeOptimizer:
+        def solve(self, stack_reps: int = 1):
+            return {
+                "T_F": [np.asarray([0.0, 0.01])],
+                "P_F": [
+                    np.asarray(
+                        [
+                            [0.0, 0.3, 0.3, 0.0, 0.0, 0.0],
+                            [0.01, 0.31, 0.31, 0.0, 0.0, 0.0],
+                        ]
+                    )
+                ],
+            }
+
+    run_oed(
+        request_path=request_path,
+        candidate_path=candidate_path,
+        optimizer_factory=lambda _request: FakeOptimizer(),
+    )
+
+    assert captured["seed"] == 42
+
+
 def test_x5_ipopt_problem_applies_request_max_iterations(monkeypatch) -> None:
     captured = {}
 
