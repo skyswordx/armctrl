@@ -23,6 +23,7 @@ class X5TrajectoryIPOPTProblem:
     """Mixin that keeps FIGAROH's problem math but lets armctrl set IPOPT knobs."""
 
     ipopt_max_iterations = 200
+    ipopt_print_level = 7
 
     def solve_with_waypoints(self, wps):
         try:
@@ -33,7 +34,7 @@ class X5TrajectoryIPOPTProblem:
             config.tolerance = 1e-3
             config.acceptable_tolerance = 1e-2
             config.max_iterations = int(self.ipopt_max_iterations)
-            config.print_level = 3
+            config.print_level = int(self.ipopt_print_level)
             config.custom_options = {
                 b"mu_strategy": b"adaptive",
             }
@@ -169,6 +170,7 @@ def run_oed(
     results = optimizer.solve(stack_reps=stack_reps)
     rows = _rows_from_figaroh_results(results, dof=int(request["model"]["dof"]))
     _write_candidate_rows(candidate_path, rows)
+    base_regressor_score = _base_regressor_score(optimizer, results)
     return {
         "schema": "armctrl.x5_figaroh_oed_result.v1",
         "status": "ok",
@@ -179,6 +181,7 @@ def run_oed(
         "stack_reps": stack_reps,
         "random_seed": random_seed,
         "final_regressor_shape": _jsonable_shape(results.get("final_regressor_shape")),
+        "base_regressor_score": base_regressor_score,
     }
 
 
@@ -249,6 +252,12 @@ def _build_figaroh_optimizer(
     )
 
     class X5OptimalTrajectory(BaseOptimalTrajectory):
+        def _stack_base_regressors(self, q, v, a, W_stack=None):
+            W_b = super()._stack_base_regressors(q, v, a, W_stack=W_stack)
+            self.last_base_regressor_shape = tuple(int(value) for value in W_b.shape)
+            self.last_base_regressor_condition_number = float(np.linalg.cond(W_b))
+            return W_b
+
         def create_ipopt_problem(
             self,
             n_joints,
@@ -277,6 +286,7 @@ def _build_figaroh_optimizer(
                 problem_name="X5TrajectoryOptimization",
             )
             problem.ipopt_max_iterations = _request_ipopt_max_iterations(request)
+            problem.ipopt_print_level = _request_ipopt_print_level(request)
             return problem
 
     config_path = _write_figaroh_config(request, candidate_path=candidate_path)
@@ -373,6 +383,7 @@ def _write_figaroh_config(
                     "soft_lim": 0.05,
                     "max_attempts": 1000,
                     "ipopt_max_iterations": _request_ipopt_max_iterations(request),
+                    "ipopt_print_level": _request_ipopt_print_level(request),
                     "random_seed": _request_random_seed(request),
                     "x5_joint_relation_constraints": _request_joint_relation_constraints(
                         request
@@ -398,6 +409,13 @@ def _request_ipopt_max_iterations(request: dict[str, Any]) -> int:
     if not isinstance(optimizer, dict):
         return 200
     return max(1, int(optimizer.get("ipopt_max_iterations", 200)))
+
+
+def _request_ipopt_print_level(request: dict[str, Any]) -> int:
+    optimizer = request.get("figaroh", {}).get("optimizer", {})
+    if not isinstance(optimizer, dict):
+        return 7
+    return max(0, int(optimizer.get("ipopt_print_level", 7)))
 
 
 def _request_random_seed(request: dict[str, Any]) -> int | None:
@@ -624,6 +642,29 @@ def _jsonable_shape(shape: object) -> list[int] | None:
     if shape is None:
         return None
     return [int(value) for value in shape]
+
+
+def _base_regressor_score(optimizer: Any, results: dict[str, Any]) -> dict[str, Any]:
+    shape = getattr(optimizer, "last_base_regressor_shape", None)
+    if shape is None:
+        shape = results.get("final_regressor_shape")
+    condition = getattr(optimizer, "last_base_regressor_condition_number", None)
+    if condition is None:
+        condition = results.get("final_base_regressor_condition_number")
+    idx_b = getattr(optimizer, "idx_b", None)
+    base_parameter_count = len(idx_b) if idx_b is not None else None
+    if shape is None or condition is None or base_parameter_count is None:
+        return {"status": "not_computed"}
+    json_shape = _jsonable_shape(shape)
+    if json_shape is None or len(json_shape) != 2:
+        return {"status": "not_computed"}
+    return {
+        "status": "computed",
+        "condition_number": float(condition),
+        "row_count": int(json_shape[0]),
+        "column_count": int(json_shape[1]),
+        "base_parameter_count": int(base_parameter_count),
+    }
 
 
 def _write_minimal_yaml(path: Path, value: dict[str, Any]) -> None:

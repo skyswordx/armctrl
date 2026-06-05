@@ -6,6 +6,80 @@
 
 ### Added
 
+- Added profile-aware SysID OED safety settings: Fourier multisine now gets a wider offline OED amplitude envelope while gravity/friction can keep conservative hardware bring-up constraints.
+- Added FIGAROH base-regressor diagnostics to the external OED handoff path so `manifest.json` and OED scan summaries can distinguish FIGAROH base-regressor condition from Pinocchio full-regressor effective condition.
+- Added IPOPT print-level propagation and iteration-log tail extraction for SysID OED scans, making `obj/inf_pr/inf_du/alpha` evidence available when `print_level >= 5`.
+- Added first-class OED scan evidence artifacts: `oed_scan_attempts.json` flattens per-attempt safety/OED/optimizer fields for external review, and `oed_scan_report.md` gives a compact Markdown table.
+- Added `--attempt-timeout-s` and `--ipopt-print-level` to `scripts/x5_oed_scan.py`, so long FIGAROH/IPOPT attempts can be bounded without wrapping the mature backend command in a shell-specific `timeout`.
+- Added `representative_ipopt_stdout.txt` for OED scans when a diagnostic attempt exposes IPOPT stdout, plus last-iteration `objective/inf_pr/inf_du` extraction from IPOPT iteration tails for timeout cases without a final solver summary.
+
+### Changed
+
+- Relaxed the X5 joint2/joint3 hard relation constraint for `fourier_multisine`; the narrow `q2-q3` band remains available for conservative gravity/friction probes but no longer locks the full-body OED search space.
+- Updated the OED quality gate to prefer FIGAROH base-regressor condition when the mature backend reports it, with Pinocchio full-regressor condition retained as a fallback diagnostic.
+- WSL evidence from `runs/oed-scan-profile-relaxed-smoke-20260605-v4` shows the relaxed Fourier request removes `joint_relation_constraints`, raises the Fourier profile amplitude ceiling to `0.8 rad`, and captures `oed_scan_summary.json`, `oed_scan_attempts.json`, `oed_scan_report.md`, and `representative_ipopt_stdout.txt`. The bounded `amplitude=0.3, n_wps=5, stack_reps=1, sample_hz=20` smoke still timed out after 120s without a candidate, but the captured IPOPT iteration log moved objective from `1.049e5` to `2.263e4`, kept `inf_pr=0`, and reduced `inf_du` from `1.13e2` to `1.04e1`; the current bottleneck is runtime/problem size, not the earlier `q2-q3` hard-lock restoration failure.
+- OED scan reproduction should now use armctrl's built-in per-attempt timeout plumbing; `trajectory_command` should point directly at the FIGAROH wrapper.
+
+### Reproduce
+
+```bash
+cd /home/circlemoon/armctrl-clean-oed
+/home/circlemoon/.local/bin/uv run pytest \
+  tests/test_sysid_oed_scan.py \
+  tests/test_sysid_trajectory_backend.py \
+  tests/test_x5_figaroh_oed.py \
+  tests/test_simulation_safety.py -q
+/home/circlemoon/.local/bin/uv run python scripts/x5_oed_scan.py \
+  --output runs/oed-scan-profile-relaxed-smoke-20260605-v4 \
+  --duration 1 \
+  --amplitude 0.3 \
+  --n-wps 5 \
+  --stack-reps 1 \
+  --seed 1 \
+  --sample-hz 20 \
+  --condition-number-threshold 1000 \
+  --ipopt-max-iterations 30 \
+  --ipopt-print-level 5 \
+  --attempt-timeout-s 120 \
+  --trajectory-command /home/circlemoon/.local/bin/uv run python scripts/x5_figaroh_oed.py
+```
+
+- Added `armctrl sysid plan --candidate-trajectory` so FIGAROH/Pinocchio or other mature OED backends can provide the trajectory while `armctrl` only imports it, runs safety gates, scores the regressor when available, and records the source in `manifest.json`.
+- Added `armctrl sysid plan --trajectory-command ...` so an external FIGAROH/OED wrapper can consume `ARMCTRL_FIGAROH_REQUEST`, write `ARMCTRL_CANDIDATE_TRAJECTORY`, and then hand the generated CSV back to the same safety-gated planning path.
+- Added `scripts/x5_figaroh_oed.py` and `armctrl.x5_figaroh_oed` as the X5 FIGAROH OED wrapper contract: it reads the armctrl request, attempts to construct a FIGAROH optimal trajectory run, converts successful `T_F/P_F` results into candidate CSV, and fails explicitly instead of producing fake OED output when the mature backend path is incomplete.
+- Added structured external OED command diagnostics: successful wrapper stdout JSON is recorded in `manifest.json`, and failed wrapper runs return `status=faulted` with command argv, exit code, stdout/stderr, and parsed stdout JSON instead of a Python traceback.
+- Added `armctrl eef doctor` for non-hardware discovery of MoveIt Servo and Pink backend availability.
+- Added plan-only `armctrl eef plan-twist` and `armctrl eef plan-pose` contracts so Agents can express bounded end-effector intent without bypassing safety gates.
+- Added `backend_request.json` handoff artifacts for EEF plans so mature backends can own Twist/Pose execution semantics outside `armctrl`.
+- Added `armctrl eef review` so mature backend joint trajectories can be checked through the shared simulation preview chain before any future hardware execution path.
+- Added `sdk_cartesian` as an explicit EEF backend contract for ARX5 SDK cartesian control, plus LeRobot-aligned cartesian action metadata in EEF plan artifacts.
+- Added `backend_review_contract.json` plus a conventional `backend_joint_trajectory.csv` review path so EEF backend outputs can be auto-discovered by `armctrl eef review`.
+- Added `armctrl eef runtime-plan` so Agents can query the mature runtime owner for `sdk_cartesian`, `moveit_servo`, or `lerobot_rollout` without `armctrl` pretending to be the executor.
+- Added `eef runtime-plan --plan-dir` inference so Agent flows can carry backend/runtime/review context forward directly from EEF plan artifacts.
+- Added `armctrl eef export-lerobot-action --plan-dir <dir>` so an EEF plan can be converted into a LeRobot-friendly cartesian action contract with ordered features and values for Agent/runtime reuse.
+- Added `armctrl eef export-sdk-cartesian --plan-dir <dir>` so an EEF plan can be converted into a programmatic ARX5 SDK cartesian bridge artifact without making armctrl own controller execution.
+- Added `armctrl eef export-moveit-servo --plan-dir <dir>` so a twist-style EEF plan can be converted into a MoveIt Servo bridge artifact using the standard ROS `TwistStamped` surface.
+- Added `armctrl eef stage-trajectory --plan-dir <dir> --trajectory <joint_csv>` so mature backend output can be validated, copied into the conventional review path, and then passed through the existing shared simulation gate.
+- Added backend-specific `bridge_artifact_preview` and `next_steps` hints on `armctrl eef runtime-plan --plan-dir <dir>` for `sdk_cartesian` and `moveit_servo`, so Agents can consume one compact mature-backend handoff checklist.
+- Added explicit `--backend` override support on `armctrl eef runtime-plan --plan-dir <dir>`, including LeRobot preview support, so one bounded EEF plan can be handed to a different mature runtime owner without regenerating artifacts.
+- Added `armctrl eef export-runtime-bridge --plan-dir <dir>` as a unified, backend-agnostic bridge-export surface that delegates to the existing SDK, MoveIt Servo, or LeRobot exporters.
+- Added `armctrl eef export-runner-contract --plan-dir <dir>` as a non-executing handoff contract for backend helpers that consume a mature-owner bridge artifact and emit a reviewed joint trajectory CSV back into the shared simulation gate.
+- Added `armctrl eef export-agent-runtime-contract --plan-dir <dir>` as a non-hardware handoff contract for Agent/helper loops that stream stable EEF action frames into SDK, MoveIt Servo, or LeRobot mature runtime owners while keeping the shared review return path explicit.
+- Added `scripts/lerobot_agent_runtime_helper_sample.py` as a non-hardware sample that consumes `armctrl.eef_agent_runtime_contract.v1` for `lerobot_rollout` and turns it into a processor-oriented helper plan around `robot_action_processor` / `robot_observation_processor`.
+- Added `scripts/lerobot_processor_contract_helper_sample.py` as a non-hardware sample that consumes `armctrl.lerobot_eef_processor_contract.v1` and immediately closes the loop through `preview-rollout` plus the shared simulation review gate.
+- Added `armctrl recipe export-agent-preset-contract --plan-dir <dir>` as a non-hardware Agent-facing preset-action handoff artifact that consolidates recipe safety summary, EEF seed, required artifacts, and next-step guidance into one JSON contract.
+- Added explicit `ordered_steps` sequencing metadata to the Agent-facing recipe preset and EEF runtime contracts so dependent commands no longer need to be inferred from free-text `next_steps`.
+- Added explicit `ordered_steps` sequencing metadata to LeRobot processor contracts and both LeRobot helper samples so Agent callers can keep export, preview, staging, and review steps serialized.
+- Added CLI-native `armctrl lerobot agent-runtime-helper-plan` and `armctrl lerobot processor-helper-preview` so Agent callers can stay on the main JSON CLI surface instead of depending on repo-local sample scripts as their primary interface.
+- Added CLI-native `armctrl eef export-sdk-helper-plan` and `armctrl eef export-moveit-helper-plan` so SDK Cartesian and MoveIt Servo backend handoff planning can also stay on the main JSON CLI surface.
+- Added optional `--eef-plan-dir` on `armctrl lerobot config-plan rollout` so rollout planning can carry the exported EEF LeRobot action bridge and keep policy/runtime action semantics aligned.
+- Added `armctrl lerobot stage-rollout-trajectory --eef-plan-dir <dir> --trajectory <joint_csv>` as a LeRobot-facing wrapper over the shared EEF trajectory staging contract.
+- Added runtime-owner and rollout-specific `next_steps` guidance to `armctrl lerobot config-plan rollout`, so it mirrors the compact handoff ergonomics of `eef runtime-plan`.
+- Added a `processor_bridge` contract to `armctrl lerobot config-plan rollout`, pointing programmatic integrations at LeRobot's processor-based rollout adaptation surface while reusing the exported EEF action vocabulary.
+- Added `armctrl lerobot review-rollout` so LeRobot-facing rollout validation can reuse the existing EEF simulation review chain instead of introducing a separate safety path.
+- Added the project-local `armctrl-agent-motion` Codex skill so Agents can follow the recipe + EEF + review workflow without bypassing safety contracts.
+- Added simulation-gated recipe artifact coverage for `recipe plan --output` and `recipe execute --backend sim`.
+
 - 新增 `armctrl sim doctor`，只读检测 `pinocchio_coal`、`mujoco`、`moveit`、`figaroh` 成熟后端可用性，不打开 CAN，不实例化 SDK，不移动硬件。
 - 新增安全空间 DSL：`configs/x5.safe.yaml` 现在支持 `allowed_workspace_boxes`、`forbidden_workspace_boxes` 和 `simulation.backend_preference`，用于统一约束 Agent recipe、SysID 和后续 LeRobot rollout safety bridge。
 - 新增 SysID 轨迹仿真安全预览：`sysid plan --output` 现在写出 `trajectory_preview.json`，并把 `simulation_check` 纳入 `manifest.json` 与 stdout safety gate。

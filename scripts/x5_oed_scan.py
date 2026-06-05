@@ -23,6 +23,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--stack-reps", nargs="+", type=int, default=[1])
     parser.add_argument("--seed", nargs="+", type=int, default=[1])
     parser.add_argument("--ipopt-max-iterations", type=int, default=200)
+    parser.add_argument("--ipopt-print-level", type=int, default=5)
+    parser.add_argument("--attempt-timeout-s", type=float)
     parser.add_argument("--condition-number-threshold", type=float, default=1000.0)
     parser.add_argument("--trajectory-command", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
@@ -44,7 +46,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             stack_reps_values=tuple(args.stack_reps),
             random_seed_values=tuple(args.seed),
             ipopt_max_iterations=args.ipopt_max_iterations,
+            ipopt_print_level=args.ipopt_print_level,
             condition_number_threshold=args.condition_number_threshold,
+            attempt_timeout_s=args.attempt_timeout_s,
             trajectory_command_argv=(
                 tuple(args.trajectory_command)
                 if args.trajectory_command is not None

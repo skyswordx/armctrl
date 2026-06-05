@@ -74,6 +74,7 @@ def plan_sysid_trajectory(
             tuple(str(arg) for arg in trajectory_command_argv),
             figaroh_config_path=figaroh_config_path,
             candidate_path=candidate_path,
+            timeout_s=getattr(request, "trajectory_command_timeout_s", None),
         )
     candidate = None
     if candidate_path is not None:
@@ -122,6 +123,7 @@ def _backend_metadata(
         rows=rows,
         backend_status=dependency_status["pinocchio"],
     )
+    base_regressor_score = _base_regressor_score_from_command_result(command_result)
     missing = [
         name
         for name, status in dependency_status.items()
@@ -134,6 +136,7 @@ def _backend_metadata(
     oed_quality_gate = _oed_quality_gate(
         selected=selected,
         command_result=command_result,
+        base_regressor_score=base_regressor_score,
         regressor_score=regressor_score,
         condition_number_threshold=float(
             figaroh_config["figaroh"]["quality_gate"][
@@ -167,6 +170,7 @@ def _backend_metadata(
             "optimizer": "IPOPT/cyipopt",
         },
         "dependency_status": dependency_status,
+        "base_regressor_score": base_regressor_score,
         "regressor_score": regressor_score,
         "condition_number": regressor_score.get("effective_condition_number"),
         "rank": regressor_score.get("rank"),
@@ -197,6 +201,7 @@ def _oed_quality_gate(
     *,
     selected: str,
     command_result: dict[str, Any] | None,
+    base_regressor_score: dict[str, Any],
     regressor_score: dict[str, Any],
     condition_number_threshold: float,
 ) -> dict[str, Any]:
@@ -212,23 +217,59 @@ def _oed_quality_gate(
         reasons.append("optimizer_not_converged")
     elif command_result is not None and not isinstance(convergence, dict):
         reasons.append("optimizer_convergence_not_reported")
-    if regressor_score.get("status") != "computed":
-        reasons.append("pinocchio_regressor_not_computed")
-    else:
-        condition = float(regressor_score.get("effective_condition_number", float("inf")))
-        rank = int(regressor_score.get("rank", 0))
-        if rank <= 0:
-            reasons.append("regressor_rank_zero")
+    primary_metric = "figaroh_base_regressor"
+    primary_score = base_regressor_score
+    if primary_score.get("status") == "computed":
+        condition = float(primary_score.get("condition_number", float("inf")))
+        base_parameter_count = int(primary_score.get("base_parameter_count", 0))
+        if base_parameter_count <= 0:
+            reasons.append("base_parameter_count_zero")
         if condition > condition_number_threshold:
-            reasons.append("regressor_condition_too_high")
+            reasons.append("base_regressor_condition_too_high")
+    else:
+        primary_metric = "pinocchio_full_regressor"
+        if primary_score.get("status") != "not_reported":
+            reasons.append("figaroh_base_regressor_not_computed")
+        if regressor_score.get("status") != "computed":
+            reasons.append("pinocchio_regressor_not_computed")
+        else:
+            condition = float(regressor_score.get("effective_condition_number", float("inf")))
+            rank = int(regressor_score.get("rank", 0))
+            if rank <= 0:
+                reasons.append("regressor_rank_zero")
+            if condition > condition_number_threshold:
+                reasons.append("regressor_condition_too_high")
     return {
         "status": "fail" if reasons else "pass",
         "reasons": reasons,
+        "primary_metric": primary_metric,
         "condition_number_threshold": condition_number_threshold,
         "note": (
             "This gate is for offline OED quality only. Passing simulation safety "
             "does not imply identified parameters are valid."
         ),
+    }
+
+
+def _base_regressor_score_from_command_result(
+    command_result: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if command_result is None:
+        return {"status": "not_reported"}
+    stdout_json = command_result.get("stdout_json")
+    if not isinstance(stdout_json, dict):
+        return {"status": "not_reported"}
+    raw_score = stdout_json.get("base_regressor_score")
+    if not isinstance(raw_score, dict):
+        return {"status": "not_reported"}
+    if raw_score.get("status") != "computed":
+        return {"status": str(raw_score.get("status", "not_computed"))}
+    return {
+        "status": "computed",
+        "condition_number": float(raw_score["condition_number"]),
+        "row_count": int(raw_score["row_count"]),
+        "column_count": int(raw_score["column_count"]),
+        "base_parameter_count": int(raw_score["base_parameter_count"]),
     }
 
 
@@ -255,6 +296,7 @@ def _run_trajectory_command(
     *,
     figaroh_config_path: Path,
     candidate_path: Path,
+    timeout_s: float | None = None,
 ) -> dict[str, Any]:
     if not command_argv:
         raise ValueError("trajectory command cannot be empty")
@@ -264,18 +306,62 @@ def _run_trajectory_command(
         "ARMCTRL_FIGAROH_REQUEST": str(figaroh_config_path),
         "ARMCTRL_CANDIDATE_TRAJECTORY": str(candidate_path),
     }
-    completed = subprocess.run(
-        list(command_argv),
-        check=False,
-        capture_output=True,
-        text=True,
-        env=env,
-    )
+    try:
+        completed = subprocess.run(
+            list(command_argv),
+            check=False,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=timeout_s,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise TrajectoryCommandError(
+            _trajectory_command_timeout_result(command_argv, exc, timeout_s)
+        ) from exc
     if completed.returncode != 0:
         raise TrajectoryCommandError(
             _trajectory_command_result(command_argv, completed)
         )
     return _trajectory_command_result(command_argv, completed)
+
+
+def _trajectory_command_timeout_result(
+    command_argv: tuple[str, ...],
+    exc: subprocess.TimeoutExpired,
+    timeout_s: float | None,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "command_argv": list(command_argv),
+        "exit_code": "timeout",
+        "timeout_s": float(timeout_s if timeout_s is not None else exc.timeout),
+        "optimizer_convergence": {
+            "status": "fail",
+            "reason": "trajectory_command_timeout",
+        },
+        "optimizer_diagnostics": {},
+    }
+    stdout = _timeout_stream_to_text(exc.stdout)
+    stderr = _timeout_stream_to_text(exc.stderr)
+    if stdout:
+        result["stdout"] = stdout
+        stdout_json = _extract_last_json_object(stdout)
+        if stdout_json is not None:
+            result["stdout_json"] = stdout_json
+        diagnostics = _optimizer_diagnostics_from_stdout(stdout)
+        if diagnostics:
+            result["optimizer_diagnostics"] = diagnostics
+    if stderr:
+        result["stderr"] = stderr
+    return result
+
+
+def _timeout_stream_to_text(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode(errors="replace").strip()
+    return value.strip()
 
 
 def _trajectory_command_result(
@@ -360,6 +446,9 @@ def _optimizer_diagnostics_from_stdout(stdout: str) -> dict[str, Any]:
         scaled_key="constraint_violation_scaled",
         unscaled_key="constraint_violation_unscaled",
     )
+    iteration_tail = _iteration_log_tail(stdout)
+    if iteration_tail:
+        diagnostics["iteration_log_tail"] = iteration_tail
     return diagnostics
 
 
@@ -398,6 +487,18 @@ def _last_float_pair_after_label(text: str, label: str) -> tuple[float, float] |
 
 
 _FLOAT_PATTERN = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
+
+
+def _iteration_log_tail(stdout: str, *, max_lines: int = 20) -> list[str]:
+    lines = []
+    for line in stdout.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        first = stripped.split(maxsplit=1)[0]
+        if first.rstrip("rR").isdigit():
+            lines.append(line)
+    return lines[-max_lines:]
 
 
 def _slugify_optimizer_exit(exit_line: str) -> str:
@@ -472,6 +573,7 @@ def _figaroh_request_config(request: object) -> dict[str, Any]:
             "timing": timing,
             "optimizer": {
                 "ipopt_max_iterations": oed_config["ipopt_max_iterations"],
+                "ipopt_print_level": oed_config["ipopt_print_level"],
                 "random_seed": oed_config["random_seed"],
             },
             "quality_gate": {
@@ -549,12 +651,19 @@ def _minimum_waypoint_duration_from_limits(constraints: dict[str, Any]) -> float
 
 def _figaroh_numeric_constraints(request: object) -> dict[str, Any]:
     safe_config = WorkspaceSafetyConfig.from_yaml(Path(str(request.safe_config_path)))
+    profile_safety = read_sysid_profile_safety(
+        Path(str(request.safe_config_path)),
+        profile_name=str(request.profile_name),
+    )
     urdf_limits = _read_urdf_motion_limits(
         Path(str(request.urdf_path)),
         active_joints=[f"joint{index + 1}" for index in range(int(request.dof))],
     )
     q_center = [float(value) for value in request.q_center]
-    amplitude = min(abs(float(request.amplitude_rad)), safe_config.max_sysid_amplitude_rad)
+    amplitude = min(
+        abs(float(request.amplitude_rad)),
+        float(profile_safety["max_sysid_amplitude_rad"]),
+    )
     sample_hz = float(request.sample_hz)
     max_joint_step_rad = float(safe_config.max_joint_step_rad)
     derived_velocity_limit = max_joint_step_rad * sample_hz
@@ -585,13 +694,40 @@ def _figaroh_numeric_constraints(request: object) -> dict[str, Any]:
         "joint_limits_rad": joint_limits,
         "velocity_limits_rad_s": velocity_limits,
         "effort_limits_nm": effort_limits,
+        "profile_safety": profile_safety,
         "joint_relation_constraints": read_sysid_joint_relation_constraints(
-            Path(str(request.safe_config_path))
+            Path(str(request.safe_config_path)),
+            profile_name=str(request.profile_name),
         ),
     }
 
 
-def read_sysid_joint_relation_constraints(path: Path) -> list[dict[str, Any]]:
+def read_sysid_profile_safety(path: Path, *, profile_name: str) -> dict[str, Any]:
+    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    safety = raw.get("safety", {}) or {}
+    sysid = safety.get("sysid", {}) or {}
+    profile_overrides = sysid.get("profile_overrides", {}) or {}
+    if not isinstance(profile_overrides, dict):
+        raise ValueError("safety.sysid.profile_overrides must be a mapping")
+    override = profile_overrides.get(profile_name, {}) or {}
+    if not isinstance(override, dict):
+        raise ValueError(f"safety.sysid.profile_overrides.{profile_name} must be a mapping")
+    return {
+        "profile_name": profile_name,
+        "max_sysid_amplitude_rad": float(
+            override.get(
+                "max_sysid_amplitude_rad",
+                safety.get("max_sysid_amplitude_rad", 0.25),
+            )
+        ),
+    }
+
+
+def read_sysid_joint_relation_constraints(
+    path: Path,
+    *,
+    profile_name: str | None = None,
+) -> list[dict[str, Any]]:
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     safety = raw.get("safety", {}) or {}
     sysid = safety.get("sysid", {}) or {}
@@ -609,6 +745,20 @@ def read_sysid_joint_relation_constraints(path: Path) -> list[dict[str, Any]]:
         right_joint = int(item["right_joint"])
         min_delta = float(item["min_delta_rad"])
         max_delta = float(item["max_delta_rad"])
+        applies_to_profiles = item.get("applies_to_profiles")
+        if (
+            profile_name is not None
+            and applies_to_profiles is not None
+            and profile_name not in [str(value) for value in applies_to_profiles]
+        ):
+            continue
+        excluded_profiles = item.get("excluded_profiles")
+        if (
+            profile_name is not None
+            and excluded_profiles is not None
+            and profile_name in [str(value) for value in excluded_profiles]
+        ):
+            continue
         if left_joint <= 0 or right_joint <= 0:
             raise ValueError("joint relation indices are 1-based and must be positive")
         if min_delta > max_delta:
@@ -637,6 +787,7 @@ def read_sysid_oed_config(path: Path) -> dict[str, Any]:
     n_wps = int(oed.get("n_wps", 5))
     stack_reps = int(oed.get("stack_reps", 1))
     ipopt_max_iterations = int(oed.get("ipopt_max_iterations", 200))
+    ipopt_print_level = int(oed.get("ipopt_print_level", 7))
     condition_number_threshold = float(
         oed.get("condition_number_threshold", 1000.0)
     )
@@ -647,6 +798,8 @@ def read_sysid_oed_config(path: Path) -> dict[str, Any]:
         raise ValueError("safety.sysid.oed.stack_reps must be >= 1")
     if ipopt_max_iterations < 1:
         raise ValueError("safety.sysid.oed.ipopt_max_iterations must be >= 1")
+    if ipopt_print_level < 0:
+        raise ValueError("safety.sysid.oed.ipopt_print_level must be >= 0")
     if condition_number_threshold <= 0.0:
         raise ValueError(
             "safety.sysid.oed.condition_number_threshold must be positive"
@@ -655,6 +808,7 @@ def read_sysid_oed_config(path: Path) -> dict[str, Any]:
         "n_wps": n_wps,
         "stack_reps": stack_reps,
         "ipopt_max_iterations": ipopt_max_iterations,
+        "ipopt_print_level": ipopt_print_level,
         "condition_number_threshold": condition_number_threshold,
         "random_seed": random_seed,
     }
@@ -664,8 +818,12 @@ def evaluate_sysid_joint_relation_samples(
     safe_config_path: Path,
     *,
     samples: list[tuple[float, ...]],
+    profile_name: str | None = None,
 ) -> dict[str, Any]:
-    constraints = read_sysid_joint_relation_constraints(safe_config_path)
+    constraints = read_sysid_joint_relation_constraints(
+        safe_config_path,
+        profile_name=profile_name,
+    )
     violations: list[dict[str, Any]] = []
     for sample_index, sample in enumerate(samples):
         for constraint in constraints:

@@ -32,8 +32,10 @@ class OedScanRequest:
     stack_reps_values: tuple[int, ...]
     ipopt_max_iterations: int
     condition_number_threshold: float
+    ipopt_print_level: int = 5
     random_seed_values: tuple[int, ...] = (1,)
     trajectory_command_argv: tuple[str, ...] | None = None
+    attempt_timeout_s: float | None = None
 
 
 class OedScanRunner:
@@ -77,14 +79,38 @@ class OedScanRunner:
             "best_diagnostic_attempt": _best_diagnostic_attempt(attempts),
             "artifacts": {
                 "summary": str(request.output_dir / "oed_scan_summary.json"),
+                "attempts": str(request.output_dir / "oed_scan_attempts.json"),
+                "report": str(request.output_dir / "oed_scan_report.md"),
+                "representative_ipopt_stdout": None,
             },
             "next_gate": (
                 "rerun scan with trajectory_command on WSL if best_attempt is plan-only; "
                 "use only attempts whose safety gate and OED quality gate both pass"
             ),
         }
+        representative_stdout = _write_representative_ipopt_stdout(
+            request.output_dir,
+            attempts=attempts,
+            diagnostic_attempt=result["best_diagnostic_attempt"],
+        )
+        result["artifacts"]["representative_ipopt_stdout"] = (
+            str(representative_stdout) if representative_stdout is not None else None
+        )
         (request.output_dir / "oed_scan_summary.json").write_text(
             json.dumps(result, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        flattened = {
+            "schema": "armctrl.sysid_oed_scan_attempts.v1",
+            "attempt_count": len(attempts),
+            "attempts": [_flatten_attempt(attempt) for attempt in attempts],
+        }
+        (request.output_dir / "oed_scan_attempts.json").write_text(
+            json.dumps(flattened, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        (request.output_dir / "oed_scan_report.md").write_text(
+            _scan_report_markdown(result),
             encoding="utf-8",
         )
         return result
@@ -110,6 +136,7 @@ class OedScanRunner:
             stack_reps=stack_reps,
             random_seed=random_seed,
             ipopt_max_iterations=request.ipopt_max_iterations,
+            ipopt_print_level=request.ipopt_print_level,
             condition_number_threshold=request.condition_number_threshold,
         )
         parameters = {
@@ -119,8 +146,11 @@ class OedScanRunner:
             "stack_reps": stack_reps,
             "random_seed": random_seed,
             "ipopt_max_iterations": request.ipopt_max_iterations,
+            "ipopt_print_level": request.ipopt_print_level,
             "condition_number_threshold": request.condition_number_threshold,
         }
+        if request.attempt_timeout_s is not None:
+            parameters["attempt_timeout_s"] = float(request.attempt_timeout_s)
         plan_request = SysIdPlanRequest(
             profile_name=request.profile_name,
             dof=request.dof,
@@ -132,6 +162,7 @@ class OedScanRunner:
             safe_config_path=str(safe_config_path),
             output_dir=attempt_dir,
             trajectory_command_argv=request.trajectory_command_argv,
+            trajectory_command_timeout_s=request.attempt_timeout_s,
         )
         try:
             plan = self._planner.write_plan(plan_request)
@@ -192,6 +223,7 @@ def _write_attempt_safe_config(
     stack_reps: int,
     random_seed: int,
     ipopt_max_iterations: int,
+    ipopt_print_level: int,
     condition_number_threshold: float,
 ) -> None:
     raw = yaml.safe_load(source.read_text(encoding="utf-8")) or {}
@@ -206,6 +238,7 @@ def _write_attempt_safe_config(
         "stack_reps": stack_reps,
         "random_seed": random_seed,
         "ipopt_max_iterations": ipopt_max_iterations,
+        "ipopt_print_level": ipopt_print_level,
         "condition_number_threshold": condition_number_threshold,
     }
     destination.write_text(
@@ -245,6 +278,188 @@ def _best_attempt(attempts: list[dict[str, Any]]) -> dict[str, Any] | None:
         "parameters": best.get("parameters"),
         "output_dir": best.get("output_dir"),
     }
+
+
+def _flatten_attempt(attempt: dict[str, Any]) -> dict[str, Any]:
+    diagnostics = _attempt_optimizer_diagnostics(attempt) or {}
+    gate = attempt.get("oed_quality_gate")
+    failure = attempt.get("failure_classification")
+    flattened = {
+        "attempt_id": attempt.get("attempt_id"),
+        "status": attempt.get("status"),
+        "safety_allowed": attempt.get("safety_allowed"),
+        "safety_reason": attempt.get("safety_reason"),
+        "oed_gate_status": (
+            gate.get("status") if isinstance(gate, dict) else None
+        ),
+        "oed_gate_reasons": (
+            gate.get("reasons") if isinstance(gate, dict) else None
+        ),
+        "failure_kind": (
+            failure.get("kind") if isinstance(failure, dict) else None
+        ),
+        "condition_number": attempt.get("condition_number"),
+        "rank": attempt.get("rank"),
+        "parameters": attempt.get("parameters"),
+        "optimizer_iterations": diagnostics.get("iterations"),
+        "optimizer_objective_unscaled": diagnostics.get("objective_unscaled"),
+        "optimizer_constraint_violation_unscaled": diagnostics.get(
+            "constraint_violation_unscaled"
+        ),
+        "optimizer_dual_infeasibility_unscaled": diagnostics.get(
+            "dual_infeasibility_unscaled"
+        ),
+        "output_dir": attempt.get("output_dir"),
+    }
+    last_iter = _last_iteration_diagnostics(diagnostics)
+    if last_iter is not None:
+        flattened.update(last_iter)
+    return flattened
+
+
+def _last_iteration_diagnostics(
+    diagnostics: dict[str, Any],
+) -> dict[str, float | int] | None:
+    tail = diagnostics.get("iteration_log_tail")
+    if not isinstance(tail, list):
+        return None
+    for raw_line in reversed(tail):
+        if not isinstance(raw_line, str):
+            continue
+        parsed = _parse_ipopt_iteration_line(raw_line)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _parse_ipopt_iteration_line(line: str) -> dict[str, float | int] | None:
+    parts = line.split()
+    if len(parts) < 4:
+        return None
+    iteration_token = parts[0].rstrip("rR")
+    if not iteration_token.isdigit():
+        return None
+    try:
+        return {
+            "optimizer_last_iter": int(iteration_token),
+            "optimizer_last_iter_objective": float(parts[1]),
+            "optimizer_last_iter_inf_pr": float(parts[2]),
+            "optimizer_last_iter_inf_du": float(parts[3]),
+        }
+    except ValueError:
+        return None
+
+
+def _write_representative_ipopt_stdout(
+    output_dir: Path,
+    *,
+    attempts: list[dict[str, Any]],
+    diagnostic_attempt: dict[str, Any] | None,
+) -> Path | None:
+    if not isinstance(diagnostic_attempt, dict):
+        return None
+    attempt_id = diagnostic_attempt.get("attempt_id")
+    if not isinstance(attempt_id, str):
+        return None
+    attempt = next(
+        (
+            candidate
+            for candidate in attempts
+            if candidate.get("attempt_id") == attempt_id
+        ),
+        None,
+    )
+    if not isinstance(attempt, dict):
+        return None
+    stdout = _attempt_optimizer_stdout(attempt)
+    if not stdout:
+        return None
+    path = output_dir / "representative_ipopt_stdout.txt"
+    path.write_text(stdout, encoding="utf-8")
+    return path
+
+
+def _attempt_optimizer_stdout(attempt: dict[str, Any]) -> str | None:
+    error = attempt.get("error")
+    if isinstance(error, dict):
+        detail = error.get("detail")
+        if isinstance(detail, dict) and isinstance(detail.get("stdout"), str):
+            return detail["stdout"]
+    trajectory_command = attempt.get("trajectory_command")
+    if isinstance(trajectory_command, dict) and isinstance(
+        trajectory_command.get("stdout"),
+        str,
+    ):
+        return trajectory_command["stdout"]
+    return None
+
+
+def _scan_report_markdown(result: dict[str, Any]) -> str:
+    lines = [
+        "# X5 SysID OED Scan Report",
+        "",
+        f"- Profile: `{result['profile']}`",
+        f"- Attempts: `{result['attempt_count']}`",
+        f"- URDF: `{result['urdf_path']}`",
+        f"- Safe config: `{result['base_safe_config']}`",
+        "",
+    ]
+    best = result.get("best_attempt")
+    if isinstance(best, dict):
+        lines.extend(
+            [
+                "## Best Attempt",
+                "",
+                f"- Attempt: `{best.get('attempt_id')}`",
+                f"- Safety allowed: `{best.get('safety_allowed')}`",
+                f"- Condition number: `{best.get('condition_number')}`",
+                f"- Rank: `{best.get('rank')}`",
+                "",
+            ]
+        )
+    diagnostic = result.get("best_diagnostic_attempt")
+    if isinstance(diagnostic, dict):
+        failure = diagnostic.get("failure_classification")
+        failure_kind = (
+            failure.get("kind") if isinstance(failure, dict) else None
+        )
+        lines.extend(
+            [
+                "## Best Diagnostic Attempt",
+                "",
+                f"- Attempt: `{diagnostic.get('attempt_id')}`",
+                f"- Failure kind: `{failure_kind}`",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "## Attempts",
+            "",
+            "| attempt | status | safety | OED gate | condition | rank | failure |",
+            "| --- | --- | --- | --- | ---: | ---: | --- |",
+        ]
+    )
+    for attempt in result.get("attempts", []):
+        if not isinstance(attempt, dict):
+            continue
+        gate = attempt.get("oed_quality_gate")
+        gate_status = gate.get("status") if isinstance(gate, dict) else ""
+        failure = attempt.get("failure_classification")
+        failure_kind = failure.get("kind") if isinstance(failure, dict) else ""
+        lines.append(
+            "| {attempt_id} | {status} | {safety} | {gate_status} | {condition} | {rank} | {failure} |".format(
+                attempt_id=attempt.get("attempt_id", ""),
+                status=attempt.get("status", ""),
+                safety=attempt.get("safety_allowed", ""),
+                gate_status=gate_status,
+                condition=attempt.get("condition_number", ""),
+                rank=attempt.get("rank", ""),
+                failure=failure_kind,
+            )
+        )
+    lines.append("")
+    return "\n".join(lines)
 
 
 def _best_diagnostic_attempt(attempts: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -318,6 +533,11 @@ def _attempt_optimizer_diagnostics(attempt: dict[str, Any]) -> dict[str, Any] | 
 
 
 def _classify_optimizer_failure(command_result: dict[str, Any]) -> dict[str, str]:
+    if command_result.get("exit_code") == "timeout":
+        return {
+            "kind": "optimizer_timeout",
+            "next_action": "reduce per-attempt problem size or run this scan on a faster workstation with an explicit timeout",
+        }
     convergence = command_result.get("optimizer_convergence")
     diagnostics = command_result.get("optimizer_diagnostics")
     if not isinstance(convergence, dict):

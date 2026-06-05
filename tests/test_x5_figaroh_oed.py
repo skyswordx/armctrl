@@ -63,6 +63,10 @@ def _write_request(path: Path) -> None:
                     ],
                 },
                 "figaroh": {
+                    "optimizer": {
+                        "ipopt_max_iterations": 200,
+                        "ipopt_print_level": 5,
+                    },
                     "timing": {
                         "n_wps": 5,
                         "stack_reps": 1,
@@ -82,6 +86,10 @@ def test_run_oed_writes_candidate_csv_from_injected_optimizer(tmp_path: Path) ->
     _write_request(request_path)
 
     class FakeOptimizer:
+        idx_b = list(range(36))
+        last_base_regressor_condition_number = 42.0
+        last_base_regressor_shape = (12, 36)
+
         def solve(self, stack_reps: int = 2):
             assert stack_reps == 1
             return {
@@ -113,6 +121,13 @@ def test_run_oed_writes_candidate_csv_from_injected_optimizer(tmp_path: Path) ->
     assert rows[1]["q_cmd_1"] == "0.010000"
     assert rows[1]["q_cmd_3"] == "0.320000"
     assert result["stack_reps"] == 1
+    assert result["base_regressor_score"] == {
+        "status": "computed",
+        "condition_number": 42.0,
+        "row_count": 12,
+        "column_count": 36,
+        "base_parameter_count": 36,
+    }
 
 
 def test_main_rejects_missing_oed_environment(monkeypatch, capsys) -> None:
@@ -177,7 +192,10 @@ def test_figaroh_config_uses_armctrl_oed_knobs(tmp_path: Path) -> None:
             "segment_duration_s": 1.5,
         }
     )
-    request["figaroh"]["optimizer"] = {"ipopt_max_iterations": 900}
+    request["figaroh"]["optimizer"] = {
+        "ipopt_max_iterations": 900,
+        "ipopt_print_level": 7,
+    }
 
     config_path = _write_figaroh_config(request, candidate_path=candidate_path)
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
@@ -187,6 +205,7 @@ def test_figaroh_config_uses_armctrl_oed_knobs(tmp_path: Path) -> None:
     assert trajectory_params["freq"] == 100.0
     assert trajectory_params["t_s"] == 0.25
     assert trajectory_params["ipopt_max_iterations"] == 900
+    assert trajectory_params["ipopt_print_level"] == 7
     assert _request_ipopt_max_iterations(request) == 900
 
 
@@ -250,6 +269,7 @@ def test_x5_ipopt_problem_applies_request_max_iterations(monkeypatch) -> None:
     class FakeSolver:
         def __init__(self, _problem, config) -> None:
             captured["max_iterations"] = config.max_iterations
+            captured["print_level"] = config.print_level
 
         def solve(self):
             return False, {"status": "forced_stop"}
@@ -258,6 +278,7 @@ def test_x5_ipopt_problem_applies_request_max_iterations(monkeypatch) -> None:
     monkeypatch.setattr("armctrl.x5_figaroh_oed.RobotIPOPTSolver", FakeSolver)
     problem = object.__new__(X5TrajectoryIPOPTProblem)
     problem.ipopt_max_iterations = 900
+    problem.ipopt_print_level = 7
     problem.logger = type(
         "Logger",
         (),
@@ -269,6 +290,7 @@ def test_x5_ipopt_problem_applies_request_max_iterations(monkeypatch) -> None:
     assert success is False
     assert result["status"] == "forced_stop"
     assert captured["max_iterations"] == 900
+    assert captured["print_level"] == 7
 
 
 def test_joint_relation_constraint_manager_appends_relation_bounds() -> None:

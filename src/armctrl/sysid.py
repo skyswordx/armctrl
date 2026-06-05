@@ -15,6 +15,7 @@ from armctrl.simulation import TrajectoryPreviewer
 from armctrl.sysid_trajectory_backend import (
     evaluate_sysid_joint_relation_samples,
     plan_sysid_trajectory,
+    read_sysid_profile_safety,
 )
 from armctrl.workspace import WorkspaceSafetyConfig, evaluate_workspace_fk_clearance
 
@@ -82,6 +83,7 @@ class SysIdPlanRequest:
     render_path: Path | None = None
     candidate_trajectory_path: Path | None = None
     trajectory_command_argv: tuple[str, ...] | None = None
+    trajectory_command_timeout_s: float | None = None
 
 
 class SysIdPlanner:
@@ -166,6 +168,7 @@ class SysIdPlanner:
         relation_decision = evaluate_sysid_joint_relation_samples(
             Path(request.safe_config_path),
             samples=q_samples,
+            profile_name=request.profile_name,
         )
         workspace_decision = evaluate_workspace_fk_clearance(
             Path(request.urdf_path),
@@ -372,6 +375,11 @@ def _evaluate_sysid_parameters(
     config: WorkspaceSafetyConfig,
 ) -> LimitDecision:
     violations: list[dict[str, object]] = []
+    profile_safety = read_sysid_profile_safety(
+        Path(request.safe_config_path),
+        profile_name=request.profile_name,
+    )
+    max_sysid_amplitude_rad = float(profile_safety["max_sysid_amplitude_rad"])
     if request.duration_s > config.max_sysid_duration_s:
         violations.append(
             {
@@ -388,12 +396,13 @@ def _evaluate_sysid_parameters(
                 "maximum": config.max_sysid_sample_hz,
             }
         )
-    if request.amplitude_rad > config.max_sysid_amplitude_rad:
+    if request.amplitude_rad > max_sysid_amplitude_rad:
         violations.append(
             {
                 "check": "max_sysid_amplitude_rad",
                 "value": request.amplitude_rad,
-                "maximum": config.max_sysid_amplitude_rad,
+                "maximum": max_sysid_amplitude_rad,
+                "profile": request.profile_name,
             }
         )
     return LimitDecision(
