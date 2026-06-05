@@ -9,7 +9,10 @@ import pytest
 import yaml
 
 from armctrl.sysid import SysIdPlanRequest, trajectory_rows
-from armctrl.sysid_trajectory_backend import plan_sysid_trajectory
+from armctrl.sysid_trajectory_backend import (
+    plan_sysid_trajectory,
+    read_sysid_profile_safety,
+)
 
 
 def _request(profile: str, tmp_path: Path) -> SysIdPlanRequest:
@@ -224,22 +227,22 @@ def test_figaroh_handoff_embeds_numeric_safety_limits(tmp_path: Path) -> None:
     )
 
     constraints = figaroh_config["constraints"]
-    assert constraints["max_joint_step_rad"] == 0.01
+    assert constraints["max_joint_step_rad"] == 0.02
     assert constraints["derived_velocity_limit_rad_s"] is None
     assert constraints["oed_velocity_limit_source"] == "profile_oed_velocity_limits_rad_s"
     assert constraints["joint_limits_rad"][0] == [-0.05, 0.05]
     assert constraints["joint_limits_rad"][1] == [0.25, 0.35]
     assert constraints["velocity_limits_rad_s"][0] == [-2.0, 2.0]
-    assert constraints["velocity_limits_rad_s"][1] == [-1.2, 1.2]
-    assert constraints["velocity_limits_rad_s"][2] == [-1.2, 1.2]
+    assert constraints["velocity_limits_rad_s"][1] == [-1.4, 1.4]
+    assert constraints["velocity_limits_rad_s"][2] == [-1.4, 1.4]
     assert constraints["velocity_limits_rad_s"][5] == [-2.0, 2.0]
     assert constraints["acceleration_limits_rad_s2"] == [
-        [-4.0, 4.0],
-        [-2.5, 2.5],
-        [-2.5, 2.5],
-        [-4.0, 4.0],
-        [-4.0, 4.0],
-        [-4.0, 4.0],
+        [-30.0, 30.0],
+        [-30.0, 30.0],
+        [-30.0, 30.0],
+        [-30.0, 30.0],
+        [-30.0, 30.0],
+        [-30.0, 30.0],
     ]
     assert constraints["effort_limits_nm"][2] == [-30.0, 30.0]
     timing = figaroh_config["figaroh"]["timing"]
@@ -253,6 +256,35 @@ def test_figaroh_handoff_embeds_numeric_safety_limits(tmp_path: Path) -> None:
     assert timing["segment_duration_s"] >= 0.5
     assert timing["effective_duration_s"] >= timing["requested_duration_s"]
     assert figaroh_config["figaroh"]["optimizer"]["random_seed"] == 1
+
+
+def test_profile_safety_records_sysid_step_limit_overrides() -> None:
+    config_path = Path("configs/x5.safe.yaml")
+
+    fourier = read_sysid_profile_safety(
+        config_path,
+        profile_name="fourier_multisine",
+    )
+    gravity = read_sysid_profile_safety(
+        config_path,
+        profile_name="gravity_sweep",
+    )
+    friction = read_sysid_profile_safety(
+        config_path,
+        profile_name="friction_sweep",
+    )
+
+    assert fourier["max_joint_step_rad"] == 0.02
+    assert fourier["oed_acceleration_limits_rad_s2"] == [
+        30.0,
+        30.0,
+        30.0,
+        30.0,
+        30.0,
+        30.0,
+    ]
+    assert gravity["max_joint_step_rad"] == 0.015
+    assert friction["max_joint_step_rad"] == 0.018
 
 
 def test_figaroh_handoff_records_effective_execution_sample_count(
@@ -528,6 +560,61 @@ def test_sysid_plan_writes_execution_trajectory_at_configured_frequency(
     assert manifest["safety"]["checks"]["trajectory_step_check"][
         "trajectory"
     ] == "execution_trajectory"
+
+
+def test_external_candidate_resampling_uses_smooth_execution_interpolation(
+    tmp_path: Path,
+) -> None:
+    output_dir = tmp_path / "plan"
+    candidate_path = tmp_path / "coarse_candidate.csv"
+    candidate_path.write_text(
+        "time_s,q_cmd_1,q_cmd_2,q_cmd_3,q_cmd_4,q_cmd_5,q_cmd_6\n"
+        "0.000000,0.000000,0.300000,0.300000,0.000000,0.000000,0.000000\n"
+        "0.250000,0.120000,0.300000,0.300000,0.000000,0.000000,0.000000\n"
+        "0.500000,-0.120000,0.300000,0.300000,0.000000,0.000000,0.000000\n"
+        "0.750000,0.080000,0.300000,0.300000,0.000000,0.000000,0.000000\n"
+        "1.000000,0.000000,0.300000,0.300000,0.000000,0.000000,0.000000\n",
+        encoding="utf-8",
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "sysid",
+            "plan",
+            "fourier_multisine",
+            "--dof",
+            "6",
+            "--sample-hz",
+            "20",
+            "--duration",
+            "1",
+            "--amplitude",
+            "0.2",
+            "--q-center",
+            "0",
+            "0.3",
+            "0.3",
+            "0",
+            "0",
+            "0",
+            "--candidate-trajectory",
+            str(candidate_path),
+            "--output",
+            str(output_dir),
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    execution = manifest["trajectory_backend"]["execution_trajectory"]
+    assert execution["interpolation_method"] == "scipy_cubic_spline"
+    assert execution["max_acceleration_rad_s2"] < 20.0
 
 
 def test_cli_sysid_plan_runs_external_oed_command_then_imports_candidate(

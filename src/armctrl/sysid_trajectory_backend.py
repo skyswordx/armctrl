@@ -16,6 +16,7 @@ import xml.etree.ElementTree as ET
 
 import numpy as np
 import yaml
+from scipy.interpolate import CubicSpline
 
 from armctrl.workspace import WorkspaceSafetyConfig
 
@@ -31,6 +32,12 @@ class SysIdTrajectoryPlan:
 class CandidateTrajectory:
     rows: list[dict[str, str]]
     raw_sample_count: int
+
+
+@dataclass(frozen=True)
+class ResampledTrajectory:
+    rows: list[dict[str, str]]
+    interpolation_method: str
 
 
 class TrajectoryCommandError(ValueError):
@@ -102,22 +109,23 @@ def plan_sysid_trajectory(
         figaroh_config=figaroh_config,
     )
     execution_sample_hz = float(figaroh_config["figaroh"]["timing"]["execution_sample_hz"])
-    execution_rows = _resample_candidate_rows(
+    execution = _resample_candidate_rows(
         rows,
         dof=int(request.dof),
         sample_hz=execution_sample_hz,
     )
     backend["execution_trajectory"] = _execution_trajectory_metadata(
         planning_rows=rows,
-        execution_rows=execution_rows,
+        execution_rows=execution.rows,
         planning_sample_hz=float(request.sample_hz),
         execution_sample_hz=execution_sample_hz,
         dof=int(request.dof),
+        interpolation_method=execution.interpolation_method,
     )
     return SysIdTrajectoryPlan(
         rows=rows,
         backend=backend,
-        execution_rows=execution_rows,
+        execution_rows=execution.rows,
     )
 
 
@@ -682,7 +690,7 @@ def _figaroh_numeric_constraints(request: object) -> dict[str, Any]:
         abs(float(request.amplitude_rad)),
         float(profile_safety["max_sysid_amplitude_rad"]),
     )
-    max_joint_step_rad = float(safe_config.max_joint_step_rad)
+    max_joint_step_rad = float(profile_safety["max_joint_step_rad"])
     joint_limits = []
     velocity_limits = []
     acceleration_limits = []
@@ -752,6 +760,12 @@ def read_sysid_profile_safety(path: Path, *, profile_name: str) -> dict[str, Any
             override.get(
                 "max_sysid_amplitude_rad",
                 safety.get("max_sysid_amplitude_rad", 0.25),
+            )
+        ),
+        "max_joint_step_rad": float(
+            override.get(
+                "max_joint_step_rad",
+                safety.get("max_joint_step_rad", 0.01),
             )
         ),
     }
@@ -1015,8 +1029,9 @@ def _candidate_rows(path: Path, *, dof: int, sample_hz: float) -> CandidateTraje
         ]
     if not rows:
         raise ValueError(f"candidate trajectory has no rows: {path}")
+    resampled = _resample_candidate_rows(rows, dof=dof, sample_hz=sample_hz)
     return CandidateTrajectory(
-        rows=_resample_candidate_rows(rows, dof=dof, sample_hz=sample_hz),
+        rows=resampled.rows,
         raw_sample_count=len(rows),
     )
 
@@ -1028,6 +1043,7 @@ def _execution_trajectory_metadata(
     planning_sample_hz: float,
     execution_sample_hz: float,
     dof: int,
+    interpolation_method: str,
 ) -> dict[str, Any]:
     q_matrix = _q_matrix_from_rows(execution_rows, dof=dof)
     dt = 1.0 / execution_sample_hz
@@ -1037,7 +1053,7 @@ def _execution_trajectory_metadata(
     if len(q_matrix) > 1:
         max_step = float(np.max(np.abs(np.diff(q_matrix, axis=0))))
     return {
-        "interpolation_method": "linear_interpolation",
+        "interpolation_method": interpolation_method,
         "planning_sample_hz": float(planning_sample_hz),
         "execution_sample_hz": float(execution_sample_hz),
         "planning_sample_count": len(planning_rows),
@@ -1053,9 +1069,12 @@ def _resample_candidate_rows(
     *,
     dof: int,
     sample_hz: float,
-) -> list[dict[str, str]]:
+) -> ResampledTrajectory:
     if len(rows) <= 1:
-        return [_row_with_normalized_time(rows[0], dof=dof, time_s=0.0)]
+        return ResampledTrajectory(
+            rows=[_row_with_normalized_time(rows[0], dof=dof, time_s=0.0)],
+            interpolation_method="single_sample",
+        )
     if sample_hz <= 0.0:
         raise ValueError("sample_hz must be positive")
     raw_times = np.asarray([float(row["time_s"]) for row in rows], dtype=float)
@@ -1076,18 +1095,37 @@ def _resample_candidate_rows(
         ],
         dtype=float,
     )
+    interpolation_method = (
+        "scipy_cubic_spline" if len(rows) >= 4 else "linear_interpolation"
+    )
+    interpolator = (
+        CubicSpline(normalized_times, q_matrix, axis=0, bc_type="natural")
+        if interpolation_method == "scipy_cubic_spline"
+        else None
+    )
     resampled: list[dict[str, str]] = []
     for time_s in target_times:
         row = {"time_s": f"{float(time_s):.6f}"}
-        for joint_index in range(dof):
-            value = np.interp(
-                float(time_s),
-                normalized_times,
-                q_matrix[:, joint_index],
+        values = (
+            np.asarray(interpolator(float(time_s)), dtype=float)
+            if interpolator is not None
+            else np.asarray(
+                [
+                    np.interp(
+                        float(time_s),
+                        normalized_times,
+                        q_matrix[:, joint_index],
+                    )
+                    for joint_index in range(dof)
+                ],
+                dtype=float,
             )
+        )
+        for joint_index in range(dof):
+            value = values[joint_index]
             row[f"q_cmd_{joint_index + 1}"] = f"{float(value):.6f}"
         resampled.append(row)
-    return resampled
+    return ResampledTrajectory(rows=resampled, interpolation_method=interpolation_method)
 
 
 def _validate_duration_on_execution_grid(duration_s: float, *, sample_hz: float) -> None:

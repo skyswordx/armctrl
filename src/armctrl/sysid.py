@@ -153,6 +153,10 @@ class SysIdPlanner:
         preview_html_path = request.output_dir / "preview.html"
         render_path = request.render_path
         safe_config = WorkspaceSafetyConfig.from_yaml(Path(request.safe_config_path))
+        profile_safety = read_sysid_profile_safety(
+            Path(request.safe_config_path),
+            profile_name=request.profile_name,
+        )
         parameter_decision = _evaluate_sysid_parameters(request, safe_config)
         trajectory_plan = plan_sysid_trajectory(request)
         rows = trajectory_plan.rows
@@ -165,7 +169,24 @@ class SysIdPlanner:
         step_decision = _evaluate_trajectory_steps(
             execution_rows,
             dof=request.dof,
-            max_joint_step_rad=safe_config.max_joint_step_rad,
+            max_joint_step_rad=float(profile_safety["max_joint_step_rad"]),
+        )
+        velocity_decision = _evaluate_trajectory_derivative_limits(
+            execution_rows,
+            dof=request.dof,
+            limits=[float(value) for value in profile_safety["oed_velocity_limits_rad_s"]],
+            derivative_order=1,
+            check_name="oed_velocity_limits_rad_s",
+        )
+        acceleration_decision = _evaluate_trajectory_derivative_limits(
+            execution_rows,
+            dof=request.dof,
+            limits=[
+                float(value)
+                for value in profile_safety["oed_acceleration_limits_rad_s2"]
+            ],
+            derivative_order=2,
+            check_name="oed_acceleration_limits_rad_s2",
         )
         relation_decision = evaluate_sysid_joint_relation_samples(
             Path(request.safe_config_path),
@@ -181,6 +202,8 @@ class SysIdPlanner:
             plan.safety.allowed
             and parameter_decision.status == "pass"
             and step_decision.status == "pass"
+            and velocity_decision.status == "pass"
+            and acceleration_decision.status == "pass"
             and relation_decision["status"] == "pass"
             and limit_decision.status == "pass"
             and workspace_decision.status == "pass"
@@ -226,6 +249,8 @@ class SysIdPlanner:
             plan_reason=plan.safety.reason,
             parameter_status=parameter_decision.status,
             step_status=step_decision.status,
+            velocity_status=velocity_decision.status,
+            acceleration_status=acceleration_decision.status,
             relation_status=str(relation_decision["status"]),
             limit_status=limit_decision.status,
             workspace_status=workspace_decision.status,
@@ -268,6 +293,16 @@ class SysIdPlanner:
                         "status": step_decision.status,
                         "trajectory": "execution_trajectory",
                         "violations": step_decision.violations,
+                    },
+                    "trajectory_velocity_check": {
+                        "status": velocity_decision.status,
+                        "trajectory": "execution_trajectory",
+                        "violations": velocity_decision.violations,
+                    },
+                    "trajectory_acceleration_check": {
+                        "status": acceleration_decision.status,
+                        "trajectory": "execution_trajectory",
+                        "violations": acceleration_decision.violations,
                     },
                     "joint_relation_check": relation_decision,
                     "workspace_clearance_check": {
@@ -315,6 +350,16 @@ class SysIdPlanner:
                     "trajectory": "execution_trajectory",
                     "violation_count": len(step_decision.violations),
                 },
+                "trajectory_velocity_check": {
+                    "status": velocity_decision.status,
+                    "trajectory": "execution_trajectory",
+                    "violation_count": len(velocity_decision.violations),
+                },
+                "trajectory_acceleration_check": {
+                    "status": acceleration_decision.status,
+                    "trajectory": "execution_trajectory",
+                    "violation_count": len(acceleration_decision.violations),
+                },
                 "joint_relation_check": {
                     "status": relation_decision["status"],
                     "violation_count": len(relation_decision["violations"]),
@@ -357,6 +402,8 @@ def _safety_reason(
     plan_reason: str,
     parameter_status: str,
     step_status: str,
+    velocity_status: str,
+    acceleration_status: str,
     relation_status: str,
     limit_status: str,
     workspace_status: str,
@@ -368,6 +415,10 @@ def _safety_reason(
         return "planned sysid parameters exceed safety config"
     if step_status == "fail":
         return "planned trajectory exceeds max joint step"
+    if velocity_status == "fail":
+        return "planned trajectory exceeds velocity limit"
+    if acceleration_status == "fail":
+        return "planned trajectory exceeds acceleration limit"
     if relation_status == "fail":
         return "planned trajectory violates joint relation constraints"
     if limit_status == "fail":
@@ -440,6 +491,84 @@ def _evaluate_trajectory_steps(
                         "joint": joint_index + 1,
                         "value": step_rad,
                         "maximum": max_joint_step_rad,
+                    }
+                )
+    return LimitDecision(
+        status="fail" if violations else "pass",
+        violations=violations,
+    )
+
+
+def _evaluate_trajectory_derivative_limits(
+    rows: list[dict[str, str]],
+    *,
+    dof: int,
+    limits: list[float],
+    derivative_order: int,
+    check_name: str,
+) -> LimitDecision:
+    if len(limits) != dof:
+        raise ValueError(f"{check_name} must contain {dof} values")
+    if derivative_order not in {1, 2}:
+        raise ValueError("derivative_order must be 1 or 2")
+    values = _q_samples_from_rows(rows, dof=dof)
+    if len(values) <= derivative_order:
+        return LimitDecision(status="pass", violations=[])
+
+    violations: list[dict[str, object]] = []
+    for row_index in range(derivative_order, len(rows)):
+        current_time = float(rows[row_index]["time_s"])
+        previous_time = float(rows[row_index - 1]["time_s"])
+        dt = current_time - previous_time
+        if dt <= 0.0:
+            violations.append(
+                {
+                    "check": "time_step_positive",
+                    "sample_index": row_index,
+                    "value": dt,
+                    "minimum": 0.0,
+                }
+            )
+            continue
+        if derivative_order == 1:
+            derivatives = [
+                (values[row_index][joint_index] - values[row_index - 1][joint_index])
+                / dt
+                for joint_index in range(dof)
+            ]
+        else:
+            previous_dt = previous_time - float(rows[row_index - 2]["time_s"])
+            if previous_dt <= 0.0:
+                violations.append(
+                    {
+                        "check": "time_step_positive",
+                        "sample_index": row_index - 1,
+                        "value": previous_dt,
+                        "minimum": 0.0,
+                    }
+                )
+                continue
+            derivatives = []
+            for joint_index in range(dof):
+                previous_velocity = (
+                    values[row_index - 1][joint_index]
+                    - values[row_index - 2][joint_index]
+                ) / previous_dt
+                current_velocity = (
+                    values[row_index][joint_index]
+                    - values[row_index - 1][joint_index]
+                ) / dt
+                derivatives.append((current_velocity - previous_velocity) / dt)
+        for joint_index, value in enumerate(derivatives):
+            maximum = abs(limits[joint_index])
+            if abs(value) > maximum:
+                violations.append(
+                    {
+                        "check": check_name,
+                        "sample_index": row_index,
+                        "joint": joint_index + 1,
+                        "value": value,
+                        "maximum": maximum,
                     }
                 )
     return LimitDecision(
