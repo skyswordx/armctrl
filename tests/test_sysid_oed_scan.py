@@ -96,3 +96,65 @@ def test_oed_scan_records_trajectory_command_fault_and_continues(
     assert result["attempts"][0]["error"]["detail"]["optimizer_convergence"][
         "reason"
     ] == "restoration_failed"
+
+
+def test_oed_scan_surfaces_trajectory_command_diagnostics(
+    tmp_path: Path,
+) -> None:
+    class FakePlan:
+        def to_json(self):
+            return {
+                "safety": {"allowed": True, "reason": "plan-only sysid preview"},
+                "artifacts": {"manifest": "attempt/manifest.json"},
+                "trajectory_backend": {
+                    "oed_valid": False,
+                    "hardware_execution_eligible": False,
+                    "condition_number": 1234.0,
+                    "rank": 36,
+                    "timing_contract": {"execution_sample_hz": 20.0},
+                    "sampling_contract": {"sample_count": 10},
+                    "oed_quality_gate": {
+                        "status": "fail",
+                        "reasons": ["optimizer_not_converged"],
+                    },
+                    "candidate_source": {
+                        "generated_by": {
+                            "optimizer_convergence": {
+                                "status": "fail",
+                                "reason": "max_iterations_exceeded",
+                            },
+                            "optimizer_diagnostics": {
+                                "iterations": 200,
+                                "dual_infeasibility_unscaled": 3500000.0,
+                            },
+                        }
+                    },
+                },
+            }
+
+    class FakePlanner:
+        def write_plan(self, _request):
+            return FakePlan()
+
+    request = OedScanRequest(
+        profile_name="fourier_multisine",
+        dof=6,
+        sample_hz=20.0,
+        q_center=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
+        urdf_path="configs/models/X5_camera.urdf",
+        safe_config_path="configs/x5.safe.yaml",
+        output_dir=tmp_path,
+        durations_s=(1.0,),
+        amplitudes_rad=(0.02,),
+        n_wps_values=(5,),
+        stack_reps_values=(1,),
+        ipopt_max_iterations=300,
+        condition_number_threshold=500.0,
+        trajectory_command_argv=("python", "scripts/x5_figaroh_oed.py"),
+    )
+
+    result = OedScanRunner(planner=FakePlanner()).run(request)
+
+    assert result["attempts"][0]["trajectory_command"]["optimizer_diagnostics"][
+        "dual_infeasibility_unscaled"
+    ] == 3500000.0

@@ -586,6 +586,9 @@ def test_cli_sysid_plan_extracts_figaroh_json_after_ipopt_log(
         "    encoding='utf-8',\n"
         ")\n"
         "print('Number of Iterations....: 200')\n"
+        "print('Objective...............:   1.230000e-01    1.750000e+05')\n"
+        "print('Dual infeasibility......:   2.400000e+00    3.500000e+06')\n"
+        "print('Constraint violation....:   0.000000e+00    0.000000e+00')\n"
         "print('EXIT: Maximum Number of Iterations Exceeded.')\n"
         "print(json.dumps({'status': 'ok', 'backend': 'figaroh'}))\n",
         encoding="utf-8",
@@ -619,6 +622,15 @@ def test_cli_sysid_plan_extracts_figaroh_json_after_ipopt_log(
     assert generated_by["stdout_json"]["status"] == "ok"
     assert generated_by["optimizer_convergence"]["status"] == "fail"
     assert generated_by["optimizer_convergence"]["reason"] == "max_iterations_exceeded"
+    assert generated_by["optimizer_diagnostics"] == {
+        "iterations": 200,
+        "objective_scaled": 0.123,
+        "objective_unscaled": 175000.0,
+        "dual_infeasibility_scaled": 2.4,
+        "dual_infeasibility_unscaled": 3500000.0,
+        "constraint_violation_scaled": 0.0,
+        "constraint_violation_unscaled": 0.0,
+    }
     assert backend["oed_quality_gate"]["status"] == "fail"
     assert "optimizer_not_converged" in backend["oed_quality_gate"]["reasons"]
     assert backend["hardware_execution_eligible"] is False

@@ -150,7 +150,7 @@ class OedScanRunner:
         payload = plan.to_json()
         backend = payload.get("trajectory_backend", {}) or {}
         safety = payload.get("safety", {}) or {}
-        return {
+        attempt = {
             "attempt_id": attempt_id,
             "status": "ok",
             "parameters": parameters,
@@ -169,6 +169,13 @@ class OedScanRunner:
             "sampling_contract": backend.get("sampling_contract"),
             "artifacts": payload.get("artifacts", {}),
         }
+        candidate_source = backend.get("candidate_source")
+        if isinstance(candidate_source, dict) and isinstance(
+            candidate_source.get("generated_by"),
+            dict,
+        ):
+            attempt["trajectory_command"] = candidate_source["generated_by"]
+        return attempt
 
 
 def _write_attempt_safe_config(

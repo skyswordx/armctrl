@@ -8,6 +8,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 from typing import Any
@@ -293,6 +294,9 @@ def _trajectory_command_result(
         if stdout_json is not None:
             result["stdout_json"] = stdout_json
         result["optimizer_convergence"] = _optimizer_convergence_from_stdout(stdout)
+        diagnostics = _optimizer_diagnostics_from_stdout(stdout)
+        if diagnostics:
+            result["optimizer_diagnostics"] = diagnostics
     if stderr:
         result["stderr"] = stderr
     return result
@@ -328,6 +332,72 @@ def _optimizer_convergence_from_stdout(stdout: str) -> dict[str, str]:
         )
         return {"status": "fail", "reason": _slugify_optimizer_exit(exit_line)}
     return {"status": "not_evaluated", "reason": "optimizer_exit_not_reported"}
+
+
+def _optimizer_diagnostics_from_stdout(stdout: str) -> dict[str, Any]:
+    diagnostics: dict[str, Any] = {}
+    iterations = _last_int_after_label(stdout, "Number of Iterations")
+    if iterations is not None:
+        diagnostics["iterations"] = iterations
+    _add_scaled_unscaled(
+        diagnostics,
+        stdout,
+        label="Objective",
+        scaled_key="objective_scaled",
+        unscaled_key="objective_unscaled",
+    )
+    _add_scaled_unscaled(
+        diagnostics,
+        stdout,
+        label="Dual infeasibility",
+        scaled_key="dual_infeasibility_scaled",
+        unscaled_key="dual_infeasibility_unscaled",
+    )
+    _add_scaled_unscaled(
+        diagnostics,
+        stdout,
+        label="Constraint violation",
+        scaled_key="constraint_violation_scaled",
+        unscaled_key="constraint_violation_unscaled",
+    )
+    return diagnostics
+
+
+def _last_int_after_label(text: str, label: str) -> int | None:
+    pattern = re.compile(rf"{re.escape(label)}[^:]*:\s*(\d+)")
+    matches = pattern.findall(text)
+    if not matches:
+        return None
+    return int(matches[-1])
+
+
+def _add_scaled_unscaled(
+    diagnostics: dict[str, Any],
+    text: str,
+    *,
+    label: str,
+    scaled_key: str,
+    unscaled_key: str,
+) -> None:
+    values = _last_float_pair_after_label(text, label)
+    if values is None:
+        return
+    diagnostics[scaled_key] = values[0]
+    diagnostics[unscaled_key] = values[1]
+
+
+def _last_float_pair_after_label(text: str, label: str) -> tuple[float, float] | None:
+    pattern = re.compile(
+        rf"{re.escape(label)}[^:]*:\s*({_FLOAT_PATTERN})\s+({_FLOAT_PATTERN})"
+    )
+    matches = pattern.findall(text)
+    if not matches:
+        return None
+    scaled, unscaled = matches[-1]
+    return float(scaled), float(unscaled)
+
+
+_FLOAT_PATTERN = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
 
 
 def _slugify_optimizer_exit(exit_line: str) -> str:
