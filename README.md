@@ -44,6 +44,12 @@ surface for non-hardware CLI planning and import checks:
 uv sync --extra dev --extra lerobot
 ```
 
+Install optional mature simulation preview dependencies on Linux targets:
+
+```bash
+uv sync --extra dev --extra sim
+```
+
 Check the current clean rebuild release status:
 
 ```bash
@@ -78,6 +84,20 @@ The doctor reports importability for:
 - `mujoco`: contact and dynamics preview;
 - `moveit`: ROS planning-scene state validity and collision oracle;
 - `figaroh`: SysID excitation optimization and identification handoff.
+
+`configs/models/X5_camera.urdf` references project-local X5 STL assets under
+`configs/models/meshes/`, plus the D435 reference mesh under
+`configs/models/reference/realsense2_description/`. Pinocchio/coal preview
+rewrites relative mesh paths into a temporary URDF with absolute paths before
+loading native geometry, so it does not depend on SDK wheel-relative mesh lookup.
+
+On ROS 2 MoveIt hosts, source the ROS environment before running doctor or
+preview commands:
+
+```bash
+source /opt/ros/jazzy/setup.bash
+uv run armctrl sim doctor --json
+```
 
 Preview an already generated trajectory without hardware:
 

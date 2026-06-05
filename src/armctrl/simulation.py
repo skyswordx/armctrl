@@ -4,7 +4,9 @@ import csv
 from dataclasses import dataclass
 import importlib.util
 from pathlib import Path
+import tempfile
 from typing import Iterable
+import xml.etree.ElementTree as ET
 
 from armctrl.workspace import (
     WorkspaceSafetyConfig,
@@ -19,6 +21,7 @@ class BackendSpec:
     name: str
     role: str
     modules: tuple[str, ...]
+    runtime: str
 
 
 BACKENDS: tuple[BackendSpec, ...] = (
@@ -26,21 +29,25 @@ BACKENDS: tuple[BackendSpec, ...] = (
         name="pinocchio_coal",
         role="lightweight URDF geometry collision checks",
         modules=("pinocchio", "coal"),
+        runtime="python",
     ),
     BackendSpec(
         name="mujoco",
         role="contact and dynamics simulation preview",
         modules=("mujoco",),
+        runtime="python",
     ),
     BackendSpec(
         name="moveit",
         role="ROS planning-scene state validity and collision oracle",
-        modules=("moveit_commander",),
+        modules=("rclpy", "moveit_msgs", "moveit_configs_utils"),
+        runtime="ros2_moveit",
     ),
     BackendSpec(
         name="figaroh",
         role="SysID excitation optimization and identification handoff",
         modules=("figaroh",),
+        runtime="python",
     ),
 )
 
@@ -128,6 +135,8 @@ class TrajectoryPreviewer:
 
 
 def _backend_status(spec: BackendSpec) -> dict[str, object]:
+    if spec.name == "moveit":
+        return _moveit_backend_status(spec)
     module_statuses = [
         {
             "module": module,
@@ -139,9 +148,46 @@ def _backend_status(spec: BackendSpec) -> dict[str, object]:
     return {
         "name": spec.name,
         "role": spec.role,
+        "runtime": spec.runtime,
         "status": "available" if importable else "missing",
         "modules": module_statuses,
     }
+
+
+def _moveit_backend_status(spec: BackendSpec) -> dict[str, object]:
+    module_statuses = [
+        {
+            "module": module,
+            "importable": importlib.util.find_spec(module) is not None,
+        }
+        for module in spec.modules
+    ]
+    importable = all(status["importable"] for status in module_statuses)
+    installed_ros = _installed_ros_distribution()
+    if importable:
+        status = "available"
+    elif installed_ros is not None:
+        status = "installed_not_sourced"
+    else:
+        status = "missing"
+    payload: dict[str, object] = {
+        "name": spec.name,
+        "role": spec.role,
+        "runtime": spec.runtime,
+        "status": status,
+        "modules": module_statuses,
+    }
+    if installed_ros is not None:
+        payload["ros_distro"] = installed_ros
+        payload["source_hint"] = f"source /opt/ros/{installed_ros}/setup.bash"
+    return payload
+
+
+def _installed_ros_distribution() -> str | None:
+    for distro in ("jazzy", "iron", "humble", "rolling"):
+        if Path(f"/opt/ros/{distro}").exists():
+            return distro
+    return None
 
 
 def _evaluate_backend_chain(
@@ -244,30 +290,37 @@ def _pinocchio_coal_check(
             "reason": f"module not importable: {error.name}",
         }
     try:
-        model, collision_model, _visual_model = pin.buildModelsFromUrdf(str(urdf_path))
-        collision_model.addAllCollisionPairs()
-        data = model.createData()
-        collision_data = pin.GeometryData(collision_model)
-        for sample_index, sample in enumerate(q_samples):
-            q = np.array(sample, dtype=float)
-            pin.computeCollisions(
-                model,
-                data,
-                collision_model,
-                collision_data,
-                q,
-                False,
+        with tempfile.TemporaryDirectory(prefix="armctrl-pinocchio-") as temp_dir:
+            prepared_urdf = _prepare_urdf_for_native_geometry(
+                urdf_path,
+                output_dir=Path(temp_dir),
             )
-            for pair_index, result in enumerate(collision_data.collisionResults):
-                if result.isCollision():
-                    return {
-                        "status": "fail",
-                        "method": "pinocchio_coal",
-                        "violation": {
-                            "sample_index": sample_index,
-                            "collision_pair_index": pair_index,
-                        },
-                    }
+            model, collision_model, _visual_model = pin.buildModelsFromUrdf(
+                str(prepared_urdf)
+            )
+            collision_model.addAllCollisionPairs()
+            data = model.createData()
+            collision_data = pin.GeometryData(collision_model)
+            for sample_index, sample in enumerate(q_samples):
+                q = np.array(sample, dtype=float)
+                pin.computeCollisions(
+                    model,
+                    data,
+                    collision_model,
+                    collision_data,
+                    q,
+                    False,
+                )
+                for pair_index, result in enumerate(collision_data.collisionResults):
+                    if result.isCollision():
+                        return {
+                            "status": "fail",
+                            "method": "pinocchio_coal",
+                            "violation": {
+                                "sample_index": sample_index,
+                                "collision_pair_index": pair_index,
+                            },
+                        }
         return {
             "status": "pass",
             "method": "pinocchio_coal",
@@ -279,6 +332,27 @@ def _pinocchio_coal_check(
             "method": "pinocchio_coal",
             "reason": str(error),
         }
+
+
+def _prepare_urdf_for_native_geometry(
+    urdf_path: Path,
+    *,
+    output_dir: Path,
+) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    tree = ET.parse(urdf_path)
+    root = tree.getroot()
+    for mesh in root.findall(".//mesh"):
+        filename = mesh.attrib.get("filename")
+        if filename is None or filename.startswith("package://"):
+            continue
+        path = Path(filename)
+        if not path.is_absolute():
+            path = urdf_path.parent / path
+        mesh.attrib["filename"] = str(path.resolve())
+    output_path = output_dir / urdf_path.name
+    tree.write(output_path, encoding="utf-8", xml_declaration=True)
+    return output_path
 
 
 def _mujoco_load_check(*, urdf_path: Path) -> dict[str, object]:

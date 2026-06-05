@@ -11,6 +11,9 @@
 - 新增 SysID 轨迹仿真安全预览：`sysid plan --output` 现在写出 `trajectory_preview.json`，并把 `simulation_check` 纳入 `manifest.json` 与 stdout safety gate。
 - 新增 `armctrl sim preview`，可对已生成的 `planned_trajectory.csv` 做无硬件安全预览；成熟后端缺失时明确标记 `urdf_fk_fallback`，不会伪装成完整碰撞仿真。
 - 将 release 状态推进为 `0.6.0-rc.3`，标记 safety-space config、simulation doctor 和 SysID trajectory preview gate 已完成本地非硬件验证。
+- 新增项目侧 X5 STL mesh 资产，`configs/models/X5_camera.urdf` 可被 Pinocchio/coal 直接加载几何模型，不再依赖 SDK wheel 内部相对路径。
+- 新增 `sim` optional extra：Linux 目标主机可通过 `uv sync --extra dev --extra sim` 安装 MuJoCo 预览依赖。
+- 新增 ROS 2 MoveIt/Jazzy doctor 检测：未 source ROS 环境但 `/opt/ros/jazzy` 存在时，报告 `installed_not_sourced` 和 `source /opt/ros/jazzy/setup.bash` 提示。
 
 - 新增 `armctrl sysid run --adapter sdk` 的最小 `arx5_interface` 真机 smoke runner：通过显式 `--confirm` 后才会构造 SDK joint controller，并在采集完成、故障或 Ctrl-C 路径中尝试落到 damping。
 - 新增 `docs/hardware_sysid_operator_manual.md`，收束 n100d 上机步骤：USB-CAN、SDK handshake、SysID plan、SDK smoke run、postprocess/solve、Agent recipe 模拟调用和安全配置调参。

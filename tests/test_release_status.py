@@ -37,6 +37,7 @@ def test_cli_release_status_reports_simulation_safety_rc_and_hardware_pending() 
     assert "n100d_pinocchio_figaroh_validation" in payload["hardware_pending"]
     assert "n100d_mujoco_moveit_pinocchio_coal_doctor" in payload["hardware_pending"]
     assert payload["verification"]["local_commands"] == [
+        "uv sync --extra dev --extra sim",
         "uv run pytest -q",
         "uv run python -m compileall src tests",
         "uv run armctrl release status --json",
@@ -46,7 +47,7 @@ def test_cli_release_status_reports_simulation_safety_rc_and_hardware_pending() 
         "uv run armctrl lerobot doctor --model X5 --robot-interface can0 --teleop-interface can1 --json",
         "uv run armctrl sysid run gravity_sweep --adapter sdk --duration 8 --amplitude 0.5 --q-center 0 0.30 0.30 0 0 0 --output runs/tmp-confirm-check --confirm 'I UNDERSTAND THIS WILL MOVE THE ARM' --json",
     ]
-    assert payload["verification"]["test_count"] >= 65
+    assert payload["verification"]["test_count"] == 70
     assert payload["deferred_validation"]["requires_hardware"] == [
         "real_sdk_runner_hardware_validation",
         "native_lerobot_record_on_target_linux",

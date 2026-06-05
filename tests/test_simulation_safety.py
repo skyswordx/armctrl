@@ -36,6 +36,7 @@ def test_simulation_doctor_reports_mature_backend_importability() -> None:
     assert names == ["pinocchio_coal", "mujoco", "moveit", "figaroh"]
     assert result["backends"][0]["role"] == "lightweight URDF geometry collision checks"
     assert result["backends"][1]["role"] == "contact and dynamics simulation preview"
+    assert result["backends"][2]["runtime"] == "ros2_moveit"
 
 
 def test_cli_sim_doctor_is_read_only_json() -> None:
@@ -52,6 +53,45 @@ def test_cli_sim_doctor_is_read_only_json() -> None:
     assert payload["schema"] == "armctrl.simulation_doctor.v1"
     assert payload["movement_allowed"] is False
     assert payload["backends"][2]["name"] == "moveit"
+
+
+def test_moveit_doctor_detects_ros2_install_when_python_env_is_not_sourced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_find_spec = importlib.util.find_spec
+
+    def fake_find_spec(name: str) -> object | None:
+        if name in {"rclpy", "moveit_msgs", "moveit_configs_utils"}:
+            return None
+        return original_find_spec(name)
+
+    monkeypatch.setattr(simulation.importlib.util, "find_spec", fake_find_spec)
+    monkeypatch.setattr(simulation, "_installed_ros_distribution", lambda: "jazzy")
+
+    result = SimulationDoctor().run()
+    moveit = next(backend for backend in result["backends"] if backend["name"] == "moveit")
+
+    assert moveit["status"] == "installed_not_sourced"
+    assert moveit["source_hint"] == "source /opt/ros/jazzy/setup.bash"
+
+
+def test_native_geometry_urdf_rewrites_relative_mesh_paths_to_absolute(
+    tmp_path: Path,
+) -> None:
+    prepared = simulation._prepare_urdf_for_native_geometry(
+        Path("configs/models/X5_camera.urdf"),
+        output_dir=tmp_path,
+    )
+    root = simulation.ET.parse(prepared).getroot()
+    filenames = [
+        mesh.attrib["filename"]
+        for mesh in root.findall(".//mesh")
+        if "filename" in mesh.attrib
+    ]
+
+    assert filenames
+    assert all(Path(filename).is_absolute() for filename in filenames)
+    assert any(Path(filename).name == "base_link.STL" for filename in filenames)
 
 
 def test_sysid_plan_writes_trajectory_preview_and_includes_simulation_gate(
