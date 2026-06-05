@@ -36,6 +36,7 @@ class WorkspaceSafetyConfig:
     forbidden_workspace_boxes: tuple[WorkspaceBox, ...]
     simulation_backend_preference: tuple[str, ...]
     simulation_link_frames: tuple[str, ...]
+    allowed_collision_pairs: tuple[tuple[str, str], ...]
     min_clearance_m: float
     max_sysid_duration_s: float
     max_sysid_sample_hz: float
@@ -80,6 +81,9 @@ class WorkspaceSafetyConfig:
                     ["link2", "link3", "link4", "link5", "link6", "eef_link"],
                 )
             ),
+            allowed_collision_pairs=_read_allowed_collision_pairs(
+                simulation.get("allowed_collision_pairs", [])
+            ),
             min_clearance_m=float(simulation.get("min_clearance_m", 0.02)),
             max_sysid_duration_s=float(safety.get("max_sysid_duration_s", 60.0)),
             max_sysid_sample_hz=float(safety.get("max_sysid_sample_hz", 100.0)),
@@ -87,6 +91,27 @@ class WorkspaceSafetyConfig:
             max_joint_step_rad=float(safety.get("max_joint_step_rad", 0.01)),
             settle_before_record_s=float(safety.get("settle_before_record_s", 0.5)),
         )
+
+
+def _read_allowed_collision_pairs(value: object) -> tuple[tuple[str, str], ...]:
+    pairs: list[tuple[str, str]] = []
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise ValueError("simulation.allowed_collision_pairs must be a list")
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            raise ValueError(
+                f"simulation.allowed_collision_pairs[{index}] must be a mapping"
+            )
+        first = item.get("first")
+        second = item.get("second")
+        if not isinstance(first, str) or not isinstance(second, str):
+            raise ValueError(
+                f"simulation.allowed_collision_pairs[{index}] requires first/second strings"
+            )
+        pairs.append((first, second))
+    return tuple(pairs)
 
 
 def evaluate_workspace_clearance(

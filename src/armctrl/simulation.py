@@ -202,6 +202,7 @@ def _evaluate_backend_chain(
             selected_backend=requested_backend,
             urdf_path=urdf_path,
             q_samples=q_samples,
+            allowed_collision_pairs=config.allowed_collision_pairs,
         )
         return {
             "selected": requested_backend,
@@ -215,6 +216,7 @@ def _evaluate_backend_chain(
                 selected_backend=backend,
                 urdf_path=urdf_path,
                 q_samples=q_samples,
+                allowed_collision_pairs=config.allowed_collision_pairs,
             )
             attempts.append({"backend": backend, "result": result})
             return {
@@ -231,6 +233,7 @@ def _evaluate_backend_chain(
             selected_backend=backend,
             urdf_path=urdf_path,
             q_samples=q_samples,
+            allowed_collision_pairs=config.allowed_collision_pairs,
         )
         attempts.append({"backend": backend, "result": result})
         if result["status"] in {"pass", "fail"}:
@@ -243,6 +246,7 @@ def _evaluate_backend_chain(
         selected_backend="urdf_fk_fallback",
         urdf_path=urdf_path,
         q_samples=q_samples,
+        allowed_collision_pairs=config.allowed_collision_pairs,
     )
     attempts.append({"backend": "urdf_fk_fallback", "result": result})
     return {
@@ -257,9 +261,14 @@ def _run_backend_check(
     selected_backend: str,
     urdf_path: Path,
     q_samples: list[tuple[float, ...]],
+    allowed_collision_pairs: tuple[tuple[str, str], ...],
 ) -> dict[str, object]:
     if selected_backend == "pinocchio_coal":
-        return _pinocchio_coal_check(urdf_path=urdf_path, q_samples=q_samples)
+        return _pinocchio_coal_check(
+            urdf_path=urdf_path,
+            q_samples=q_samples,
+            allowed_collision_pairs=allowed_collision_pairs,
+        )
     if selected_backend == "mujoco":
         return _mujoco_load_check(urdf_path=urdf_path)
     if selected_backend == "moveit":
@@ -279,6 +288,7 @@ def _pinocchio_coal_check(
     *,
     urdf_path: Path,
     q_samples: list[tuple[float, ...]],
+    allowed_collision_pairs: tuple[tuple[str, str], ...] = (),
 ) -> dict[str, object]:
     try:
         import numpy as np
@@ -301,6 +311,7 @@ def _pinocchio_coal_check(
             collision_model.addAllCollisionPairs()
             data = model.createData()
             collision_data = pin.GeometryData(collision_model)
+            ignored_collisions: set[tuple[str, str]] = set()
             for sample_index, sample in enumerate(q_samples):
                 q = np.array(sample, dtype=float)
                 pin.computeCollisions(
@@ -313,18 +324,43 @@ def _pinocchio_coal_check(
                 )
                 for pair_index, result in enumerate(collision_data.collisionResults):
                     if result.isCollision():
+                        pair = collision_model.collisionPairs[pair_index]
+                        first_name = collision_model.geometryObjects[pair.first].name
+                        second_name = collision_model.geometryObjects[pair.second].name
+                        if _is_allowed_collision_pair(
+                            first_name,
+                            second_name,
+                            allowed_collision_pairs,
+                        ):
+                            ignored_collisions.add(
+                                tuple(
+                                    sorted(
+                                        (
+                                            _strip_pinocchio_suffix(first_name),
+                                            _strip_pinocchio_suffix(second_name),
+                                        )
+                                    )
+                                )
+                            )
+                            continue
                         return {
                             "status": "fail",
                             "method": "pinocchio_coal",
                             "violation": {
                                 "sample_index": sample_index,
                                 "collision_pair_index": pair_index,
+                                "first": first_name,
+                                "second": second_name,
                             },
                         }
         return {
             "status": "pass",
             "method": "pinocchio_coal",
             "checked_samples": len(q_samples),
+            "ignored_allowed_collision_pairs": [
+                {"first": first, "second": second}
+                for first, second in sorted(ignored_collisions)
+            ],
         }
     except Exception as error:  # pragma: no cover - depends on native geometry stack
         return {
@@ -353,6 +389,27 @@ def _prepare_urdf_for_native_geometry(
     output_path = output_dir / urdf_path.name
     tree.write(output_path, encoding="utf-8", xml_declaration=True)
     return output_path
+
+
+def _is_allowed_collision_pair(
+    first_name: str,
+    second_name: str,
+    allowed_collision_pairs: tuple[tuple[str, str], ...],
+) -> bool:
+    first = _strip_pinocchio_suffix(first_name)
+    second = _strip_pinocchio_suffix(second_name)
+    pair = frozenset((first, second))
+    return any(
+        pair == frozenset(allowed_pair)
+        for allowed_pair in allowed_collision_pairs
+    )
+
+
+def _strip_pinocchio_suffix(name: str) -> str:
+    suffix = "_0"
+    if name.endswith(suffix):
+        return name[: -len(suffix)]
+    return name
 
 
 def _mujoco_load_check(*, urdf_path: Path) -> dict[str, object]:

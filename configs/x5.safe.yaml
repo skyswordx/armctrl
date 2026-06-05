@@ -27,6 +27,16 @@ safety:
     # distal wrist/end-effector sweep that can hit the table or operator space.
     link_frames: [link5, link6, eef_link]
     min_clearance_m: 0.02
+    # Known fixed/adjacent mesh overlaps observed by Pinocchio/coal on n100d.
+    # This mirrors MoveIt-style Allowed Collision Matrix usage: only named
+    # assembly pairs are ignored; every other collision remains a hard gate.
+    allowed_collision_pairs:
+      - first: base_link
+        second: link1
+      - first: link1
+        second: link2
+      - first: link5
+        second: link6
   max_sysid_duration_s: 60.0
   max_sysid_sample_hz: 100.0
   max_sysid_amplitude_rad: 0.25

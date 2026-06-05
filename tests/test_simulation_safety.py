@@ -25,6 +25,34 @@ def test_safe_config_loads_named_allowed_and_forbidden_spaces() -> None:
         "moveit",
         "urdf_fk_fallback",
     )
+    assert config.allowed_collision_pairs == (
+        ("base_link", "link1"),
+        ("link1", "link2"),
+        ("link5", "link6"),
+    )
+
+
+def test_allowed_collision_pair_matching_accepts_pinocchio_geometry_suffixes() -> None:
+    allowed_pairs = (
+        ("base_link", "link1"),
+        ("link1", "link2"),
+    )
+
+    assert simulation._is_allowed_collision_pair(
+        "base_link_0",
+        "link1_0",
+        allowed_pairs,
+    )
+    assert simulation._is_allowed_collision_pair(
+        "link2_0",
+        "link1_0",
+        allowed_pairs,
+    )
+    assert not simulation._is_allowed_collision_pair(
+        "link2_0",
+        "link6_0",
+        allowed_pairs,
+    )
 
 
 def test_simulation_doctor_reports_mature_backend_importability() -> None:
@@ -202,7 +230,7 @@ def test_auto_preview_records_failed_mature_backend_attempt_and_falls_back(
     monkeypatch.setattr(
         simulation,
         "_pinocchio_coal_check",
-        lambda *, urdf_path, q_samples: {
+        lambda *, urdf_path, q_samples, allowed_collision_pairs: {
             "status": "not_evaluated",
             "method": "pinocchio_coal",
             "reason": "Mesh ./meshes/base_link.STL could not be found.",
