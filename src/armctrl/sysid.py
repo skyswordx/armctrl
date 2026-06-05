@@ -3,12 +3,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 import csv
 import json
-import math
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
-from armctrl.limits import LimitDecision, UrdfJointLimits, evaluate_joint_limits
+from armctrl.limits import (
+    LimitDecision,
+    UrdfJointLimits,
+    evaluate_joint_limit_samples,
+)
 from armctrl.simulation import TrajectoryPreviewer
+from armctrl.sysid_trajectory_backend import plan_sysid_trajectory
 from armctrl.workspace import WorkspaceSafetyConfig, evaluate_workspace_fk_clearance
 
 
@@ -43,6 +47,7 @@ class SysIdPlan:
     handoff: dict[str, object]
     artifacts: dict[str, str] | None = None
     artifact_safety: dict[str, object] | None = None
+    trajectory_backend: dict[str, Any] | None = None
 
     def to_json(self) -> dict[str, object]:
         payload: dict[str, object] = {
@@ -55,6 +60,8 @@ class SysIdPlan:
             payload["artifacts"] = self.artifacts
         if self.artifact_safety is not None:
             payload["artifact_safety"] = self.artifact_safety
+        if self.trajectory_backend is not None:
+            payload["trajectory_backend"] = self.trajectory_backend
         return payload
 
 
@@ -70,6 +77,8 @@ class SysIdPlanRequest:
     safe_config_path: str
     output_dir: Path
     render_path: Path | None = None
+    candidate_trajectory_path: Path | None = None
+    trajectory_command_argv: tuple[str, ...] | None = None
 
 
 class SysIdPlanner:
@@ -124,6 +133,7 @@ class SysIdPlanner:
             handoff={
                 "dataset_contract": "lerobot-compatible",
                 "solver_backends": ["pinocchio", "figaroh"],
+                "trajectory_optimizer": "figaroh",
                 "hardware_required_for_execute": True,
             },
         )
@@ -134,15 +144,17 @@ class SysIdPlanner:
         trajectory_path = request.output_dir / "planned_trajectory.csv"
         manifest_path = request.output_dir / "manifest.json"
         preview_path = request.output_dir / "trajectory_preview.json"
+        preview_html_path = request.output_dir / "preview.html"
         render_path = request.render_path
-        limit_decision = evaluate_joint_limits(
-            UrdfJointLimits.from_urdf(Path(request.urdf_path)),
-            q_center=request.q_center,
-            amplitude_rad=request.amplitude_rad,
-        )
         safe_config = WorkspaceSafetyConfig.from_yaml(Path(request.safe_config_path))
         parameter_decision = _evaluate_sysid_parameters(request, safe_config)
-        rows = trajectory_rows(request)
+        trajectory_plan = plan_sysid_trajectory(request)
+        rows = trajectory_plan.rows
+        q_samples = _q_samples_from_rows(rows, dof=request.dof)
+        limit_decision = evaluate_joint_limit_samples(
+            UrdfJointLimits.from_urdf(Path(request.urdf_path)),
+            samples=q_samples,
+        )
         step_decision = _evaluate_trajectory_steps(
             rows,
             dof=request.dof,
@@ -151,7 +163,7 @@ class SysIdPlanner:
         workspace_decision = evaluate_workspace_fk_clearance(
             Path(request.urdf_path),
             safe_config,
-            samples=_q_samples_from_rows(rows, dof=request.dof),
+            samples=q_samples,
         )
         safety_allowed = (
             plan.safety.allowed
@@ -166,12 +178,24 @@ class SysIdPlanner:
             writer.writeheader()
             writer.writerows(rows)
 
-        preview = TrajectoryPreviewer().preview(
+        previewer = TrajectoryPreviewer()
+        preview = previewer.preview(
             trajectory_path=trajectory_path,
             urdf_path=Path(request.urdf_path),
             safe_config_path=Path(request.safe_config_path),
-            render_path=render_path,
+            render_path=preview_html_path,
         )
+        extra_render: dict[str, object] | None = None
+        if render_path is not None and render_path != preview_html_path:
+            extra_preview = previewer.preview(
+                trajectory_path=trajectory_path,
+                urdf_path=Path(request.urdf_path),
+                safe_config_path=Path(request.safe_config_path),
+                render_path=render_path,
+            )
+            raw_render = extra_preview.get("render")
+            if isinstance(raw_render, dict):
+                extra_render = raw_render
         preview_path.write_text(
             json.dumps(preview, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -192,9 +216,10 @@ class SysIdPlanner:
         artifacts = {
             "planned_trajectory": str(trajectory_path),
             "trajectory_preview": str(preview_path),
+            "preview_html": str(preview_html_path),
             "manifest": str(manifest_path),
         }
-        if render_path is not None:
+        if extra_render is not None and render_path is not None:
             artifacts["trajectory_render"] = str(render_path)
         manifest = {
             "schema": "armctrl.ident_plan_manifest.v1",
@@ -238,9 +263,12 @@ class SysIdPlanner:
                     "hardware_execution": "not_requested",
                 },
             },
+            "trajectory_backend": trajectory_plan.backend,
             "handoff": plan.handoff,
             "artifacts": artifacts,
         }
+        if extra_render is not None:
+            manifest["render"] = extra_render
         manifest_path.write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -279,22 +307,12 @@ class SysIdPlanner:
                     + len(preview["safety"]["clearance_check"]["violations"]),
                 },
             },
+            trajectory_backend=trajectory_plan.backend,
         )
 
 
 def trajectory_rows(request: SysIdPlanRequest) -> list[dict[str, str]]:
-    sample_count = int(round(request.duration_s * request.sample_hz)) + 1
-    rows: list[dict[str, str]] = []
-    for sample_index in range(sample_count):
-        t = sample_index / request.sample_hz
-        phase = 2.0 * math.pi * (t / request.duration_s if request.duration_s else 0.0)
-        row = {"time_s": f"{t:.6f}"}
-        for joint_index in range(request.dof):
-            center = request.q_center[joint_index]
-            offset = request.amplitude_rad * math.sin(phase) if joint_index == 0 else 0.0
-            row[f"q_cmd_{joint_index + 1}"] = f"{center + offset:.6f}"
-        rows.append(row)
-    return rows
+    return plan_sysid_trajectory(request, write_artifacts=False).rows
 
 
 def _q_samples_from_rows(

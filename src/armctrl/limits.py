@@ -71,3 +71,32 @@ def evaluate_joint_limits(
         status="fail" if violations else "pass",
         violations=violations,
     )
+
+
+def evaluate_joint_limit_samples(
+    limits: UrdfJointLimits,
+    *,
+    samples: list[tuple[float, ...]],
+) -> LimitDecision:
+    violations: list[dict[str, object]] = []
+    for sample_index, sample in enumerate(samples):
+        for joint_index, (joint, value) in enumerate(
+            zip(limits.joints, sample),
+            start=1,
+        ):
+            if joint.lower <= value <= joint.upper:
+                continue
+            violations.append(
+                {
+                    "sample_index": sample_index,
+                    "joint_index": joint_index,
+                    "joint_name": joint.name,
+                    "value": value,
+                    "urdf_lower": joint.lower,
+                    "urdf_upper": joint.upper,
+                }
+            )
+    return LimitDecision(
+        status="fail" if violations else "pass",
+        violations=violations,
+    )

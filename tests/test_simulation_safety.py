@@ -268,12 +268,17 @@ def test_sysid_plan_writes_trajectory_preview_and_includes_simulation_gate(
     preview = json.loads(
         (output_dir / "trajectory_preview.json").read_text(encoding="utf-8")
     )
+    preview_html_path = output_dir / "preview.html"
 
     assert payload["artifacts"]["trajectory_preview"] == str(
         output_dir / "trajectory_preview.json"
     )
+    assert payload["artifacts"]["preview_html"] == str(preview_html_path)
+    assert preview_html_path.exists()
+    assert "URDF kinematic animation" in preview_html_path.read_text(encoding="utf-8")
     assert payload["artifact_safety"]["simulation_check"]["status"] == "pass"
     assert manifest["safety"]["checks"]["simulation_check"]["status"] == "pass"
+    assert manifest["artifacts"]["preview_html"] == str(preview_html_path)
     assert preview["schema"] == "armctrl.trajectory_preview.v1"
     assert preview["backend"]["selected"] in {
         "pinocchio_coal",
