@@ -17,6 +17,88 @@ class FigarohOedError(RuntimeError):
     pass
 
 
+class X5JointRelationConstraintManager:
+    """Append X5-specific joint relation constraints to FIGAROH constraints."""
+
+    def __init__(
+        self,
+        base_manager: Any,
+        relation_constraints: list[dict[str, Any]],
+    ) -> None:
+        self._base_manager = base_manager
+        self._relation_constraints = relation_constraints
+        self.CB = base_manager.CB
+        self.n_wps = base_manager.n_wps
+        self.freq = base_manager.freq
+
+    def get_variable_bounds(self):
+        return self._base_manager.get_variable_bounds()
+
+    def get_constraint_bounds(self, Ns: int):
+        lower, upper = self._base_manager.get_constraint_bounds(Ns)
+        for _sample_index in range(Ns):
+            for constraint in self._relation_constraints:
+                lower.append(float(constraint["min_delta_rad"]))
+                upper.append(float(constraint["max_delta_rad"]))
+        return lower, upper
+
+    def evaluate_constraints(
+        self,
+        Ns: int,
+        X: np.ndarray,
+        opt_cb: dict[str, Any],
+        tps,
+        vel_wps,
+        acc_wps,
+        wp_init,
+    ) -> np.ndarray:
+        base_constraints = self._base_manager.evaluate_constraints(
+            Ns,
+            X,
+            opt_cb,
+            tps,
+            vel_wps,
+            acc_wps,
+            wp_init,
+        )
+        relation_values = self._evaluate_joint_relation_constraints(
+            X,
+            tps,
+            vel_wps,
+            acc_wps,
+            wp_init,
+        )
+        return np.concatenate((base_constraints, relation_values), axis=None)
+
+    def _evaluate_joint_relation_constraints(
+        self,
+        X: np.ndarray,
+        tps,
+        vel_wps,
+        acc_wps,
+        wp_init,
+    ) -> np.ndarray:
+        X = np.asarray(X)
+        wps_X = np.reshape(X, (self.n_wps - 1, len(self.CB.act_idxq)))
+        wps = np.vstack((wp_init, wps_X)).transpose()
+        _t_f, p_f, _v_f, _a_f = self.CB.get_full_config(
+            self.freq,
+            tps,
+            wps,
+            vel_wps,
+            acc_wps,
+        )
+        values: list[float] = []
+        for row in p_f:
+            for constraint in self._relation_constraints:
+                left_active_index = int(constraint["left_joint"]) - 1
+                right_active_index = int(constraint["right_joint"]) - 1
+                left_q_index = int(self.CB.act_idxq[left_active_index])
+                right_q_index = int(self.CB.act_idxq[right_active_index])
+                values.append(float(row[left_q_index]) - float(row[right_q_index]))
+        return np.asarray(values, dtype=float)
+
+
 def run_oed(
     *,
     request_path: Path,
@@ -147,6 +229,12 @@ def _build_figaroh_optimizer(
         optimizer.identif_config["act_idxq"] = idx_q
         optimizer.identif_config["act_idxv"] = idx_v
         optimizer.initialize()
+        relation_constraints = _request_joint_relation_constraints(request)
+        if relation_constraints:
+            optimizer.constraint_manager = X5JointRelationConstraintManager(
+                optimizer.constraint_manager,
+                relation_constraints,
+            )
         return optimizer
     except Exception as exc:  # pragma: no cover - real FIGAROH integration path.
         raise FigarohOedError(
@@ -216,6 +304,9 @@ def _write_figaroh_config(
                     "t_s": timing["waypoint_duration_s"],
                     "soft_lim": 0.05,
                     "max_attempts": 1000,
+                    "x5_joint_relation_constraints": _request_joint_relation_constraints(
+                        request
+                    ),
                 }
             ],
         }
@@ -282,6 +373,31 @@ def _request_motion_limits(request: dict[str, Any], *, dof: int) -> dict[str, li
             label="effort_limits_nm",
         ),
     }
+
+
+def _request_joint_relation_constraints(request: dict[str, Any]) -> list[dict[str, Any]]:
+    constraints = request.get("constraints", {})
+    if not isinstance(constraints, dict):
+        return []
+    raw_value = constraints.get("joint_relation_constraints", []) or []
+    if not isinstance(raw_value, list):
+        raise FigarohOedError("joint_relation_constraints must be a list")
+    parsed: list[dict[str, Any]] = []
+    for index, raw_constraint in enumerate(raw_value):
+        if not isinstance(raw_constraint, dict):
+            raise FigarohOedError(
+                f"joint_relation_constraints[{index}] must be a mapping"
+            )
+        parsed.append(
+            {
+                "name": str(raw_constraint.get("name", f"joint_relation_{index + 1}")),
+                "left_joint": int(raw_constraint["left_joint"]),
+                "right_joint": int(raw_constraint["right_joint"]),
+                "min_delta_rad": float(raw_constraint["min_delta_rad"]),
+                "max_delta_rad": float(raw_constraint["max_delta_rad"]),
+            }
+        )
+    return parsed
 
 
 def _limit_pairs(

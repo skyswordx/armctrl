@@ -14,6 +14,7 @@ from typing import Any
 import xml.etree.ElementTree as ET
 
 import numpy as np
+import yaml
 
 from armctrl.workspace import WorkspaceSafetyConfig
 
@@ -129,15 +130,20 @@ def _backend_metadata(
     status = "available_not_configured" if optimizer_ready else "fallback"
     fallback = _fallback_metadata(request, rows=rows, used=candidate_path is None)
     selected = _selected_backend(candidate_path, command_result, fallback["name"])
+    oed_quality_gate = _oed_quality_gate(
+        selected=selected,
+        command_result=command_result,
+        regressor_score=regressor_score,
+    )
     metadata: dict[str, Any] = {
         "requested": "figaroh_optimal_trajectory",
         "selected": selected,
         "status": "external_candidate" if candidate_path is not None else status,
         "profile": str(request.profile_name),
         "profile_role": _requested_profile_role(str(request.profile_name)),
-        "oed_valid": False,
-        "hardware_execution_eligible": False,
-        "next_gate": "run_figaroh_or_pinocchio_oed_before_sdk_execution",
+        "oed_valid": oed_quality_gate["status"] == "pass",
+        "hardware_execution_eligible": oed_quality_gate["status"] == "pass",
+        "next_gate": _next_oed_gate(oed_quality_gate),
         "implementation_boundary": (
             "armctrl orchestrates; FIGAROH owns optimal excitation math"
         ),
@@ -159,6 +165,7 @@ def _backend_metadata(
         "condition_number": regressor_score.get("effective_condition_number"),
         "rank": regressor_score.get("rank"),
         "objective": regressor_score.get("objective"),
+        "oed_quality_gate": oed_quality_gate,
         "timing_contract": figaroh_config["figaroh"]["timing"],
         "sampling_contract": figaroh_config["sampling"],
         "artifacts": {
@@ -178,6 +185,50 @@ def _backend_metadata(
         if command_result is not None:
             metadata["candidate_source"]["generated_by"] = command_result
     return metadata
+
+
+def _oed_quality_gate(
+    *,
+    selected: str,
+    command_result: dict[str, Any] | None,
+    regressor_score: dict[str, Any],
+) -> dict[str, Any]:
+    reasons: list[str] = []
+    if selected != "external_oed_command":
+        reasons.append("external_figaroh_oed_not_run")
+    convergence = (
+        command_result.get("optimizer_convergence")
+        if command_result is not None
+        else None
+    )
+    if isinstance(convergence, dict) and convergence.get("status") == "fail":
+        reasons.append("optimizer_not_converged")
+    elif command_result is not None and not isinstance(convergence, dict):
+        reasons.append("optimizer_convergence_not_reported")
+    if regressor_score.get("status") != "computed":
+        reasons.append("pinocchio_regressor_not_computed")
+    else:
+        condition = float(regressor_score.get("effective_condition_number", float("inf")))
+        rank = int(regressor_score.get("rank", 0))
+        if rank <= 0:
+            reasons.append("regressor_rank_zero")
+        if condition > 1000.0:
+            reasons.append("regressor_condition_too_high")
+    return {
+        "status": "fail" if reasons else "pass",
+        "reasons": reasons,
+        "condition_number_threshold": 1000.0,
+        "note": (
+            "This gate is for offline OED quality only. Passing simulation safety "
+            "does not imply identified parameters are valid."
+        ),
+    }
+
+
+def _next_oed_gate(oed_quality_gate: dict[str, Any]) -> str:
+    if oed_quality_gate["status"] == "pass":
+        return "run_sysid_safety_preview_before_sdk_execution"
+    return "improve_figaroh_oed_until_regressor_quality_gate_passes"
 
 
 def _selected_backend(
@@ -232,13 +283,51 @@ def _trajectory_command_result(
     stderr = completed.stderr.strip()
     if stdout:
         result["stdout"] = stdout
-        try:
-            result["stdout_json"] = json.loads(stdout)
-        except json.JSONDecodeError:
-            pass
+        stdout_json = _extract_last_json_object(stdout)
+        if stdout_json is not None:
+            result["stdout_json"] = stdout_json
+        result["optimizer_convergence"] = _optimizer_convergence_from_stdout(stdout)
     if stderr:
         result["stderr"] = stderr
     return result
+
+
+def _extract_last_json_object(text: str) -> dict[str, Any] | None:
+    for line in reversed(text.splitlines()):
+        stripped = line.strip()
+        if not stripped.startswith("{") or not stripped.endswith("}"):
+            continue
+        try:
+            decoded = json.loads(stripped)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(decoded, dict):
+            return decoded
+    return None
+
+
+def _optimizer_convergence_from_stdout(stdout: str) -> dict[str, str]:
+    if "EXIT: Optimal Solution Found." in stdout:
+        return {"status": "pass", "reason": "optimal_solution_found"}
+    if "EXIT: Maximum Number of Iterations Exceeded." in stdout:
+        return {"status": "fail", "reason": "max_iterations_exceeded"}
+    if "EXIT:" in stdout:
+        exit_line = next(
+            (
+                line.strip()
+                for line in reversed(stdout.splitlines())
+                if line.strip().startswith("EXIT:")
+            ),
+            "EXIT: unknown",
+        )
+        return {"status": "fail", "reason": _slugify_optimizer_exit(exit_line)}
+    return {"status": "not_evaluated", "reason": "optimizer_exit_not_reported"}
+
+
+def _slugify_optimizer_exit(exit_line: str) -> str:
+    text = exit_line.replace("EXIT:", "").strip().lower()
+    slug = "".join(char if char.isalnum() else "_" for char in text)
+    return "_".join(part for part in slug.split("_") if part) or "unknown_exit"
 
 
 def _fallback_metadata(
@@ -409,6 +498,88 @@ def _figaroh_numeric_constraints(request: object) -> dict[str, Any]:
         "joint_limits_rad": joint_limits,
         "velocity_limits_rad_s": velocity_limits,
         "effort_limits_nm": effort_limits,
+        "joint_relation_constraints": read_sysid_joint_relation_constraints(
+            Path(str(request.safe_config_path))
+        ),
+    }
+
+
+def read_sysid_joint_relation_constraints(path: Path) -> list[dict[str, Any]]:
+    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    safety = raw.get("safety", {}) or {}
+    sysid = safety.get("sysid", {}) or {}
+    constraints = sysid.get("joint_relation_constraints", []) or []
+    if not isinstance(constraints, list):
+        raise ValueError("safety.sysid.joint_relation_constraints must be a list")
+    parsed: list[dict[str, Any]] = []
+    for index, item in enumerate(constraints):
+        if not isinstance(item, dict):
+            raise ValueError(
+                f"safety.sysid.joint_relation_constraints[{index}] must be a mapping"
+            )
+        name = item.get("name", f"joint_relation_{index + 1}")
+        left_joint = int(item["left_joint"])
+        right_joint = int(item["right_joint"])
+        min_delta = float(item["min_delta_rad"])
+        max_delta = float(item["max_delta_rad"])
+        if left_joint <= 0 or right_joint <= 0:
+            raise ValueError("joint relation indices are 1-based and must be positive")
+        if min_delta > max_delta:
+            raise ValueError(
+                f"safety.sysid.joint_relation_constraints[{index}] has min > max"
+            )
+        parsed.append(
+            {
+                "name": str(name),
+                "left_joint": left_joint,
+                "right_joint": right_joint,
+                "min_delta_rad": min_delta,
+                "max_delta_rad": max_delta,
+            }
+        )
+    return parsed
+
+
+def evaluate_sysid_joint_relation_samples(
+    safe_config_path: Path,
+    *,
+    samples: list[tuple[float, ...]],
+) -> dict[str, Any]:
+    constraints = read_sysid_joint_relation_constraints(safe_config_path)
+    violations: list[dict[str, Any]] = []
+    for sample_index, sample in enumerate(samples):
+        for constraint in constraints:
+            left_index = int(constraint["left_joint"]) - 1
+            right_index = int(constraint["right_joint"]) - 1
+            if left_index >= len(sample) or right_index >= len(sample):
+                violations.append(
+                    {
+                        "sample_index": sample_index,
+                        "constraint": constraint["name"],
+                        "reason": "joint_index_out_of_range",
+                    }
+                )
+                continue
+            delta = float(sample[left_index]) - float(sample[right_index])
+            min_delta = float(constraint["min_delta_rad"])
+            max_delta = float(constraint["max_delta_rad"])
+            if min_delta <= delta <= max_delta:
+                continue
+            violations.append(
+                {
+                    "sample_index": sample_index,
+                    "constraint": constraint["name"],
+                    "left_joint": constraint["left_joint"],
+                    "right_joint": constraint["right_joint"],
+                    "delta_rad": delta,
+                    "min_delta_rad": min_delta,
+                    "max_delta_rad": max_delta,
+                }
+            )
+    return {
+        "status": "fail" if violations else "pass",
+        "constraints": constraints,
+        "violations": violations,
     }
 
 

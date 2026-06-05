@@ -41,6 +41,17 @@ safety:
   max_sysid_sample_hz: 100.0
   max_sysid_amplitude_rad: 0.25
   max_joint_step_rad: 0.01
+  sysid:
+    joint_relation_constraints:
+      # X5 hardware bringup showed that keeping joint2 and joint3 close helps
+      # preserve the safe horizontal torso posture around q_center=(0, 0.30,
+      # 0.30, 0, 0, 0). The optimizer may still move both joints, but any
+      # planned SysID trajectory must keep this relative band before SDK use.
+      - name: x5_joint2_joint3_parallel_band
+        left_joint: 2
+        right_joint: 3
+        min_delta_rad: -0.08
+        max_delta_rad: 0.08
   settle_before_record_s: 0.5
   max_translation_step_m: 0.005
   max_rotation_step_rad: 0.05

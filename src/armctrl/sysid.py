@@ -12,7 +12,10 @@ from armctrl.limits import (
     evaluate_joint_limit_samples,
 )
 from armctrl.simulation import TrajectoryPreviewer
-from armctrl.sysid_trajectory_backend import plan_sysid_trajectory
+from armctrl.sysid_trajectory_backend import (
+    evaluate_sysid_joint_relation_samples,
+    plan_sysid_trajectory,
+)
 from armctrl.workspace import WorkspaceSafetyConfig, evaluate_workspace_fk_clearance
 
 
@@ -160,6 +163,10 @@ class SysIdPlanner:
             dof=request.dof,
             max_joint_step_rad=safe_config.max_joint_step_rad,
         )
+        relation_decision = evaluate_sysid_joint_relation_samples(
+            Path(request.safe_config_path),
+            samples=q_samples,
+        )
         workspace_decision = evaluate_workspace_fk_clearance(
             Path(request.urdf_path),
             safe_config,
@@ -169,6 +176,7 @@ class SysIdPlanner:
             plan.safety.allowed
             and parameter_decision.status == "pass"
             and step_decision.status == "pass"
+            and relation_decision["status"] == "pass"
             and limit_decision.status == "pass"
             and workspace_decision.status == "pass"
         )
@@ -209,6 +217,7 @@ class SysIdPlanner:
             plan_reason=plan.safety.reason,
             parameter_status=parameter_decision.status,
             step_status=step_decision.status,
+            relation_status=str(relation_decision["status"]),
             limit_status=limit_decision.status,
             workspace_status=workspace_decision.status,
             simulation_status=simulation_status,
@@ -249,6 +258,7 @@ class SysIdPlanner:
                         "status": step_decision.status,
                         "violations": step_decision.violations,
                     },
+                    "joint_relation_check": relation_decision,
                     "workspace_clearance_check": {
                         "status": workspace_decision.status,
                         "method": workspace_decision.method,
@@ -293,6 +303,10 @@ class SysIdPlanner:
                     "status": step_decision.status,
                     "violation_count": len(step_decision.violations),
                 },
+                "joint_relation_check": {
+                    "status": relation_decision["status"],
+                    "violation_count": len(relation_decision["violations"]),
+                },
                 "workspace_clearance_check": {
                     "status": workspace_decision.status,
                     "method": workspace_decision.method,
@@ -331,6 +345,7 @@ def _safety_reason(
     plan_reason: str,
     parameter_status: str,
     step_status: str,
+    relation_status: str,
     limit_status: str,
     workspace_status: str,
     simulation_status: str,
@@ -341,6 +356,8 @@ def _safety_reason(
         return "planned sysid parameters exceed safety config"
     if step_status == "fail":
         return "planned trajectory exceeds max joint step"
+    if relation_status == "fail":
+        return "planned trajectory violates joint relation constraints"
     if limit_status == "fail":
         return "planned trajectory violates URDF joint limits"
     if workspace_status == "fail":

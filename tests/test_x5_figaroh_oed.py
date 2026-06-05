@@ -4,9 +4,11 @@ import os
 from pathlib import Path
 
 import numpy as np
+import pytest
 import yaml
 
 from armctrl.x5_figaroh_oed import (
+    X5JointRelationConstraintManager,
     _apply_request_limits_to_robot_model,
     _active_joint_indices,
     _write_figaroh_config,
@@ -158,6 +160,76 @@ def test_figaroh_config_uses_armctrl_safety_limits(tmp_path: Path) -> None:
     trajectory_params = config["identification"]["trajectory_params"][0]
     assert trajectory_params["n_wps"] == 5
     assert trajectory_params["t_s"] == 0.5
+
+
+def test_joint_relation_constraint_manager_appends_relation_bounds() -> None:
+    class FakeCB:
+        act_idxq = [0, 1, 2]
+        act_idxv = [0, 1, 2]
+
+        def get_full_config(self, _freq, _tps, _wps, _vel_wps, _acc_wps):
+            return (
+                np.asarray([[0.0], [0.01]]),
+                np.asarray(
+                    [
+                        [0.0, 0.30, 0.30],
+                        [0.0, 0.34, 0.29],
+                    ]
+                ),
+                np.zeros((2, 3)),
+                np.zeros((2, 3)),
+            )
+
+    class FakeBaseManager:
+        CB = FakeCB()
+        n_wps = 2
+        freq = 100.0
+
+        def get_variable_bounds(self):
+            return [0.0], [1.0]
+
+        def get_constraint_bounds(self, _ns):
+            return [0.0], [1.0]
+
+        def evaluate_constraints(
+            self,
+            _ns,
+            _x,
+            _opt_cb,
+            _tps,
+            _vel_wps,
+            _acc_wps,
+            _wp_init,
+        ):
+            return np.asarray([0.5])
+
+    manager = X5JointRelationConstraintManager(
+        FakeBaseManager(),
+        [
+            {
+                "name": "x5_joint2_joint3_parallel_band",
+                "left_joint": 2,
+                "right_joint": 3,
+                "min_delta_rad": -0.08,
+                "max_delta_rad": 0.08,
+            }
+        ],
+    )
+
+    lower, upper = manager.get_constraint_bounds(2)
+    values = manager.evaluate_constraints(
+        2,
+        np.asarray([0.0, 0.0, 0.0]),
+        {},
+        None,
+        None,
+        None,
+        np.asarray([0.0, 0.30, 0.30]),
+    )
+
+    assert lower == [0.0, -0.08, -0.08]
+    assert upper == [1.0, 0.08, 0.08]
+    assert values.tolist() == pytest.approx([0.5, 0.0, 0.05])
 
 
 def test_run_oed_uses_request_stack_reps_and_offsets_segment_times(

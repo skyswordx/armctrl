@@ -35,6 +35,15 @@ def _write_candidate(path: Path) -> None:
     )
 
 
+def _write_relation_violation_candidate(path: Path) -> None:
+    path.write_text(
+        "time_s,q_cmd_1,q_cmd_2,q_cmd_3,q_cmd_4,q_cmd_5,q_cmd_6\n"
+        "0.000000,0.000000,0.500000,0.250000,0.000000,0.000000,0.000000\n"
+        "0.010000,0.000000,0.500000,0.250000,0.000000,0.000000,0.000000\n",
+        encoding="utf-8",
+    )
+
+
 def test_fourier_backend_prefers_figaroh_oed_and_labels_fallback(
     tmp_path: Path,
 ) -> None:
@@ -51,8 +60,10 @@ def test_fourier_backend_prefers_figaroh_oed_and_labels_fallback(
     assert plan.backend["oed_valid"] is False
     assert plan.backend["hardware_execution_eligible"] is False
     assert plan.backend["next_gate"] == (
-        "run_figaroh_or_pinocchio_oed_before_sdk_execution"
+        "improve_figaroh_oed_until_regressor_quality_gate_passes"
     )
+    assert plan.backend["oed_quality_gate"]["status"] == "fail"
+    assert "external_figaroh_oed_not_run" in plan.backend["oed_quality_gate"]["reasons"]
     assert plan.backend["figaroh_vendor_reference"]["class"] == (
         "figaroh.optimal.BaseOptimalTrajectory"
     )
@@ -506,6 +517,130 @@ def test_cli_sysid_plan_records_external_oed_command_stdout_json(
     generated_by = manifest["trajectory_backend"]["candidate_source"]["generated_by"]
     assert generated_by["stdout_json"]["status"] == "ok"
     assert generated_by["stdout_json"]["backend"] == "figaroh"
+
+
+def test_cli_sysid_plan_extracts_figaroh_json_after_ipopt_log(
+    tmp_path: Path,
+) -> None:
+    output_dir = tmp_path / "plan"
+    command_path = tmp_path / "write_candidate_after_ipopt_log.py"
+    command_path.write_text(
+        "from pathlib import Path\n"
+        "import json\n"
+        "import os\n"
+        "candidate_path = Path(os.environ['ARMCTRL_CANDIDATE_TRAJECTORY'])\n"
+        "candidate_path.write_text(\n"
+        "    'time_s,q_cmd_1,q_cmd_2,q_cmd_3,q_cmd_4,q_cmd_5,q_cmd_6\\n'\n"
+        "    '0.000000,0.000000,0.300000,0.300000,0.000000,0.000000,0.000000\\n',\n"
+        "    encoding='utf-8',\n"
+        ")\n"
+        "print('Number of Iterations....: 200')\n"
+        "print('EXIT: Maximum Number of Iterations Exceeded.')\n"
+        "print(json.dumps({'status': 'ok', 'backend': 'figaroh'}))\n",
+        encoding="utf-8",
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "sysid",
+            "plan",
+            "fourier_multisine",
+            "--dof",
+            "6",
+            "--output",
+            str(output_dir),
+            "--json",
+            "--trajectory-command",
+            sys.executable,
+            str(command_path),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    backend = manifest["trajectory_backend"]
+    generated_by = backend["candidate_source"]["generated_by"]
+    assert generated_by["stdout_json"]["status"] == "ok"
+    assert generated_by["optimizer_convergence"]["status"] == "fail"
+    assert generated_by["optimizer_convergence"]["reason"] == "max_iterations_exceeded"
+    assert backend["oed_quality_gate"]["status"] == "fail"
+    assert "optimizer_not_converged" in backend["oed_quality_gate"]["reasons"]
+    assert backend["hardware_execution_eligible"] is False
+
+
+def test_figaroh_handoff_embeds_x5_joint_relation_constraints(
+    tmp_path: Path,
+) -> None:
+    plan_sysid_trajectory(_request("fourier_multisine", tmp_path))
+    figaroh_config = json.loads(
+        (tmp_path / "figaroh_trajectory_request.json").read_text(encoding="utf-8")
+    )
+
+    constraints = figaroh_config["constraints"]
+    assert constraints["joint_relation_constraints"] == [
+        {
+            "name": "x5_joint2_joint3_parallel_band",
+            "left_joint": 2,
+            "right_joint": 3,
+            "min_delta_rad": -0.08,
+            "max_delta_rad": 0.08,
+        }
+    ]
+
+
+def test_cli_sysid_plan_rejects_joint_relation_constraint_violation(
+    tmp_path: Path,
+) -> None:
+    output_dir = tmp_path / "plan"
+    candidate_path = tmp_path / "relation_violation_candidate.csv"
+    _write_relation_violation_candidate(candidate_path)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "sysid",
+            "plan",
+            "fourier_multisine",
+            "--dof",
+            "6",
+            "--sample-hz",
+            "100",
+            "--duration",
+            "0.01",
+            "--amplitude",
+            "0.05",
+            "--q-center",
+            "0",
+            "0.3",
+            "0.3",
+            "0",
+            "0",
+            "0",
+            "--candidate-trajectory",
+            str(candidate_path),
+            "--output",
+            str(output_dir),
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    relation_check = manifest["safety"]["checks"]["joint_relation_check"]
+    assert payload["safety"]["allowed"] is False
+    assert payload["safety"]["reason"] == "planned trajectory violates joint relation constraints"
+    assert relation_check["status"] == "fail"
+    assert relation_check["violations"][0]["constraint"] == "x5_joint2_joint3_parallel_band"
 
 
 def test_cli_sysid_plan_reports_external_oed_command_failure_as_json(
