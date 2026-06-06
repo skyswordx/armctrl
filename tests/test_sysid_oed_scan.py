@@ -72,6 +72,66 @@ def test_oed_scan_writes_candidate_safe_configs_and_summary(tmp_path: Path) -> N
     assert result["best_attempt"]["attempt_id"] in {
         attempt["attempt_id"] for attempt in result["attempts"]
     }
+    assert result["target_condition"] == {
+        "target_condition_number": 100.0,
+        "status": "not_evaluated",
+        "best_condition_number": result["best_attempt"]["condition_number"],
+        "best_attempt_id": result["best_attempt"]["attempt_id"],
+        "next_gate": "run_focused_oed_scan",
+    }
+
+
+def test_oed_scan_target_condition_marks_numeric_near_miss(tmp_path: Path) -> None:
+    class NumericNearMissPlanner:
+        def write_plan(self, _request):
+            class Plan:
+                def to_json(self):
+                    return {
+                        "trajectory_backend": {
+                            "oed_valid": False,
+                            "hardware_execution_eligible": False,
+                            "oed_quality_gate": {
+                                "status": "fail",
+                                "reasons": ["optimizer_not_converged"],
+                            },
+                            "condition_number": 106.28,
+                            "rank": 36,
+                            "timing_contract": {},
+                            "sampling_contract": {},
+                        },
+                        "safety": {"allowed": True, "reason": "ok"},
+                        "artifacts": {},
+                    }
+
+            return Plan()
+
+    request = OedScanRequest(
+        profile_name="fourier_multisine",
+        dof=6,
+        sample_hz=20.0,
+        q_center=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
+        urdf_path="configs/models/X5_camera.urdf",
+        safe_config_path="configs/x5.safe.yaml",
+        output_dir=tmp_path,
+        durations_s=(1.0,),
+        amplitudes_rad=(0.5,),
+        n_wps_values=(5,),
+        stack_reps_values=(1,),
+        random_seed_values=(3,),
+        ipopt_max_iterations=500,
+        ipopt_print_level=5,
+        condition_number_threshold=500.0,
+    )
+
+    result = OedScanRunner(planner=NumericNearMissPlanner()).run(request)
+
+    assert result["target_condition"] == {
+        "target_condition_number": 100.0,
+        "status": "not_met",
+        "best_condition_number": 106.28,
+        "best_attempt_id": "attempt-001",
+        "next_gate": "continue_focused_oed_search",
+    }
 
 
 def test_oed_scan_records_trajectory_command_fault_and_continues(

@@ -67,6 +67,7 @@ class OedScanRunner:
                     random_seed=int(random_seed),
                 )
             )
+        best_attempt = _best_attempt(attempts)
         result = {
             "schema": "armctrl.sysid_oed_scan.v1",
             "profile": request.profile_name,
@@ -75,7 +76,8 @@ class OedScanRunner:
             "base_safe_config": request.safe_config_path,
             "attempt_count": len(attempts),
             "attempts": attempts,
-            "best_attempt": _best_attempt(attempts),
+            "best_attempt": best_attempt,
+            "target_condition": _target_condition_summary(best_attempt),
             "best_diagnostic_attempt": _best_diagnostic_attempt(attempts),
             "artifacts": {
                 "summary": str(request.output_dir / "oed_scan_summary.json"),
@@ -277,6 +279,42 @@ def _best_attempt(attempts: list[dict[str, Any]]) -> dict[str, Any] | None:
         "rank": best.get("rank"),
         "parameters": best.get("parameters"),
         "output_dir": best.get("output_dir"),
+    }
+
+
+def _target_condition_summary(
+    best_attempt: dict[str, Any] | None,
+    *,
+    target_condition_number: float = 100.0,
+) -> dict[str, Any]:
+    if best_attempt is None:
+        return {
+            "target_condition_number": target_condition_number,
+            "status": "not_evaluated",
+            "best_condition_number": None,
+            "best_attempt_id": None,
+            "next_gate": "run_focused_oed_scan",
+        }
+    condition = best_attempt.get("condition_number")
+    if not isinstance(condition, int | float):
+        return {
+            "target_condition_number": target_condition_number,
+            "status": "not_evaluated",
+            "best_condition_number": condition,
+            "best_attempt_id": best_attempt.get("attempt_id"),
+            "next_gate": "run_focused_oed_scan",
+        }
+    status = "met" if float(condition) <= target_condition_number else "not_met"
+    return {
+        "target_condition_number": target_condition_number,
+        "status": status,
+        "best_condition_number": condition,
+        "best_attempt_id": best_attempt.get("attempt_id"),
+        "next_gate": (
+            "freeze_reproducible_candidate"
+            if status == "met"
+            else "continue_focused_oed_search"
+        ),
     }
 
 
