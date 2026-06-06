@@ -43,6 +43,11 @@ class WorkspaceSafetyConfig:
     max_sysid_amplitude_rad: float
     max_joint_step_rad: float
     settle_before_record_s: float
+    max_translation_step_m: float
+    max_rotation_step_rad: float
+    min_gripper_pos_m: float
+    max_gripper_pos_m: float
+    max_gripper_step_m: float
 
     @classmethod
     def from_yaml(cls, path: Path) -> "WorkspaceSafetyConfig":
@@ -90,6 +95,11 @@ class WorkspaceSafetyConfig:
             max_sysid_amplitude_rad=float(safety.get("max_sysid_amplitude_rad", 0.25)),
             max_joint_step_rad=float(safety.get("max_joint_step_rad", 0.01)),
             settle_before_record_s=float(safety.get("settle_before_record_s", 0.5)),
+            max_translation_step_m=float(safety.get("max_translation_step_m", 0.005)),
+            max_rotation_step_rad=float(safety.get("max_rotation_step_rad", 0.05)),
+            min_gripper_pos_m=float(safety.get("min_gripper_pos_m", 0.0)),
+            max_gripper_pos_m=float(safety.get("max_gripper_pos_m", 0.12)),
+            max_gripper_step_m=float(safety.get("max_gripper_step_m", 0.003)),
         )
 
 

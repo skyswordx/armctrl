@@ -48,6 +48,14 @@ class RecipeExecutor:
                 safety_gate_required=True,
                 reason="hardware backend is not configured",
             )
+        if self._hardware_backend != "sim":
+            return RecipeExecutorGate(
+                status="blocked",
+                state="idle",
+                hardware_backend=self._hardware_backend,
+                safety_gate_required=True,
+                reason="execution backend contract exists but only sim is enabled in clean rebuild",
+            )
         return RecipeExecutorGate(
             status="ready",
             state="idle",

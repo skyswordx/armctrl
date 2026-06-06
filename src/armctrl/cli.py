@@ -6,15 +6,42 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
+from armctrl.agent_flow import (
+    AgentFlowDoctor,
+    AgentFlowPlanRequest,
+    AgentFlowPlanner,
+    AgentFlowReviewer,
+)
 from armctrl.recipes import RecipeCatalog
 from armctrl.recipe_executor import RecipeExecutor
+from armctrl.recipe_runtime import (
+    DEFAULT_RECIPE_START,
+    RecipeAgentPresetContractExporter,
+    RecipeAgentPresetContractRequest,
+    RecipeEefSeedExporter,
+    RecipeEefSeedRequest,
+    RecipePlanRequest,
+    RecipePlanner,
+)
 from armctrl.release_status import release_notes, release_status
 from armctrl.lerobot_bridge import (
+    LeRobotAgentRuntimeHelperPlanRequest,
+    LeRobotAgentRuntimeHelperPlanner,
     LeRobotConfigPlanner,
     LeRobotConfigPlanRequest,
     LeRobotDoctor,
     LeRobotMetadataExport,
     LeRobotMetadataExporter,
+    LeRobotProcessorContractExporter,
+    LeRobotProcessorContractRequest,
+    LeRobotProcessorHelperPreviewRequest,
+    LeRobotProcessorHelperPreviewer,
+    LeRobotRolloutPreviewRequest,
+    LeRobotRolloutPreviewer,
+    LeRobotRolloutReviewRequest,
+    LeRobotRolloutReviewer,
+    LeRobotRolloutStageRequest,
+    LeRobotRolloutStager,
 )
 from armctrl.online_id import (
     OnlineAuditRequest,
@@ -22,9 +49,47 @@ from armctrl.online_id import (
     OnlineIdentificationPolicy,
     ParameterUpdate,
 )
+from armctrl.eef import (
+    EefAgentSessionPlanExporter,
+    EefAgentSessionPlanRequest,
+    EefAgentRuntimeContractExporter,
+    EefAgentRuntimeContractRequest,
+    EefDeltaPoseRequest,
+    EefDoctor,
+    EefSdkHelperPlanExporter,
+    EefSdkHelperPlanRequest,
+    EefLeRobotExportRequest,
+    EefLeRobotExporter,
+    EefMoveItHelperPlanExporter,
+    EefMoveItHelperPlanRequest,
+    EefMoveItServoExportRequest,
+    EefMoveItServoExporter,
+    EefPlanner,
+    EefPoseRequest,
+    EefPreviewSynthesisRequest,
+    EefPreviewSynthesizer,
+    EefReviewRequest,
+    EefReviewer,
+    EefRunnerPreviewRequest,
+    EefRunnerPreviewer,
+    EefSampleRunnerRequest,
+    EefSampleRunner,
+    EefRuntimePlanRequest,
+    EefRuntimeBridgeExportRequest,
+    EefRuntimeBridgeExporter,
+    EefRunnerContractRequest,
+    EefRunnerContractExporter,
+    EefRuntimePlanner,
+    EefSdkCartesianExportRequest,
+    EefSdkCartesianExporter,
+    EefStageTrajectoryRequest,
+    EefTrajectoryStager,
+    EefTwistRequest,
+)
 from armctrl.safety import SafetyGate
 from armctrl.simulation import SimulationDoctor, TrajectoryPreviewer
 from armctrl.sysid import SysIdPlanner, SysIdPlanRequest
+from armctrl.sysid_trajectory_backend import TrajectoryCommandError
 from armctrl.sysid_evidence import SysIdEvidenceImporter
 from armctrl.sysid_figaroh_adapter import FigarohEvidenceAdapter, FigarohHandoffWriter
 from armctrl.sysid_package import SysIdPackager
@@ -53,10 +118,37 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     plan_parser = recipe_subparsers.add_parser("plan")
     plan_parser.add_argument("name")
+    plan_parser.add_argument("--urdf-path", default="configs/models/X5_camera.urdf")
+    plan_parser.add_argument("--safe-config", default="configs/x5.safe.yaml")
+    plan_parser.add_argument("--output")
+    plan_parser.add_argument("--render", nargs="?", const="trajectory_preview.svg")
+    plan_parser.add_argument("--sample-hz", type=float, default=50.0)
+    plan_parser.add_argument("--duration", type=float, default=2.0)
+    plan_parser.add_argument("--start-joints", nargs="+", type=float)
     plan_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    recipe_seed_parser = recipe_subparsers.add_parser("export-eef-seed")
+    recipe_seed_parser.add_argument("--plan-dir", required=True)
+    recipe_seed_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    recipe_agent_contract_parser = recipe_subparsers.add_parser(
+        "export-agent-preset-contract"
+    )
+    recipe_agent_contract_parser.add_argument("--plan-dir", required=True)
+    recipe_agent_contract_parser.add_argument(
+        "--json", action="store_true", dest="as_json"
+    )
 
     execute_parser = recipe_subparsers.add_parser("execute")
     execute_parser.add_argument("name")
+    execute_parser.add_argument("--backend", default="not_configured")
+    execute_parser.add_argument("--urdf-path", default="configs/models/X5_camera.urdf")
+    execute_parser.add_argument("--safe-config", default="configs/x5.safe.yaml")
+    execute_parser.add_argument("--output")
+    execute_parser.add_argument("--render", nargs="?", const="trajectory_preview.svg")
+    execute_parser.add_argument("--sample-hz", type=float, default=50.0)
+    execute_parser.add_argument("--duration", type=float, default=2.0)
+    execute_parser.add_argument("--start-joints", nargs="+", type=float)
     execute_parser.add_argument("--json", action="store_true", dest="as_json")
 
     status_parser = recipe_subparsers.add_parser("status")
@@ -89,7 +181,67 @@ def main(argv: Sequence[str] | None = None) -> int:
     lerobot_config_parser.add_argument("--output-dir", default="outputs/train/act_arx5")
     lerobot_config_parser.add_argument("--job-name", default="act_arx5")
     lerobot_config_parser.add_argument("--policy-path")
+    lerobot_config_parser.add_argument("--eef-plan-dir")
     lerobot_config_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    lerobot_review_parser = lerobot_subparsers.add_parser("review-rollout")
+    lerobot_review_parser.add_argument("--eef-plan-dir", required=True)
+    lerobot_review_parser.add_argument("--trajectory")
+    lerobot_review_parser.add_argument("--urdf-path", default="configs/models/X5_camera.urdf")
+    lerobot_review_parser.add_argument("--safe-config", default="configs/x5.safe.yaml")
+    lerobot_review_parser.add_argument("--render")
+    lerobot_review_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    lerobot_stage_parser = lerobot_subparsers.add_parser("stage-rollout-trajectory")
+    lerobot_stage_parser.add_argument("--eef-plan-dir", required=True)
+    lerobot_stage_parser.add_argument("--trajectory", required=True)
+    lerobot_stage_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    lerobot_preview_parser = lerobot_subparsers.add_parser("preview-rollout")
+    lerobot_preview_parser.add_argument("--eef-plan-dir", required=True)
+    lerobot_preview_parser.add_argument("--model", default="X5")
+    lerobot_preview_parser.add_argument("--robot-interface", default="can0")
+    lerobot_preview_parser.add_argument("--urdf-path", default="configs/models/X5_camera.urdf")
+    lerobot_preview_parser.add_argument("--safe-config", default="configs/x5.safe.yaml")
+    lerobot_preview_parser.add_argument("--recipe-plan-dir")
+    lerobot_preview_parser.add_argument("--start-joints", nargs="+", type=float)
+    lerobot_preview_parser.add_argument("--sample-hz", type=float, default=50.0)
+    lerobot_preview_parser.add_argument("--duration", type=float, default=2.0)
+    lerobot_preview_parser.add_argument("--render")
+    lerobot_preview_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    lerobot_processor_parser = lerobot_subparsers.add_parser("export-processor-contract")
+    lerobot_processor_parser.add_argument("--eef-plan-dir", required=True)
+    lerobot_processor_parser.add_argument("--model", default="X5")
+    lerobot_processor_parser.add_argument("--robot-interface", default="can0")
+    lerobot_processor_parser.add_argument("--output")
+    lerobot_processor_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    lerobot_agent_runtime_helper_parser = lerobot_subparsers.add_parser(
+        "agent-runtime-helper-plan"
+    )
+    lerobot_agent_runtime_helper_parser.add_argument(
+        "--agent-runtime-contract", required=True
+    )
+    lerobot_agent_runtime_helper_parser.add_argument("--output")
+    lerobot_agent_runtime_helper_parser.add_argument(
+        "--json", action="store_true", dest="as_json"
+    )
+
+    lerobot_processor_helper_parser = lerobot_subparsers.add_parser(
+        "processor-helper-preview"
+    )
+    lerobot_processor_helper_parser.add_argument("--processor-contract", required=True)
+    lerobot_processor_helper_parser.add_argument(
+        "--urdf-path", default="configs/models/X5_camera.urdf"
+    )
+    lerobot_processor_helper_parser.add_argument(
+        "--safe-config", default="configs/x5.safe.yaml"
+    )
+    lerobot_processor_helper_parser.add_argument("--render")
+    lerobot_processor_helper_parser.add_argument(
+        "--json", action="store_true", dest="as_json"
+    )
 
     lerobot_metadata_parser = lerobot_subparsers.add_parser("export-metadata")
     lerobot_metadata_parser.add_argument("--dataset-repo-id", required=True)
@@ -102,8 +254,232 @@ def main(argv: Sequence[str] | None = None) -> int:
         dest="as_json",
     )
 
+    agent_flow_parser = subparsers.add_parser("agent-flow")
+    agent_flow_subparsers = agent_flow_parser.add_subparsers(
+        dest="agent_flow_command",
+        required=True,
+    )
+
+    agent_flow_plan_parser = agent_flow_subparsers.add_parser("plan")
+    agent_flow_plan_parser.add_argument("--preset", required=True)
+    agent_flow_plan_parser.add_argument(
+        "--eef-mode",
+        required=True,
+        choices=["pose_absolute", "pose_delta", "twist"],
+    )
+    agent_flow_plan_parser.add_argument(
+        "--backend",
+        required=True,
+        choices=["sdk_cartesian", "moveit_servo", "lerobot_rollout"],
+    )
+    agent_flow_plan_parser.add_argument("--frame", default="eef_link")
+    agent_flow_plan_parser.add_argument("--position", nargs=3, type=float)
+    agent_flow_plan_parser.add_argument("--rpy", nargs=3, type=float)
+    agent_flow_plan_parser.add_argument("--delta-position", nargs=3, type=float)
+    agent_flow_plan_parser.add_argument("--delta-rpy", nargs=3, type=float)
+    agent_flow_plan_parser.add_argument("--linear", nargs=3, type=float)
+    agent_flow_plan_parser.add_argument("--angular", nargs=3, type=float)
+    agent_flow_plan_parser.add_argument("--control-period-s", type=float, default=0.1)
+    agent_flow_plan_parser.add_argument("--model", default="X5")
+    agent_flow_plan_parser.add_argument("--interface", default="can0")
+    agent_flow_plan_parser.add_argument(
+        "--policy-path",
+        default="outputs/train/act_arx5/checkpoints/last/pretrained_model",
+    )
+    agent_flow_plan_parser.add_argument("--safe-config", default="configs/x5.safe.yaml")
+    agent_flow_plan_parser.add_argument("--urdf-path", default="configs/models/X5_camera.urdf")
+    agent_flow_plan_parser.add_argument("--output", required=True)
+    agent_flow_plan_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    agent_flow_doctor_parser = agent_flow_subparsers.add_parser("doctor")
+    agent_flow_doctor_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    agent_flow_review_parser = agent_flow_subparsers.add_parser("review")
+    agent_flow_review_parser.add_argument("--contract", required=True)
+    agent_flow_review_parser.add_argument("--json", action="store_true", dest="as_json")
+
     sysid_parser = subparsers.add_parser("sysid")
     sysid_subparsers = sysid_parser.add_subparsers(dest="sysid_command", required=True)
+
+    eef_parser = subparsers.add_parser("eef")
+    eef_subparsers = eef_parser.add_subparsers(dest="eef_command", required=True)
+
+    eef_doctor_parser = eef_subparsers.add_parser("doctor")
+    eef_doctor_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    eef_twist_parser = eef_subparsers.add_parser("plan-twist")
+    eef_twist_parser.add_argument("--frame", default="eef_link")
+    eef_twist_parser.add_argument("--linear", nargs=3, type=float, required=True)
+    eef_twist_parser.add_argument("--angular", nargs=3, type=float, required=True)
+    eef_twist_parser.add_argument("--backend", default="moveit_servo")
+    eef_twist_parser.add_argument("--control-period-s", type=float, default=0.1)
+    eef_twist_parser.add_argument("--output")
+    eef_twist_parser.add_argument("--safe-config", default="configs/x5.safe.yaml")
+    eef_twist_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    eef_pose_parser = eef_subparsers.add_parser("plan-pose")
+    eef_pose_parser.add_argument("--frame", default="eef_link")
+    eef_pose_parser.add_argument("--position", nargs=3, type=float, required=True)
+    eef_pose_parser.add_argument("--rpy", nargs=3, type=float, required=True)
+    eef_pose_parser.add_argument("--backend", default="pink")
+    eef_pose_parser.add_argument("--output")
+    eef_pose_parser.add_argument("--safe-config", default="configs/x5.safe.yaml")
+    eef_pose_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    eef_delta_pose_parser = eef_subparsers.add_parser("plan-delta-pose")
+    eef_delta_pose_parser.add_argument("--frame", default="eef_link")
+    eef_delta_pose_parser.add_argument("--delta-position", nargs=3, type=float, required=True)
+    eef_delta_pose_parser.add_argument("--delta-rpy", nargs=3, type=float, required=True)
+    eef_delta_pose_parser.add_argument("--backend", default="sdk_cartesian")
+    eef_delta_pose_parser.add_argument("--control-period-s", type=float, default=0.1)
+    eef_delta_pose_parser.add_argument("--output")
+    eef_delta_pose_parser.add_argument("--safe-config", default="configs/x5.safe.yaml")
+    eef_delta_pose_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    eef_review_parser = eef_subparsers.add_parser("review")
+    eef_review_parser.add_argument("--plan-dir", required=True)
+    eef_review_parser.add_argument("--trajectory")
+    eef_review_parser.add_argument("--urdf-path", default="configs/models/X5_camera.urdf")
+    eef_review_parser.add_argument("--safe-config", default="configs/x5.safe.yaml")
+    eef_review_parser.add_argument("--render")
+    eef_review_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    eef_stage_parser = eef_subparsers.add_parser("stage-trajectory")
+    eef_stage_parser.add_argument("--plan-dir", required=True)
+    eef_stage_parser.add_argument("--trajectory", required=True)
+    eef_stage_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    eef_synthesize_parser = eef_subparsers.add_parser("synthesize-preview")
+    eef_synthesize_parser.add_argument("--plan-dir", required=True)
+    eef_synthesize_parser.add_argument("--backend", default="pink")
+    eef_synthesize_parser.add_argument("--urdf-path", default="configs/models/X5_camera.urdf")
+    eef_synthesize_parser.add_argument("--safe-config", default="configs/x5.safe.yaml")
+    eef_synthesize_parser.add_argument("--recipe-plan-dir")
+    eef_synthesize_parser.add_argument("--start-joints", nargs="+", type=float)
+    eef_synthesize_parser.add_argument("--sample-hz", type=float, default=50.0)
+    eef_synthesize_parser.add_argument("--duration", type=float, default=2.0)
+    eef_synthesize_parser.add_argument("--render")
+    eef_synthesize_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    eef_preview_runner_parser = eef_subparsers.add_parser("preview-runner")
+    eef_preview_runner_parser.add_argument("--plan-dir", required=True)
+    eef_preview_runner_parser.add_argument(
+        "--backend",
+        choices=["sdk_cartesian", "moveit_servo", "lerobot_rollout"],
+    )
+    eef_preview_runner_parser.add_argument("--model", default="X5")
+    eef_preview_runner_parser.add_argument("--interface", default="can0")
+    eef_preview_runner_parser.add_argument("--urdf-path", default="configs/models/X5_camera.urdf")
+    eef_preview_runner_parser.add_argument("--safe-config", default="configs/x5.safe.yaml")
+    eef_preview_runner_parser.add_argument("--recipe-plan-dir")
+    eef_preview_runner_parser.add_argument("--start-joints", nargs="+", type=float)
+    eef_preview_runner_parser.add_argument("--sample-hz", type=float, default=50.0)
+    eef_preview_runner_parser.add_argument("--duration", type=float, default=2.0)
+    eef_preview_runner_parser.add_argument("--render")
+    eef_preview_runner_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    eef_sample_runner_parser = eef_subparsers.add_parser("sample-runner")
+    eef_sample_runner_parser.add_argument("--runner-contract", required=True)
+    eef_sample_runner_parser.add_argument("--urdf-path", default="configs/models/X5_camera.urdf")
+    eef_sample_runner_parser.add_argument("--safe-config", default="configs/x5.safe.yaml")
+    eef_sample_runner_parser.add_argument("--recipe-plan-dir")
+    eef_sample_runner_parser.add_argument("--start-joints", nargs="+", type=float)
+    eef_sample_runner_parser.add_argument("--sample-hz", type=float, default=50.0)
+    eef_sample_runner_parser.add_argument("--duration", type=float, default=2.0)
+    eef_sample_runner_parser.add_argument("--render")
+    eef_sample_runner_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    eef_sdk_helper_plan_parser = eef_subparsers.add_parser("export-sdk-helper-plan")
+    eef_sdk_helper_plan_parser.add_argument("--runner-contract", required=True)
+    eef_sdk_helper_plan_parser.add_argument("--output")
+    eef_sdk_helper_plan_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    eef_moveit_helper_plan_parser = eef_subparsers.add_parser(
+        "export-moveit-helper-plan"
+    )
+    eef_moveit_helper_plan_parser.add_argument("--runner-contract", required=True)
+    eef_moveit_helper_plan_parser.add_argument("--output")
+    eef_moveit_helper_plan_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    eef_runtime_parser = eef_subparsers.add_parser("runtime-plan")
+    eef_runtime_parser.add_argument(
+        "--backend",
+        choices=["sdk_cartesian", "moveit_servo", "lerobot_rollout"],
+    )
+    eef_runtime_parser.add_argument("--plan-dir")
+    eef_runtime_parser.add_argument("--model", default="X5")
+    eef_runtime_parser.add_argument("--interface", default="can0")
+    eef_runtime_parser.add_argument("--policy-path")
+    eef_runtime_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    eef_lerobot_export_parser = eef_subparsers.add_parser("export-lerobot-action")
+    eef_lerobot_export_parser.add_argument("--plan-dir", required=True)
+    eef_lerobot_export_parser.add_argument("--output")
+    eef_lerobot_export_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    eef_sdk_export_parser = eef_subparsers.add_parser("export-sdk-cartesian")
+    eef_sdk_export_parser.add_argument("--plan-dir", required=True)
+    eef_sdk_export_parser.add_argument("--model", default="X5")
+    eef_sdk_export_parser.add_argument("--interface", default="can0")
+    eef_sdk_export_parser.add_argument("--output")
+    eef_sdk_export_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    eef_moveit_export_parser = eef_subparsers.add_parser("export-moveit-servo")
+    eef_moveit_export_parser.add_argument("--plan-dir", required=True)
+    eef_moveit_export_parser.add_argument("--output")
+    eef_moveit_export_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    eef_runtime_bridge_export_parser = eef_subparsers.add_parser("export-runtime-bridge")
+    eef_runtime_bridge_export_parser.add_argument("--plan-dir", required=True)
+    eef_runtime_bridge_export_parser.add_argument(
+        "--backend",
+        choices=["sdk_cartesian", "moveit_servo", "lerobot_rollout"],
+    )
+    eef_runtime_bridge_export_parser.add_argument("--model", default="X5")
+    eef_runtime_bridge_export_parser.add_argument("--interface", default="can0")
+    eef_runtime_bridge_export_parser.add_argument("--output")
+    eef_runtime_bridge_export_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    eef_runner_contract_parser = eef_subparsers.add_parser("export-runner-contract")
+    eef_runner_contract_parser.add_argument("--plan-dir", required=True)
+    eef_runner_contract_parser.add_argument(
+        "--backend",
+        choices=["sdk_cartesian", "moveit_servo", "lerobot_rollout"],
+    )
+    eef_runner_contract_parser.add_argument("--model", default="X5")
+    eef_runner_contract_parser.add_argument("--interface", default="can0")
+    eef_runner_contract_parser.add_argument("--output")
+    eef_runner_contract_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    eef_agent_runtime_contract_parser = eef_subparsers.add_parser(
+        "export-agent-runtime-contract"
+    )
+    eef_agent_runtime_contract_parser.add_argument("--plan-dir", required=True)
+    eef_agent_runtime_contract_parser.add_argument(
+        "--backend",
+        choices=["sdk_cartesian", "moveit_servo", "lerobot_rollout"],
+    )
+    eef_agent_runtime_contract_parser.add_argument("--model", default="X5")
+    eef_agent_runtime_contract_parser.add_argument("--interface", default="can0")
+    eef_agent_runtime_contract_parser.add_argument("--output")
+    eef_agent_runtime_contract_parser.add_argument(
+        "--json", action="store_true", dest="as_json"
+    )
+
+    eef_agent_session_plan_parser = eef_subparsers.add_parser(
+        "export-agent-session-plan"
+    )
+    eef_agent_session_plan_parser.add_argument("--plan-dir", required=True)
+    eef_agent_session_plan_parser.add_argument(
+        "--backend",
+        choices=["sdk_cartesian", "moveit_servo", "lerobot_rollout"],
+    )
+    eef_agent_session_plan_parser.add_argument("--model", default="X5")
+    eef_agent_session_plan_parser.add_argument("--interface", default="can0")
+    eef_agent_session_plan_parser.add_argument("--output")
+    eef_agent_session_plan_parser.add_argument(
+        "--json", action="store_true", dest="as_json"
+    )
 
     sim_parser = subparsers.add_parser("sim")
     sim_subparsers = sim_parser.add_subparsers(dest="sim_command", required=True)
@@ -129,9 +505,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     sysid_plan_parser.add_argument("--q-center", nargs="+", type=float)
     sysid_plan_parser.add_argument("--urdf-path", default="configs/models/X5_camera.urdf")
     sysid_plan_parser.add_argument("--safe-config", default="configs/x5.safe.yaml")
+    sysid_plan_parser.add_argument("--candidate-trajectory")
     sysid_plan_parser.add_argument("--output")
     sysid_plan_parser.add_argument("--render", nargs="?", const="trajectory_preview.svg")
     sysid_plan_parser.add_argument("--json", action="store_true", dest="as_json")
+    sysid_plan_parser.add_argument("--trajectory-command", nargs=argparse.REMAINDER)
 
     sysid_run_parser = sysid_subparsers.add_parser("run")
     sysid_run_parser.add_argument("profile")
@@ -238,6 +616,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     release_notes_parser.add_argument("--json", action="store_true", dest="as_json")
 
     args = parser.parse_args(argv)
+    if not hasattr(args, "candidate_trajectory"):
+        args.candidate_trajectory = None
     catalog = RecipeCatalog.default()
 
     if args.command == "recipe" and args.recipe_command == "list":
@@ -251,7 +631,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "recipe" and args.recipe_command == "plan":
         recipe = catalog.get(args.name)
         safety = SafetyGate().evaluate(recipe, plan_only=True)
-        payload = {
+        payload: dict[str, object] = {
             "status": "ok",
             "schema": "armctrl.recipe_plan.v1",
             "plan_only": True,
@@ -259,12 +639,91 @@ def main(argv: Sequence[str] | None = None) -> int:
             "safety": safety.to_json(),
             "steps": [step.to_json() for step in recipe.steps],
         }
+        if args.output:
+            start_joints = tuple(args.start_joints or DEFAULT_RECIPE_START)
+            if len(start_joints) != 6:
+                parser.error("--start-joints must provide 6 values")
+            render_path = None
+            if args.render is not None:
+                render_candidate = Path(args.render)
+                render_path = (
+                    Path(args.output) / render_candidate
+                    if not render_candidate.is_absolute()
+                    else render_candidate
+                )
+            runtime = RecipePlanner(catalog).write_plan(
+                RecipePlanRequest(
+                    recipe_name=args.name,
+                    start_joints=start_joints,
+                    sample_hz=args.sample_hz,
+                    duration_s=args.duration,
+                    urdf_path=args.urdf_path,
+                    safe_config_path=args.safe_config,
+                    output_dir=Path(args.output),
+                    render_path=render_path,
+                )
+            )
+            payload["artifacts"] = runtime["artifacts"]
+            payload["agent_runtime_profile"] = runtime["agent_runtime_profile"]
+            payload["artifact_safety"] = runtime["artifact_safety"]
+            payload["next_steps"] = [
+                f"uv run armctrl recipe export-eef-seed --plan-dir {args.output} --json",
+                f"uv run armctrl recipe execute {args.name} --backend sim --output {args.output} --json",
+            ]
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "recipe" and args.recipe_command == "export-eef-seed":
+        try:
+            result = RecipeEefSeedExporter().export(
+                RecipeEefSeedRequest(plan_dir=Path(args.plan_dir))
+            )
+        except FileNotFoundError as error:
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.recipe_eef_seed.v1",
+                "error": {
+                    "code": "missing_recipe_plan_artifacts",
+                    "message": str(error),
+                },
+                "movement_allowed": False,
+                "plan_dir": str(Path(args.plan_dir)),
+                "next_gate": "run armctrl recipe plan <name> --output <dir> --json before exporting an EEF seed",
+            }
+            _emit(payload, as_json=args.as_json)
+            return 3
+        payload = {"status": "ok", **result}
+        return _emit(payload, as_json=args.as_json)
+
+    if (
+        args.command == "recipe"
+        and args.recipe_command == "export-agent-preset-contract"
+    ):
+        try:
+            result = RecipeAgentPresetContractExporter().export(
+                RecipeAgentPresetContractRequest(plan_dir=Path(args.plan_dir))
+            )
+        except FileNotFoundError as error:
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.recipe_agent_preset_contract.v1",
+                "error": {
+                    "code": "missing_recipe_plan_artifacts",
+                    "message": str(error),
+                },
+                "movement_allowed": False,
+                "plan_dir": str(Path(args.plan_dir)),
+                "next_gate": "run armctrl recipe plan <name> --output <dir> --json before exporting an Agent preset contract",
+            }
+            _emit(payload, as_json=args.as_json)
+            return 3
+        payload = {"status": "ok", **result}
         return _emit(payload, as_json=args.as_json)
 
     if args.command == "recipe" and args.recipe_command == "execute":
         recipe = catalog.get(args.name)
-        safety = SafetyGate().evaluate(recipe, plan_only=False)
-        executor = RecipeExecutor().evaluate(safety)
+        plan_only = args.backend == "sim"
+        safety = SafetyGate().evaluate(recipe, plan_only=plan_only)
+        executor = RecipeExecutor(hardware_backend=args.backend).evaluate(safety)
         payload = {
             "status": "rejected",
             "schema": "armctrl.recipe_execution.v1",
@@ -273,6 +732,45 @@ def main(argv: Sequence[str] | None = None) -> int:
             "executor": executor.to_json(),
             "steps": [step.to_json() for step in recipe.steps],
         }
+        if args.backend == "sim":
+            start_joints = tuple(args.start_joints or DEFAULT_RECIPE_START)
+            if len(start_joints) != 6:
+                parser.error("--start-joints must provide 6 values")
+            output_dir = Path(args.output) if args.output else Path("runs/recipe-sim-preview")
+            render_path = None
+            if args.render is not None:
+                render_candidate = Path(args.render)
+                render_path = (
+                    output_dir / render_candidate
+                    if not render_candidate.is_absolute()
+                    else render_candidate
+                )
+            runtime = RecipePlanner(catalog).write_plan(
+                RecipePlanRequest(
+                    recipe_name=args.name,
+                    start_joints=start_joints,
+                    sample_hz=args.sample_hz,
+                    duration_s=args.duration,
+                    urdf_path=args.urdf_path,
+                    safe_config_path=args.safe_config,
+                    output_dir=output_dir,
+                    render_path=render_path,
+                )
+            )
+            payload["simulation_gate"] = runtime["artifact_safety"]
+            payload["artifacts"] = runtime["artifacts"]
+            payload["handoff"] = runtime["handoff"]
+            payload["agent_runtime_profile"] = runtime["agent_runtime_profile"]
+            payload["next_steps"] = [
+                runtime["handoff"]["suggested_cli"]["export_eef_seed"],
+                "uv run armctrl recipe status --json",
+                runtime["handoff"]["suggested_cli"][
+                    "eef_synthesize_preview_from_recipe"
+                ],
+            ]
+            if executor.status == "ready" and runtime["artifact_safety"]["allowed"] is True:
+                payload["status"] = "ok"
+                return _emit(payload, as_json=args.as_json)
         _emit(payload, as_json=args.as_json)
         return 3
 
@@ -323,6 +821,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 output_dir=args.output_dir,
                 job_name=args.job_name,
                 policy_path=args.policy_path,
+                eef_plan_dir=Path(args.eef_plan_dir) if args.eef_plan_dir else None,
             )
         )
         payload = {"status": "ok", **result}
@@ -340,6 +839,291 @@ def main(argv: Sequence[str] | None = None) -> int:
         payload = {"status": "ok", **result}
         return _emit(payload, as_json=args.as_json)
 
+    if args.command == "agent-flow" and args.agent_flow_command == "plan":
+        if args.eef_mode == "pose_absolute" and (
+            args.position is None or args.rpy is None
+        ):
+            parser.error(
+                "--position and --rpy are required for --eef-mode pose_absolute"
+            )
+        if args.eef_mode == "pose_delta" and (
+            args.delta_position is None or args.delta_rpy is None
+        ):
+            parser.error(
+                "--delta-position and --delta-rpy are required for --eef-mode pose_delta"
+            )
+        if args.eef_mode == "twist" and (
+            args.linear is None or args.angular is None
+        ):
+            parser.error("--linear and --angular are required for --eef-mode twist")
+        result = AgentFlowPlanner().plan(
+            AgentFlowPlanRequest(
+                preset=args.preset,
+                eef_mode=args.eef_mode,
+                backend=args.backend,
+                output_dir=Path(args.output),
+                safe_config_path=args.safe_config,
+                urdf_path=args.urdf_path,
+                frame=args.frame,
+                position_m=tuple(args.position) if args.position else None,
+                rpy_rad=tuple(args.rpy) if args.rpy else None,
+                delta_position_m=(
+                    tuple(args.delta_position) if args.delta_position else None
+                ),
+                delta_rpy_rad=tuple(args.delta_rpy) if args.delta_rpy else None,
+                linear_mps=tuple(args.linear) if args.linear else None,
+                angular_rps=tuple(args.angular) if args.angular else None,
+                control_period_s=args.control_period_s,
+                model=args.model,
+                interface=args.interface,
+                policy_path=args.policy_path,
+            )
+        )
+        payload = {"status": "ok", **result}
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "agent-flow" and args.agent_flow_command == "doctor":
+        payload = {"status": "ok", **AgentFlowDoctor().run()}
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "agent-flow" and args.agent_flow_command == "review":
+        payload = {
+            "status": "ok",
+            **AgentFlowReviewer().review(Path(args.contract)),
+        }
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "lerobot" and args.lerobot_command == "review-rollout":
+        result = LeRobotRolloutReviewer().review(
+            LeRobotRolloutReviewRequest(
+                eef_plan_dir=Path(args.eef_plan_dir),
+                trajectory_path=Path(args.trajectory) if args.trajectory else None,
+                urdf_path=Path(args.urdf_path),
+                safe_config_path=Path(args.safe_config),
+                render_path=Path(args.render) if args.render else None,
+            )
+        )
+        payload = {"status": "ok", **result}
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "lerobot" and args.lerobot_command == "stage-rollout-trajectory":
+        result = LeRobotRolloutStager().stage(
+            LeRobotRolloutStageRequest(
+                eef_plan_dir=Path(args.eef_plan_dir),
+                trajectory_path=Path(args.trajectory),
+            )
+        )
+        payload = {"status": "ok", **result}
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "lerobot" and args.lerobot_command == "preview-rollout":
+        start_joints = tuple(args.start_joints) if args.start_joints else None
+        if start_joints is not None and len(start_joints) != 6:
+            parser.error("--start-joints must provide 6 values")
+        try:
+            result = LeRobotRolloutPreviewer().preview(
+                LeRobotRolloutPreviewRequest(
+                    eef_plan_dir=Path(args.eef_plan_dir),
+                    model=args.model,
+                    robot_interface=args.robot_interface,
+                    urdf_path=Path(args.urdf_path),
+                    safe_config_path=Path(args.safe_config),
+                    recipe_plan_dir=Path(args.recipe_plan_dir) if args.recipe_plan_dir else None,
+                    start_joints=start_joints,
+                    sample_hz=args.sample_hz,
+                    duration_s=args.duration,
+                    render_path=Path(args.render) if args.render else None,
+                )
+            )
+        except FileNotFoundError as error:
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.lerobot_rollout_preview.v1",
+                "error": {
+                    "code": (
+                        "missing_recipe_plan_artifacts"
+                        if args.recipe_plan_dir
+                        else "missing_eef_plan_artifacts"
+                    ),
+                    "message": str(error),
+                },
+                "movement_allowed": False,
+                "eef_plan_dir": str(Path(args.eef_plan_dir)),
+                "recipe_plan_dir": str(Path(args.recipe_plan_dir)) if args.recipe_plan_dir else None,
+                "next_gate": (
+                    "run armctrl recipe plan <name> --output <dir> --json before using --recipe-plan-dir for lerobot preview-rollout"
+                    if args.recipe_plan_dir
+                    else "run armctrl eef plan-pose or plan-twist with --output <dir> before lerobot preview-rollout"
+                ),
+            }
+            _emit(payload, as_json=args.as_json)
+            return 3
+        payload = {"status": "ok", **result}
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "lerobot" and args.lerobot_command == "export-processor-contract":
+        try:
+            result = LeRobotProcessorContractExporter().export(
+                LeRobotProcessorContractRequest(
+                    eef_plan_dir=Path(args.eef_plan_dir),
+                    model=args.model,
+                    robot_interface=args.robot_interface,
+                    output_path=Path(args.output) if args.output else None,
+                )
+            )
+        except FileNotFoundError as error:
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.lerobot_eef_processor_contract.v1",
+                "error": {
+                    "code": "missing_eef_plan_artifacts",
+                    "message": str(error),
+                },
+                "movement_allowed": False,
+                "eef_plan_dir": str(Path(args.eef_plan_dir)),
+                "next_gate": "run armctrl eef plan-pose or plan-twist with --output <dir> before exporting the LeRobot processor contract",
+            }
+            _emit(payload, as_json=args.as_json)
+            return 3
+        payload = {"status": "ok", **result}
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "lerobot" and args.lerobot_command == "agent-runtime-helper-plan":
+        contract_path = Path(args.agent_runtime_contract)
+        try:
+            result = LeRobotAgentRuntimeHelperPlanner().plan(
+                LeRobotAgentRuntimeHelperPlanRequest(
+                    agent_runtime_contract_path=contract_path,
+                    output_path=Path(args.output) if args.output else None,
+                )
+            )
+        except FileNotFoundError as error:
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.lerobot_agent_runtime_helper_plan.v1",
+                "error": {"code": "missing_agent_runtime_contract", "message": str(error)},
+                "movement_allowed": False,
+                "agent_runtime_contract_path": str(contract_path),
+                "next_gate": (
+                    "export a valid armctrl.eef_agent_runtime_contract.v1 artifact "
+                    "before using this helper plan"
+                ),
+            }
+            return _emit(payload, as_json=args.as_json)
+        except json.JSONDecodeError as error:
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.lerobot_agent_runtime_helper_plan.v1",
+                "error": {
+                    "code": "invalid_agent_runtime_contract_json",
+                    "message": str(error),
+                },
+                "movement_allowed": False,
+                "agent_runtime_contract_path": str(contract_path),
+                "next_gate": "export a valid JSON agent runtime contract before using this helper plan",
+            }
+            return _emit(payload, as_json=args.as_json)
+        except ValueError as error:
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.lerobot_agent_runtime_helper_plan.v1",
+                "error": {"code": "invalid_agent_runtime_contract", "message": str(error)},
+                "movement_allowed": False,
+                "agent_runtime_contract_path": str(contract_path),
+            }
+            _emit(payload, as_json=args.as_json)
+            return 3
+        except RuntimeError as error:
+            resolved_backend = None
+            if contract_path.exists():
+                try:
+                    resolved_backend = json.loads(
+                        contract_path.read_text(encoding="utf-8")
+                    ).get("resolved_backend")
+                except json.JSONDecodeError:
+                    resolved_backend = None
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.lerobot_agent_runtime_helper_plan.v1",
+                "error": {"code": "unsupported_runtime_backend", "message": str(error)},
+                "movement_allowed": False,
+                "agent_runtime_contract_path": str(contract_path),
+                "resolved_backend": resolved_backend,
+                "next_gate": "use this helper plan only with lerobot_rollout agent runtime contracts",
+            }
+            _emit(payload, as_json=args.as_json)
+            return 3
+        return _emit({"status": "ok", **result}, as_json=args.as_json)
+
+    if args.command == "lerobot" and args.lerobot_command == "processor-helper-preview":
+        contract_path = Path(args.processor_contract)
+        try:
+            result = LeRobotProcessorHelperPreviewer().preview(
+                LeRobotProcessorHelperPreviewRequest(
+                    processor_contract_path=contract_path,
+                    urdf_path=Path(args.urdf_path),
+                    safe_config_path=Path(args.safe_config),
+                    render_path=Path(args.render) if args.render else None,
+                )
+            )
+        except FileNotFoundError as error:
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.lerobot_processor_helper_preview.v1",
+                "error": {"code": "missing_processor_contract", "message": str(error)},
+                "movement_allowed": False,
+                "processor_contract_path": str(contract_path),
+                "next_gate": (
+                    "export a valid armctrl.lerobot_eef_processor_contract.v1 artifact "
+                    "before using this helper preview"
+                ),
+            }
+            return _emit(payload, as_json=args.as_json)
+        except json.JSONDecodeError as error:
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.lerobot_processor_helper_preview.v1",
+                "error": {
+                    "code": "invalid_processor_contract_json",
+                    "message": str(error),
+                },
+                "movement_allowed": False,
+                "processor_contract_path": str(contract_path),
+                "next_gate": "export a valid JSON processor contract before using this helper preview",
+            }
+            return _emit(payload, as_json=args.as_json)
+        except ValueError as error:
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.lerobot_processor_helper_preview.v1",
+                "error": {"code": "invalid_processor_contract", "message": str(error)},
+                "movement_allowed": False,
+                "processor_contract_path": str(contract_path),
+            }
+            _emit(payload, as_json=args.as_json)
+            return 3
+        except RuntimeError as error:
+            resolved_backend = None
+            if contract_path.exists():
+                try:
+                    resolved_backend = json.loads(
+                        contract_path.read_text(encoding="utf-8")
+                    ).get("runner_contract", {}).get("resolved_backend")
+                except json.JSONDecodeError:
+                    resolved_backend = None
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.lerobot_processor_helper_preview.v1",
+                "error": {"code": "unsupported_processor_backend", "message": str(error)},
+                "movement_allowed": False,
+                "processor_contract_path": str(contract_path),
+                "resolved_backend": resolved_backend,
+                "next_gate": "use this helper preview only with lerobot_rollout processor contracts",
+            }
+            _emit(payload, as_json=args.as_json)
+            return 3
+        return _emit({"status": "ok", **result}, as_json=args.as_json)
+
     if args.command == "sim" and args.sim_command == "doctor":
         payload = {"status": "ok", **SimulationDoctor().run()}
         return _emit(payload, as_json=args.as_json)
@@ -351,6 +1135,447 @@ def main(argv: Sequence[str] | None = None) -> int:
             safe_config_path=Path(args.safe_config),
             backend=args.backend,
             render_path=Path(args.render) if args.render else None,
+        )
+        payload = {"status": "ok", **result}
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "eef" and args.eef_command == "doctor":
+        payload = {"status": "ok", **EefDoctor().run()}
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "eef" and args.eef_command == "plan-twist":
+        result = EefPlanner().plan_twist(
+            EefTwistRequest(
+                frame=args.frame,
+                linear_mps=tuple(args.linear),
+                angular_rps=tuple(args.angular),
+                backend=args.backend,
+                safe_config_path=args.safe_config,
+                control_period_s=args.control_period_s,
+                output_dir=Path(args.output) if args.output else None,
+            )
+        )
+        payload = {"status": "ok", **result}
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "eef" and args.eef_command == "plan-pose":
+        result = EefPlanner().plan_pose(
+            EefPoseRequest(
+                frame=args.frame,
+                position_m=tuple(args.position),
+                rpy_rad=tuple(args.rpy),
+                backend=args.backend,
+                safe_config_path=args.safe_config,
+                output_dir=Path(args.output) if args.output else None,
+            )
+        )
+        payload = {"status": "ok", **result}
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "eef" and args.eef_command == "plan-delta-pose":
+        result = EefPlanner().plan_delta_pose(
+            EefDeltaPoseRequest(
+                frame=args.frame,
+                delta_position_m=tuple(args.delta_position),
+                delta_rpy_rad=tuple(args.delta_rpy),
+                backend=args.backend,
+                safe_config_path=args.safe_config,
+                control_period_s=args.control_period_s,
+                output_dir=Path(args.output) if args.output else None,
+            )
+        )
+        payload = {"status": "ok", **result}
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "eef" and args.eef_command == "review":
+        result = EefReviewer().review(
+            EefReviewRequest(
+                plan_dir=Path(args.plan_dir),
+                trajectory_path=Path(args.trajectory) if args.trajectory else None,
+                urdf_path=Path(args.urdf_path),
+                safe_config_path=Path(args.safe_config),
+                render_path=Path(args.render) if args.render else None,
+            )
+        )
+        payload = {"status": "ok", **result}
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "eef" and args.eef_command == "stage-trajectory":
+        result = EefTrajectoryStager().stage(
+            EefStageTrajectoryRequest(
+                plan_dir=Path(args.plan_dir),
+                trajectory_path=Path(args.trajectory),
+            )
+        )
+        payload = {"status": "ok", **result}
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "eef" and args.eef_command == "synthesize-preview":
+        start_joints = tuple(args.start_joints) if args.start_joints else None
+        if start_joints is not None and len(start_joints) != 6:
+            parser.error("--start-joints must provide 6 values")
+        try:
+            result = EefPreviewSynthesizer().synthesize(
+                EefPreviewSynthesisRequest(
+                    plan_dir=Path(args.plan_dir),
+                    urdf_path=Path(args.urdf_path),
+                    safe_config_path=Path(args.safe_config),
+                    backend=args.backend,
+                    start_joints=start_joints,
+                    recipe_plan_dir=Path(args.recipe_plan_dir) if args.recipe_plan_dir else None,
+                    sample_hz=args.sample_hz,
+                    duration_s=args.duration,
+                    render_path=Path(args.render) if args.render else None,
+                )
+            )
+        except FileNotFoundError as error:
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.eef_preview_synthesis.v1",
+                "error": {
+                    "code": (
+                        "missing_recipe_plan_artifacts"
+                        if args.recipe_plan_dir
+                        else "missing_eef_plan_artifacts"
+                    ),
+                    "message": str(error),
+                },
+                "movement_allowed": False,
+                "plan_dir": str(Path(args.plan_dir)),
+                "recipe_plan_dir": str(Path(args.recipe_plan_dir)) if args.recipe_plan_dir else None,
+                "next_gate": (
+                    "run armctrl recipe plan <name> --output <dir> --json before using --recipe-plan-dir for synthesize-preview"
+                    if args.recipe_plan_dir
+                    else "run armctrl eef plan-pose or plan-twist with --output <dir> before synthesize-preview"
+                ),
+            }
+            _emit(payload, as_json=args.as_json)
+            return 3
+        payload = {"status": "ok", **result}
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "eef" and args.eef_command == "preview-runner":
+        start_joints = tuple(args.start_joints) if args.start_joints else None
+        if start_joints is not None and len(start_joints) != 6:
+            parser.error("--start-joints must provide 6 values")
+        try:
+            result = EefRunnerPreviewer().preview(
+                EefRunnerPreviewRequest(
+                    plan_dir=Path(args.plan_dir),
+                    backend=args.backend,
+                    model=args.model,
+                    interface=args.interface,
+                    urdf_path=Path(args.urdf_path),
+                    safe_config_path=Path(args.safe_config),
+                    recipe_plan_dir=Path(args.recipe_plan_dir) if args.recipe_plan_dir else None,
+                    start_joints=start_joints,
+                    sample_hz=args.sample_hz,
+                    duration_s=args.duration,
+                    render_path=Path(args.render) if args.render else None,
+                )
+            )
+        except FileNotFoundError as error:
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.eef_runner_preview.v1",
+                "error": {
+                    "code": (
+                        "missing_recipe_plan_artifacts"
+                        if args.recipe_plan_dir
+                        else "missing_eef_plan_artifacts"
+                    ),
+                    "message": str(error),
+                },
+                "movement_allowed": False,
+                "plan_dir": str(Path(args.plan_dir)),
+                "recipe_plan_dir": str(Path(args.recipe_plan_dir)) if args.recipe_plan_dir else None,
+                "next_gate": (
+                    "run armctrl recipe plan <name> --output <dir> --json before using --recipe-plan-dir for eef preview-runner"
+                    if args.recipe_plan_dir
+                    else "run armctrl eef plan-pose or plan-twist with --output <dir> before eef preview-runner"
+                ),
+            }
+            _emit(payload, as_json=args.as_json)
+            return 3
+        payload = {"status": "ok", **result}
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "eef" and args.eef_command == "sample-runner":
+        start_joints = tuple(args.start_joints) if args.start_joints else None
+        if start_joints is not None and len(start_joints) != 6:
+            parser.error("--start-joints must provide 6 values")
+        try:
+            result = EefSampleRunner().run(
+                EefSampleRunnerRequest(
+                    runner_contract_path=Path(args.runner_contract),
+                    urdf_path=Path(args.urdf_path),
+                    safe_config_path=Path(args.safe_config),
+                    recipe_plan_dir=Path(args.recipe_plan_dir) if args.recipe_plan_dir else None,
+                    start_joints=start_joints,
+                    sample_hz=args.sample_hz,
+                    duration_s=args.duration,
+                    render_path=Path(args.render) if args.render else None,
+                )
+            )
+        except FileNotFoundError as error:
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.eef_sample_runner.v1",
+                "error": {
+                    "code": (
+                        "missing_recipe_plan_artifacts"
+                        if args.recipe_plan_dir
+                        else "missing_eef_plan_artifacts"
+                    ),
+                    "message": str(error),
+                },
+                "movement_allowed": False,
+                "runner_contract_path": str(Path(args.runner_contract)),
+                "recipe_plan_dir": str(Path(args.recipe_plan_dir)) if args.recipe_plan_dir else None,
+                "next_gate": (
+                    "run armctrl recipe plan <name> --output <dir> --json before using --recipe-plan-dir for eef sample-runner"
+                    if args.recipe_plan_dir
+                    else "run armctrl eef export-runner-contract --plan-dir <dir> --output <path> --json before eef sample-runner"
+                ),
+            }
+            _emit(payload, as_json=args.as_json)
+            return 3
+        except ValueError as error:
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.eef_sample_runner.v1",
+                "error": {
+                    "code": "invalid_runner_contract",
+                    "message": str(error),
+                },
+                "movement_allowed": False,
+                "runner_contract_path": str(Path(args.runner_contract)),
+                "next_gate": "export a valid armctrl.eef_runner_contract.v1 artifact before eef sample-runner",
+            }
+            _emit(payload, as_json=args.as_json)
+            return 3
+        payload = {"status": "ok", **result}
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "eef" and args.eef_command == "export-sdk-helper-plan":
+        contract_path = Path(args.runner_contract)
+        try:
+            result = EefSdkHelperPlanExporter().export(
+                EefSdkHelperPlanRequest(
+                    runner_contract_path=contract_path,
+                    output_path=Path(args.output) if args.output else None,
+                )
+            )
+        except FileNotFoundError as error:
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.sdk_cartesian_helper_plan.v1",
+                "error": {"code": "missing_runner_contract", "message": str(error)},
+                "movement_allowed": False,
+                "runner_contract_path": str(contract_path),
+                "next_gate": "export a valid armctrl.eef_runner_contract.v1 artifact before using this helper plan",
+            }
+            return _emit(payload, as_json=args.as_json)
+        except json.JSONDecodeError as error:
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.sdk_cartesian_helper_plan.v1",
+                "error": {"code": "invalid_runner_contract_json", "message": str(error)},
+                "movement_allowed": False,
+                "runner_contract_path": str(contract_path),
+                "next_gate": "export a valid JSON runner contract artifact before using this helper plan",
+            }
+            return _emit(payload, as_json=args.as_json)
+        except ValueError as error:
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.sdk_cartesian_helper_plan.v1",
+                "error": {"code": "invalid_runner_contract", "message": str(error)},
+                "movement_allowed": False,
+                "runner_contract_path": str(contract_path),
+            }
+            _emit(payload, as_json=args.as_json)
+            return 3
+        except RuntimeError as error:
+            resolved_backend = None
+            if contract_path.exists():
+                try:
+                    resolved_backend = json.loads(
+                        contract_path.read_text(encoding="utf-8")
+                    ).get("resolved_backend")
+                except json.JSONDecodeError:
+                    resolved_backend = None
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.sdk_cartesian_helper_plan.v1",
+                "error": {"code": "unsupported_runner_backend", "message": str(error)},
+                "movement_allowed": False,
+                "runner_contract_path": str(contract_path),
+                "resolved_backend": resolved_backend,
+                "next_gate": "use this helper plan only with sdk_cartesian runner contracts",
+            }
+            _emit(payload, as_json=args.as_json)
+            return 3
+        return _emit({"status": "ok", **result}, as_json=args.as_json)
+
+    if args.command == "eef" and args.eef_command == "export-moveit-helper-plan":
+        contract_path = Path(args.runner_contract)
+        try:
+            result = EefMoveItHelperPlanExporter().export(
+                EefMoveItHelperPlanRequest(
+                    runner_contract_path=contract_path,
+                    output_path=Path(args.output) if args.output else None,
+                )
+            )
+        except FileNotFoundError as error:
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.moveit_servo_helper_plan.v1",
+                "error": {"code": "missing_runner_contract", "message": str(error)},
+                "movement_allowed": False,
+                "runner_contract_path": str(contract_path),
+                "next_gate": "export a valid armctrl.eef_runner_contract.v1 artifact before using this helper plan",
+            }
+            return _emit(payload, as_json=args.as_json)
+        except json.JSONDecodeError as error:
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.moveit_servo_helper_plan.v1",
+                "error": {"code": "invalid_runner_contract_json", "message": str(error)},
+                "movement_allowed": False,
+                "runner_contract_path": str(contract_path),
+                "next_gate": "export a valid JSON runner contract artifact before using this helper plan",
+            }
+            return _emit(payload, as_json=args.as_json)
+        except ValueError as error:
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.moveit_servo_helper_plan.v1",
+                "error": {"code": "invalid_runner_contract", "message": str(error)},
+                "movement_allowed": False,
+                "runner_contract_path": str(contract_path),
+            }
+            _emit(payload, as_json=args.as_json)
+            return 3
+        except RuntimeError as error:
+            resolved_backend = None
+            if contract_path.exists():
+                try:
+                    resolved_backend = json.loads(
+                        contract_path.read_text(encoding="utf-8")
+                    ).get("resolved_backend")
+                except json.JSONDecodeError:
+                    resolved_backend = None
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.moveit_servo_helper_plan.v1",
+                "error": {"code": "unsupported_runner_backend", "message": str(error)},
+                "movement_allowed": False,
+                "runner_contract_path": str(contract_path),
+                "resolved_backend": resolved_backend,
+                "next_gate": "use this helper plan only with moveit_servo runner contracts",
+            }
+            _emit(payload, as_json=args.as_json)
+            return 3
+        return _emit({"status": "ok", **result}, as_json=args.as_json)
+
+    if args.command == "eef" and args.eef_command == "runtime-plan":
+        if not args.backend and not args.plan_dir:
+            parser.error("either --backend or --plan-dir is required for eef runtime-plan")
+        if args.backend == "lerobot_rollout" and not args.policy_path:
+            parser.error("--policy-path is required for lerobot_rollout")
+        result = EefRuntimePlanner().plan(
+            EefRuntimePlanRequest(
+                backend=args.backend,
+                model=args.model,
+                interface=args.interface,
+                policy_path=args.policy_path,
+                plan_dir=Path(args.plan_dir) if args.plan_dir else None,
+            )
+        )
+        payload = {"status": "ok", **result}
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "eef" and args.eef_command == "export-lerobot-action":
+        result = EefLeRobotExporter().export(
+            EefLeRobotExportRequest(
+                plan_dir=Path(args.plan_dir),
+                output_path=Path(args.output) if args.output else None,
+            )
+        )
+        payload = {"status": "ok", **result}
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "eef" and args.eef_command == "export-sdk-cartesian":
+        result = EefSdkCartesianExporter().export(
+            EefSdkCartesianExportRequest(
+                plan_dir=Path(args.plan_dir),
+                model=args.model,
+                interface=args.interface,
+                output_path=Path(args.output) if args.output else None,
+            )
+        )
+        payload = {"status": "ok", **result}
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "eef" and args.eef_command == "export-moveit-servo":
+        result = EefMoveItServoExporter().export(
+            EefMoveItServoExportRequest(
+                plan_dir=Path(args.plan_dir),
+                output_path=Path(args.output) if args.output else None,
+            )
+        )
+        payload = {"status": "ok", **result}
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "eef" and args.eef_command == "export-runtime-bridge":
+        result = EefRuntimeBridgeExporter().export(
+            EefRuntimeBridgeExportRequest(
+                plan_dir=Path(args.plan_dir),
+                backend=args.backend,
+                model=args.model,
+                interface=args.interface,
+                output_path=Path(args.output) if args.output else None,
+            )
+        )
+        payload = {"status": "ok", **result}
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "eef" and args.eef_command == "export-runner-contract":
+        result = EefRunnerContractExporter().export(
+            EefRunnerContractRequest(
+                plan_dir=Path(args.plan_dir),
+                backend=args.backend,
+                model=args.model,
+                interface=args.interface,
+                output_path=Path(args.output) if args.output else None,
+            )
+        )
+        payload = {"status": "ok", **result}
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "eef" and args.eef_command == "export-agent-runtime-contract":
+        result = EefAgentRuntimeContractExporter().export(
+            EefAgentRuntimeContractRequest(
+                plan_dir=Path(args.plan_dir),
+                backend=args.backend,
+                model=args.model,
+                interface=args.interface,
+                output_path=Path(args.output) if args.output else None,
+            )
+        )
+        payload = {"status": "ok", **result}
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "eef" and args.eef_command == "export-agent-session-plan":
+        result = EefAgentSessionPlanExporter().export(
+            EefAgentSessionPlanRequest(
+                plan_dir=Path(args.plan_dir),
+                backend=args.backend,
+                model=args.model,
+                interface=args.interface,
+                output_path=Path(args.output) if args.output else None,
+            )
         )
         payload = {"status": "ok", **result}
         return _emit(payload, as_json=args.as_json)
@@ -374,20 +1599,43 @@ def main(argv: Sequence[str] | None = None) -> int:
                     if not render_candidate.is_absolute()
                     else render_candidate
                 )
-            plan = planner.write_plan(
-                SysIdPlanRequest(
-                    profile_name=args.profile,
-                    dof=args.dof,
-                    sample_hz=args.sample_hz,
-                    duration_s=args.duration,
-                    amplitude_rad=args.amplitude,
-                    q_center=q_center,
-                    urdf_path=args.urdf_path,
-                    safe_config_path=args.safe_config,
-                    output_dir=Path(args.output),
-                    render_path=render_path,
+            try:
+                plan = planner.write_plan(
+                    SysIdPlanRequest(
+                        profile_name=args.profile,
+                        dof=args.dof,
+                        sample_hz=args.sample_hz,
+                        duration_s=args.duration,
+                        amplitude_rad=args.amplitude,
+                        q_center=q_center,
+                        urdf_path=args.urdf_path,
+                        safe_config_path=args.safe_config,
+                        output_dir=Path(args.output),
+                        render_path=render_path,
+                        candidate_trajectory_path=(
+                            Path(args.candidate_trajectory)
+                            if args.candidate_trajectory is not None
+                            else None
+                        ),
+                        trajectory_command_argv=(
+                            tuple(args.trajectory_command)
+                            if args.trajectory_command is not None
+                            else None
+                        ),
+                    )
                 )
-            )
+            except TrajectoryCommandError as exc:
+                payload = {
+                    "status": "faulted",
+                    "schema": "armctrl.sysid_plan.v1",
+                    "profile": args.profile,
+                    "error": {
+                        "code": "trajectory_command_failed",
+                        "message": str(exc),
+                        "detail": exc.detail,
+                    },
+                }
+                return _emit(payload, as_json=args.as_json) or 1
         else:
             plan = planner.plan(args.profile, execute=False)
         payload = {"status": "ok", **plan.to_json()}

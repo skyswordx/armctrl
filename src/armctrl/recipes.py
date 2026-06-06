@@ -78,21 +78,39 @@ class RecipeCatalog:
                     summary="Point the arm to a front observation posture.",
                     moves_hardware=True,
                     required_backend="arx5-interface",
-                    steps=(RecipeStep("joint_target", "front observation posture"),),
+                    steps=(
+                        RecipeStep(
+                            "joint_target",
+                            "front observation posture",
+                            (0.0, 1.00, 1.00, 0.0, 0.0, 0.0),
+                        ),
+                    ),
                 ),
                 Recipe(
                     name="pregrasp-table",
                     summary="Prepare a conservative table pregrasp posture.",
                     moves_hardware=True,
                     required_backend="arx5-interface",
-                    steps=(RecipeStep("joint_target", "table pregrasp posture"),),
+                    steps=(
+                        RecipeStep(
+                            "joint_target",
+                            "table pregrasp posture",
+                            (0.25, 0.85, 0.85, -0.20, 0.0, 0.0),
+                        ),
+                    ),
                 ),
                 Recipe(
                     name="retreat-safe",
                     summary="Retreat from the workspace into a safe posture.",
                     moves_hardware=True,
                     required_backend="arx5-interface",
-                    steps=(RecipeStep("joint_target", "safe retreat posture"),),
+                    steps=(
+                        RecipeStep(
+                            "joint_target",
+                            "safe retreat posture",
+                            (-0.35, 0.55, 0.55, -0.10, 0.0, 0.0),
+                        ),
+                    ),
                 ),
             ]
         )

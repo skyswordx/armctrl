@@ -30,6 +30,31 @@ uv run armctrl recipe execute <name> --json
 At this stage `recipe execute` is expected to return `rejected` unless a
 tested hardware backend has been added.
 
+For a non-hardware preview that still returns structured handoff artifacts:
+
+```bash
+uv run armctrl recipe execute <name> --backend sim --output <dir> --json
+```
+
+Treat the returned `handoff` and `next_steps` fields as the default Agent
+checklist into later EEF planning. Prefer the returned
+`agent_runtime_profile` when you want one stable schema describing the intended
+handoff role of the preset-action bundle.
+
+If the Agent wants one single preset-action handoff artifact instead of
+re-reading `manifest.json`, `eef_seed.json`, and the preview response
+separately, export the Agent preset contract:
+
+```bash
+uv run armctrl recipe export-agent-preset-contract --plan-dir <dir> --json
+```
+
+This stays non-hardware and consolidates the reviewed preset posture, safety
+summary, EEF seed, required artifacts, and suggested next steps for the later
+EEF preview/runtime bridge.
+Prefer the returned `ordered_steps` over inventing your own parallelization;
+those steps make the required sequencing explicit.
+
 Inspect executor status:
 
 ```bash
@@ -59,6 +84,9 @@ At this stage cancel is expected to be safe when no hardware session exists.
 3. Run `uv run armctrl recipe plan <name> --json`.
 4. Report the plan and safety gate to the user.
 5. Run `uv run armctrl recipe status --json` before any execution discussion.
-6. Only consider `recipe execute` when the user explicitly asks for execution
-   and the command returns an allowed safety decision.
-7. Use `uv run armctrl recipe cancel --json` for cleanup/status recovery only.
+6. If a non-hardware closure step is enough, prefer
+   `uv run armctrl recipe execute <name> --backend sim --output <dir> --json`
+   and consume its `handoff` / `next_steps`.
+7. Only consider hardware-facing `recipe execute` when the user explicitly asks
+   for execution and the command returns an allowed safety decision.
+8. Use `uv run armctrl recipe cancel --json` for cleanup/status recovery only.
