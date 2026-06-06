@@ -8,11 +8,13 @@ import pytest
 import yaml
 
 from armctrl.x5_figaroh_oed import (
+    X5ConstraintContractManager,
     X5JointRelationConstraintManager,
     X5TrajectoryIPOPTProblem,
     _apply_request_limits_to_robot_model,
     _active_joint_indices,
     _request_ipopt_max_iterations,
+    _velocity_feasible_initial_waypoints,
     _write_figaroh_config,
     main,
     run_oed,
@@ -127,6 +129,57 @@ def test_run_oed_writes_candidate_csv_from_injected_optimizer(tmp_path: Path) ->
         "row_count": 12,
         "column_count": 36,
         "base_parameter_count": 36,
+    }
+
+
+def test_velocity_feasible_initial_waypoints_limit_adjacent_delta() -> None:
+    waypoints = _velocity_feasible_initial_waypoints(
+        wp_init=[0.0, 0.3],
+        joint_limits_rad=[[-0.5, 0.5], [0.0, 0.6]],
+        velocity_limits_rad_s=[[-1.0, 1.0], [-0.8, 0.8]],
+        waypoint_duration_s=0.25,
+        n_wps=7,
+    )
+
+    assert waypoints.shape == (2, 7)
+    np.testing.assert_allclose(waypoints[:, 0], [0.0, 0.3])
+    max_delta = np.max(np.abs(np.diff(waypoints, axis=1)), axis=1)
+    np.testing.assert_allclose(max_delta <= np.asarray([0.1125, 0.09]) + 1e-12, True)
+    assert np.all(waypoints[0] >= -0.5)
+    assert np.all(waypoints[0] <= 0.5)
+    assert np.all(waypoints[1] >= 0.0)
+    assert np.all(waypoints[1] <= 0.6)
+
+
+def test_run_oed_reports_optimizer_initialization_strategy(tmp_path: Path) -> None:
+    request_path = tmp_path / "figaroh_request.json"
+    candidate_path = tmp_path / "candidate.csv"
+    _write_request(request_path)
+
+    class FakeOptimizer:
+        last_initialization_strategy = "armctrl_velocity_feasible"
+
+        def solve(self, stack_reps: int = 1):
+            return {
+                "T_F": [np.asarray([0.0, 0.01])],
+                "P_F": [
+                    np.asarray(
+                        [
+                            [0.0, 0.3, 0.3, 0.0, 0.0, 0.0],
+                            [0.01, 0.31, 0.31, 0.0, 0.0, 0.0],
+                        ]
+                    )
+                ],
+            }
+
+    result = run_oed(
+        request_path=request_path,
+        candidate_path=candidate_path,
+        optimizer_factory=lambda _request: FakeOptimizer(),
+    )
+
+    assert result["initialization"] == {
+        "strategy": "armctrl_velocity_feasible",
     }
 
 
@@ -291,6 +344,72 @@ def test_x5_ipopt_problem_applies_request_max_iterations(monkeypatch) -> None:
     assert result["status"] == "forced_stop"
     assert captured["max_iterations"] == 900
     assert captured["print_level"] == 7
+
+
+def test_x5_ipopt_problem_returns_cyipopt_dense_jacobian_buffer() -> None:
+    class FakeFigarohProblem:
+        def jacobian(self, _x):
+            return np.asarray(
+                [
+                    [1.0, 2.0, 3.0],
+                    [4.0, 5.0, 6.0],
+                ]
+            )
+
+    class Problem(X5TrajectoryIPOPTProblem, FakeFigarohProblem):
+        pass
+
+    jacobian = Problem().jacobian(np.asarray([0.0, 0.1, 0.2]))
+
+    assert jacobian.shape == (6,)
+    assert jacobian.flags.c_contiguous
+    assert jacobian.tolist() == [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+
+
+def test_x5_constraint_contract_manager_repairs_missing_waypoint_positions() -> None:
+    class FakeCB:
+        act_idxq = [0, 1]
+        lower_q = [-1.0, 0.0]
+        upper_q = [1.0, 1.0]
+
+    class FakeBaseManager:
+        CB = FakeCB()
+        n_wps = 3
+        freq = 20.0
+
+        def get_variable_bounds(self):
+            return [-1.0, 0.0, -1.0, 0.0], [1.0, 1.0, 1.0, 1.0]
+
+        def get_constraint_bounds(self, _ns):
+            return (
+                [-1.0, 0.0, -1.0, 0.0, -0.5],
+                [1.0, 1.0, 1.0, 1.0, 0.5],
+            )
+
+        def evaluate_constraints(
+            self,
+            _ns,
+            _x,
+            _opt_cb,
+            _tps,
+            _vel_wps,
+            _acc_wps,
+            _wp_init,
+        ):
+            return np.asarray([0.25])
+
+    manager = X5ConstraintContractManager(FakeBaseManager())
+    values = manager.evaluate_constraints(
+        10,
+        np.asarray([0.1, 0.2, 0.3, 0.4]),
+        {},
+        None,
+        None,
+        None,
+        np.asarray([0.0, 0.0]),
+    )
+
+    assert values.tolist() == pytest.approx([0.1, 0.2, 0.3, 0.4, 0.25])
 
 
 def test_joint_relation_constraint_manager_appends_relation_bounds() -> None:

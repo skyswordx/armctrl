@@ -101,6 +101,7 @@ from armctrl.sysid_run import (
     SdkSysIdRunner,
     SdkSysIdRunnerGate,
 )
+from armctrl.sysid_review import SysIdOfflineReviewRequest, SysIdOfflineReviewer
 from armctrl.sysid_sdk import SdkHandshakePlanner, SdkPreflight
 from armctrl.sysid_solve import SysIdSolver
 from armctrl.workspace import WorkspaceSafetyConfig
@@ -535,6 +536,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     sysid_solve_parser = sysid_subparsers.add_parser("solve")
     sysid_solve_parser.add_argument("--dataset", required=True)
     sysid_solve_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    sysid_review_parser = sysid_subparsers.add_parser("review-candidate")
+    sysid_review_parser.add_argument("--plan-dir", required=True)
+    sysid_review_parser.add_argument("--trajectory")
+    sysid_review_parser.add_argument("--output", required=True)
+    sysid_review_parser.add_argument("--urdf-path", default="configs/models/X5_camera.urdf")
+    sysid_review_parser.add_argument("--safe-config", default="configs/x5.safe.yaml")
+    sysid_review_parser.add_argument("--json", action="store_true", dest="as_json")
 
     sysid_package_parser = sysid_subparsers.add_parser("package")
     sysid_package_parser.add_argument("--dataset", required=True)
@@ -1725,6 +1734,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "sysid" and args.sysid_command == "solve":
         result = SysIdSolver().run(Path(args.dataset))
         payload = {"status": "ok", **result.to_json()}
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "sysid" and args.sysid_command == "review-candidate":
+        result = SysIdOfflineReviewer().review(
+            SysIdOfflineReviewRequest(
+                plan_dir=Path(args.plan_dir),
+                trajectory_path=Path(args.trajectory) if args.trajectory else None,
+                output_dir=Path(args.output),
+                urdf_path=Path(args.urdf_path),
+                safe_config_path=Path(args.safe_config),
+            )
+        )
+        payload = {"status": "ok", **result}
         return _emit(payload, as_json=args.as_json)
 
     if args.command == "sysid" and args.sysid_command == "package":

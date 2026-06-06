@@ -170,6 +170,11 @@ def _backend_metadata(
             ]
         ),
     )
+    condition_metrics = _primary_condition_metrics(
+        base_regressor_score=base_regressor_score,
+        regressor_score=regressor_score,
+        fallback_condition_number=regressor_score.get("effective_condition_number"),
+    )
     metadata: dict[str, Any] = {
         "requested": "figaroh_optimal_trajectory",
         "selected": selected,
@@ -198,7 +203,7 @@ def _backend_metadata(
         "dependency_status": dependency_status,
         "base_regressor_score": base_regressor_score,
         "regressor_score": regressor_score,
-        "condition_number": regressor_score.get("effective_condition_number"),
+        **condition_metrics,
         "rank": regressor_score.get("rank"),
         "objective": regressor_score.get("objective"),
         "oed_quality_gate": oed_quality_gate,
@@ -221,6 +226,42 @@ def _backend_metadata(
         if command_result is not None:
             metadata["candidate_source"]["generated_by"] = command_result
     return metadata
+
+
+def _primary_condition_metrics(
+    *,
+    base_regressor_score: dict[str, Any],
+    regressor_score: dict[str, Any],
+    fallback_condition_number: object,
+) -> dict[str, Any]:
+    base_condition = (
+        float(base_regressor_score["condition_number"])
+        if base_regressor_score.get("status") == "computed"
+        and isinstance(base_regressor_score.get("condition_number"), int | float)
+        else None
+    )
+    pinocchio_condition = (
+        float(regressor_score["effective_condition_number"])
+        if regressor_score.get("status") == "computed"
+        and isinstance(regressor_score.get("effective_condition_number"), int | float)
+        else None
+    )
+    if base_condition is not None:
+        condition_metric = "figaroh_base_regressor"
+        condition_number = base_condition
+    else:
+        condition_metric = "pinocchio_effective_regressor"
+        condition_number = (
+            pinocchio_condition
+            if pinocchio_condition is not None
+            else fallback_condition_number
+        )
+    return {
+        "condition_metric": condition_metric,
+        "condition_number": condition_number,
+        "figaroh_base_condition_number": base_condition,
+        "pinocchio_effective_condition_number": pinocchio_condition,
+    }
 
 
 def _oed_quality_gate(

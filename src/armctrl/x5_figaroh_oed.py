@@ -13,6 +13,7 @@ import numpy as np
 OptimizerFactory = Callable[[dict[str, Any]], Any]
 IPOPTConfig: Any | None = None
 RobotIPOPTSolver: Any | None = None
+FigarohCalcTorque: Any | None = None
 
 
 class FigarohOedError(RuntimeError):
@@ -24,6 +25,10 @@ class X5TrajectoryIPOPTProblem:
 
     ipopt_max_iterations = 200
     ipopt_print_level = 7
+
+    def jacobian(self, X):
+        jacobian = super().jacobian(X)
+        return np.ascontiguousarray(np.asarray(jacobian, dtype=float).reshape(-1))
 
     def solve_with_waypoints(self, wps):
         try:
@@ -66,6 +71,56 @@ class X5TrajectoryIPOPTProblem:
         except Exception as exc:
             self.logger.error(f"Error in IPOPT solve: {exc}")
             return False, {"error": str(exc)}
+
+
+class X5ConstraintContractManager:
+    """Keep FIGAROH constraint values aligned with their declared IPOPT bounds."""
+
+    def __init__(self, base_manager: Any) -> None:
+        self._base_manager = base_manager
+        self.CB = base_manager.CB
+        self.n_wps = base_manager.n_wps
+        self.freq = base_manager.freq
+
+    def get_variable_bounds(self):
+        return self._base_manager.get_variable_bounds()
+
+    def get_constraint_bounds(self, Ns: int):
+        return self._base_manager.get_constraint_bounds(Ns)
+
+    def evaluate_constraints(
+        self,
+        Ns: int,
+        X: np.ndarray,
+        opt_cb: dict[str, Any],
+        tps,
+        vel_wps,
+        acc_wps,
+        wp_init,
+    ) -> np.ndarray:
+        base_values = np.asarray(
+            self._base_manager.evaluate_constraints(
+                Ns,
+                X,
+                opt_cb,
+                tps,
+                vel_wps,
+                acc_wps,
+                wp_init,
+            ),
+            dtype=float,
+        ).reshape(-1)
+        lower, _upper = self.get_constraint_bounds(Ns)
+        expected_count = len(lower)
+        if base_values.size == expected_count:
+            return base_values
+
+        waypoint_position_count = (self.n_wps - 1) * len(self.CB.act_idxq)
+        if base_values.size + waypoint_position_count == expected_count:
+            waypoint_positions = np.asarray(X, dtype=float).reshape(-1)
+            return np.concatenate((waypoint_positions, base_values), axis=None)
+
+        return base_values
 
 
 class X5JointRelationConstraintManager:
@@ -181,6 +236,7 @@ def run_oed(
         "stack_reps": stack_reps,
         "random_seed": random_seed,
         "final_regressor_shape": _jsonable_shape(results.get("final_regressor_shape")),
+        "initialization": _initialization_summary(optimizer),
         "base_regressor_score": base_regressor_score,
     }
 
@@ -226,7 +282,7 @@ def _build_figaroh_optimizer(
     *,
     candidate_path: Path,
 ) -> Any:
-    global IPOPTConfig, RobotIPOPTSolver
+    global IPOPTConfig, RobotIPOPTSolver, FigarohCalcTorque
     _ensure_vendor_figaroh_on_path()
     try:
         from figaroh.optimal.base_optimal_trajectory import (
@@ -238,6 +294,7 @@ def _build_figaroh_optimizer(
             RobotIPOPTSolver as FigarohRobotIPOPTSolver,
         )
         from figaroh.tools.load_robot import load_robot
+        from figaroh.utils.cubic_spline import calc_torque as figaroh_calc_torque
     except Exception as exc:  # pragma: no cover - environment dependent.
         raise FigarohOedError(
             "FIGAROH optimal trajectory modules are not importable: "
@@ -245,6 +302,7 @@ def _build_figaroh_optimizer(
         ) from exc
     IPOPTConfig = FigarohIPOPTConfig
     RobotIPOPTSolver = FigarohRobotIPOPTSolver
+    FigarohCalcTorque = figaroh_calc_torque
     x5_problem_cls = type(
         "X5FigarohTrajectoryIPOPTProblem",
         (X5TrajectoryIPOPTProblem, BaseTrajectoryIPOPTProblem),
@@ -257,6 +315,60 @@ def _build_figaroh_optimizer(
             self.last_base_regressor_shape = tuple(int(value) for value in W_b.shape)
             self.last_base_regressor_condition_number = float(np.linalg.cond(W_b))
             return W_b
+
+        def _generate_feasible_initial_guess(self, wp_init, vel_wp_init, acc_wp_init):
+            try:
+                motion_limits = _request_motion_limits(request, dof=len(self.active_joints))
+                wps = _velocity_feasible_initial_waypoints(
+                    wp_init=wp_init,
+                    joint_limits_rad=motion_limits["joint_limits_rad"],
+                    velocity_limits_rad_s=motion_limits["velocity_limits_rad_s"],
+                    waypoint_duration_s=float(self.trajectory_config["t_s"]),
+                    n_wps=int(self.trajectory_config["n_wps"]),
+                )
+                vel_wps = np.zeros((len(self.CB.act_idxv), int(self.trajectory_config["n_wps"])))
+                acc_wps = np.zeros((len(self.CB.act_idxv), int(self.trajectory_config["n_wps"])))
+                if vel_wp_init is not None:
+                    vel_wps[:, 0] = np.asarray(vel_wp_init, dtype=float)
+                if acc_wp_init is not None:
+                    acc_wps[:, 0] = np.asarray(acc_wp_init, dtype=float)
+                tps = np.matrix(
+                    [
+                        float(self.trajectory_config["t_s"]) * i_wp
+                        for i_wp in range(int(self.trajectory_config["n_wps"]))
+                    ]
+                ).transpose()
+                t_i, p_i, v_i, a_i = self.CB.get_full_config(
+                    self.trajectory_config["freq"],
+                    tps,
+                    wps,
+                    vel_wps,
+                    acc_wps,
+                )
+                if FigarohCalcTorque is None:
+                    raise FigarohOedError("FIGAROH torque helper is not loaded")
+                tau_i = FigarohCalcTorque(p_i.shape[0], self.robot, p_i, v_i, a_i)
+                tau_i = np.reshape(tau_i, (v_i.shape[1], v_i.shape[0])).transpose()
+                if not self.CB.check_cfg_constraints(p_i, v_i, tau_i):
+                    self.last_initialization_strategy = "armctrl_velocity_feasible"
+                    self.last_initialization_attempts = 1
+                    return wps, vel_wps, acc_wps, tps, t_i, p_i, v_i, a_i
+                self.logger.warning(
+                    "armctrl velocity-feasible initial waypoints violated FIGAROH "
+                    "constraints; falling back to FIGAROH random initialization"
+                )
+            except Exception as exc:
+                self.logger.warning(
+                    "armctrl velocity-feasible initialization failed: %s; "
+                    "falling back to FIGAROH random initialization",
+                    exc,
+                )
+            self.last_initialization_strategy = "figaroh_random"
+            return super()._generate_feasible_initial_guess(
+                wp_init,
+                vel_wp_init,
+                acc_wp_init,
+            )
 
         def create_ipopt_problem(
             self,
@@ -307,6 +419,9 @@ def _build_figaroh_optimizer(
         optimizer.identif_config["act_idxq"] = idx_q
         optimizer.identif_config["act_idxv"] = idx_v
         optimizer.initialize()
+        optimizer.constraint_manager = X5ConstraintContractManager(
+            optimizer.constraint_manager
+        )
         relation_constraints = _request_joint_relation_constraints(request)
         if relation_constraints:
             optimizer.constraint_manager = X5JointRelationConstraintManager(
@@ -480,6 +595,47 @@ def _request_motion_limits(request: dict[str, Any], *, dof: int) -> dict[str, li
     }
 
 
+def _velocity_feasible_initial_waypoints(
+    *,
+    wp_init: Sequence[float],
+    joint_limits_rad: Sequence[Sequence[float]],
+    velocity_limits_rad_s: Sequence[Sequence[float]],
+    waypoint_duration_s: float,
+    n_wps: int,
+    step_fraction: float = 0.45,
+) -> np.ndarray:
+    if n_wps < 2:
+        raise FigarohOedError("n_wps must be >= 2")
+    if waypoint_duration_s <= 0.0:
+        raise FigarohOedError("waypoint_duration_s must be positive")
+    start = np.asarray(wp_init, dtype=float)
+    dof = int(start.shape[0])
+    if len(joint_limits_rad) != dof or len(velocity_limits_rad_s) != dof:
+        raise FigarohOedError("waypoint limit vectors must match active joint count")
+
+    waypoints = np.zeros((dof, n_wps), dtype=float)
+    waypoints[:, 0] = start
+    for joint_index in range(dof):
+        q_lower = float(joint_limits_rad[joint_index][0])
+        q_upper = float(joint_limits_rad[joint_index][1])
+        velocity_limit = max(
+            abs(float(velocity_limits_rad_s[joint_index][0])),
+            abs(float(velocity_limits_rad_s[joint_index][1])),
+        )
+        max_delta = max(velocity_limit * waypoint_duration_s * step_fraction, 1e-9)
+        center = min(max(float(start[joint_index]), q_lower), q_upper)
+        phase = float(joint_index) * np.pi / max(1, dof)
+        for waypoint_index in range(1, n_wps):
+            target = center + max_delta * np.sin(waypoint_index * np.pi / 2.0 + phase)
+            previous = waypoints[joint_index, waypoint_index - 1]
+            delta = min(max(target - previous, -max_delta), max_delta)
+            waypoints[joint_index, waypoint_index] = min(
+                max(previous + delta, q_lower),
+                q_upper,
+            )
+    return waypoints
+
+
 def _request_joint_relation_constraints(request: dict[str, Any]) -> list[dict[str, Any]]:
     constraints = request.get("constraints", {})
     if not isinstance(constraints, dict):
@@ -636,6 +792,17 @@ def _resolve_path(path_text: str) -> Path:
     if path.is_absolute():
         return path
     return Path.cwd() / path
+
+
+def _initialization_summary(optimizer: Any) -> dict[str, Any]:
+    strategy = getattr(optimizer, "last_initialization_strategy", None)
+    if strategy is None:
+        return {"strategy": "not_reported"}
+    summary: dict[str, Any] = {"strategy": str(strategy)}
+    attempts = getattr(optimizer, "last_initialization_attempts", None)
+    if attempts is not None:
+        summary["attempts"] = int(attempts)
+    return summary
 
 
 def _jsonable_shape(shape: object) -> list[int] | None:

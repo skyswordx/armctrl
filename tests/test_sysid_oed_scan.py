@@ -387,6 +387,113 @@ def test_oed_scan_classifies_figaroh_cubic_spline_infeasible_fault(
     )
 
 
+def test_oed_scan_classifies_missing_cyipopt_dependency(
+    tmp_path: Path,
+) -> None:
+    class FaultingPlanner:
+        def write_plan(self, _request):
+            raise TrajectoryCommandError(
+                {
+                    "exit_code": 1,
+                    "stdout_json": {
+                        "status": "failed",
+                        "reason": "figaroh_oed_failed",
+                        "message": "FIGAROH results did not include T_F/P_F segments",
+                    },
+                    "optimizer_convergence": {
+                        "status": "not_evaluated",
+                        "reason": "optimizer_exit_not_reported",
+                    },
+                    "stderr": (
+                        "ERROR:figaroh.tools.robotipopt.RobotIPOPTSolver:"
+                        "Error during optimization: cyipopt is required for IPOPT "
+                        "optimization. Install with: pip install cyipopt\n"
+                    ),
+                }
+            )
+
+    request = OedScanRequest(
+        profile_name="fourier_multisine",
+        dof=6,
+        sample_hz=20.0,
+        q_center=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
+        urdf_path="configs/models/X5_camera.urdf",
+        safe_config_path="configs/x5.safe.yaml",
+        output_dir=tmp_path,
+        durations_s=(2.0,),
+        amplitudes_rad=(0.45,),
+        n_wps_values=(7,),
+        stack_reps_values=(1,),
+        random_seed_values=(2,),
+        ipopt_max_iterations=60,
+        ipopt_print_level=5,
+        condition_number_threshold=500.0,
+        trajectory_command_argv=("python", "scripts/x5_figaroh_oed.py"),
+        attempt_timeout_s=180.0,
+    )
+
+    result = OedScanRunner(planner=FaultingPlanner()).run(request)
+
+    assert result["attempts"][0]["failure_classification"] == {
+        "kind": "figaroh_ipopt_dependency_missing",
+        "next_action": "install or select a WSL/workstation environment with cyipopt before judging OED convergence",
+    }
+
+
+def test_oed_scan_classifies_cyipopt_jacobian_contract_fault(
+    tmp_path: Path,
+) -> None:
+    class FaultingPlanner:
+        def write_plan(self, _request):
+            raise TrajectoryCommandError(
+                {
+                    "exit_code": 1,
+                    "stdout_json": {
+                        "status": "failed",
+                        "reason": "figaroh_oed_failed",
+                        "message": "FIGAROH results did not include T_F/P_F segments",
+                    },
+                    "optimizer_convergence": {
+                        "status": "not_evaluated",
+                        "reason": "optimizer_exit_not_reported",
+                    },
+                    "stderr": (
+                        "ERROR:cyipopt:b'Invalid number of indices returned "
+                        "from jacobian'\n"
+                        "EXIT: Invalid number in NLP function or derivative "
+                        "detected.\n"
+                    ),
+                }
+            )
+
+    request = OedScanRequest(
+        profile_name="fourier_multisine",
+        dof=6,
+        sample_hz=20.0,
+        q_center=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
+        urdf_path="configs/models/X5_camera.urdf",
+        safe_config_path="configs/x5.safe.yaml",
+        output_dir=tmp_path,
+        durations_s=(2.0,),
+        amplitudes_rad=(0.45,),
+        n_wps_values=(7,),
+        stack_reps_values=(1,),
+        random_seed_values=(2,),
+        ipopt_max_iterations=60,
+        ipopt_print_level=5,
+        condition_number_threshold=500.0,
+        trajectory_command_argv=("python", "scripts/x5_figaroh_oed.py"),
+        attempt_timeout_s=180.0,
+    )
+
+    result = OedScanRunner(planner=FaultingPlanner()).run(request)
+
+    assert result["attempts"][0]["failure_classification"] == {
+        "kind": "figaroh_cyipopt_jacobian_contract",
+        "next_action": "repair the armctrl FIGAROH/cyipopt jacobian adapter before changing seeds or OED timing",
+    }
+
+
 def test_oed_scan_writes_representative_ipopt_stdout_artifact(
     tmp_path: Path,
 ) -> None:
@@ -637,6 +744,53 @@ def test_freeze_candidate_copies_best_planned_trajectory_with_provenance(
     assert manifest["target_condition_margin"] == pytest.approx(50.83617311561034)
     assert manifest["next_gate"] == "continue_structural_oed_search"
     assert manifest["replay_hint"]["candidate_trajectory"] == str(recommended)
+
+
+def test_freeze_candidate_blocks_hardware_next_gate_when_oed_gate_failed(
+    tmp_path: Path,
+) -> None:
+    attempt_dir = tmp_path / "attempt-001"
+    attempt_dir.mkdir()
+    planned = attempt_dir / "planned_trajectory.csv"
+    execution = attempt_dir / "execution_trajectory.csv"
+    planned.write_text("time_s,q_cmd_1\n0.0,0.0\n", encoding="utf-8")
+    execution.write_text("time_s,q_cmd_1\n0.0,0.0\n", encoding="utf-8")
+    (attempt_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "trajectory_backend": {
+                    "condition_number": 68.4,
+                    "rank": 36,
+                    "base_regressor_score": {
+                        "status": "computed",
+                        "condition_number": 68.4,
+                        "base_parameter_count": 36,
+                    },
+                    "regressor_score": {
+                        "status": "computed",
+                        "effective_condition_number": 77.5,
+                        "rank": 36,
+                    },
+                    "oed_quality_gate": {
+                        "status": "fail",
+                        "reasons": ["optimizer_not_converged"],
+                    },
+                },
+                "safety": {"allowed": True},
+                "artifacts": {"execution_trajectory": str(execution)},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = freeze_candidate(
+        attempt_dir=attempt_dir,
+        output_dir=tmp_path / "frozen",
+    )
+
+    assert manifest["target_condition_status"] == "pass"
+    assert manifest["oed_quality_status"] == "fail"
+    assert manifest["next_gate"] == "review_optimizer_convergence_offline"
 
 
 def test_freeze_candidate_resolves_repo_relative_execution_artifact(

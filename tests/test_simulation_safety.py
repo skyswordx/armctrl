@@ -442,8 +442,14 @@ def test_cli_sim_preview_can_render_urdf_animation_html(tmp_path: Path) -> None:
     assert payload["render"]["path"] == str(render_path)
     assert "URDF kinematic animation" in html
     assert "three.module.js" in html
+    assert '"three/examples/jsm/"' in html
+    assert "STLLoader" in html
+    assert "loadMeshCb" in html
     assert "URDFLoader" in html
     assert '"urdfXml"' in html
+    assert '"meshAssetMode": "embedded_data_uri"' in html
+    assert "data:model/stl;base64," in html
+    assert 'filename="./meshes/X5/link1.STL"' not in html
     assert '"linkFrames"' in html
 
 

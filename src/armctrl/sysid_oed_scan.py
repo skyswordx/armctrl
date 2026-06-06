@@ -706,6 +706,16 @@ def _classify_optimizer_failure(command_result: dict[str, Any]) -> dict[str, str
             "kind": "optimizer_timeout",
             "next_action": "reduce per-attempt problem size or run this scan on a faster workstation with an explicit timeout",
         }
+    if _is_figaroh_ipopt_dependency_missing(command_result):
+        return {
+            "kind": "figaroh_ipopt_dependency_missing",
+            "next_action": "install or select a WSL/workstation environment with cyipopt before judging OED convergence",
+        }
+    if _is_figaroh_cyipopt_jacobian_contract(command_result):
+        return {
+            "kind": "figaroh_cyipopt_jacobian_contract",
+            "next_action": "repair the armctrl FIGAROH/cyipopt jacobian adapter before changing seeds or OED timing",
+        }
     if _is_figaroh_cubic_spline_infeasible(command_result):
         return {
             "kind": "figaroh_cubic_spline_infeasible",
@@ -765,6 +775,16 @@ def _is_figaroh_cubic_spline_infeasible(command_result: dict[str, Any]) -> bool:
         and "T_F/P_F" in stdout_message
         and "FAILED to generate a feasible cubic spline" in stderr
     )
+
+
+def _is_figaroh_ipopt_dependency_missing(command_result: dict[str, Any]) -> bool:
+    stderr = str(command_result.get("stderr", ""))
+    return "cyipopt is required for IPOPT optimization" in stderr
+
+
+def _is_figaroh_cyipopt_jacobian_contract(command_result: dict[str, Any]) -> bool:
+    stderr = str(command_result.get("stderr", ""))
+    return "Invalid number of indices returned from jacobian" in stderr
 
 
 def _diagnostic_float(diagnostics: dict[str, Any], key: str) -> float | None:

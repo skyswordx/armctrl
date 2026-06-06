@@ -1132,3 +1132,6 @@ def test_external_oed_base_regressor_score_is_preferred_for_quality_gate(
     }
     assert backend["oed_quality_gate"]["status"] == "pass"
     assert backend["oed_quality_gate"]["primary_metric"] == "figaroh_base_regressor"
+    assert backend["condition_metric"] == "figaroh_base_regressor"
+    assert backend["condition_number"] == 42.0
+    assert backend["figaroh_base_condition_number"] == 42.0

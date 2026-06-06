@@ -49,6 +49,8 @@ def freeze_candidate(*, attempt_dir: Path, output_dir: Path) -> dict[str, Any]:
         target_condition_number=target_condition_number,
     )
     rank = backend.get("rank") or regressor_score.get("rank") or base_score.get("rank")
+    oed_quality_status = (backend.get("oed_quality_gate") or {}).get("status")
+    safety_allowed = (source_manifest.get("safety") or {}).get("allowed")
     source_execution = _resolve_artifact_path(
         source_artifacts.get("execution_trajectory"),
         attempt_dir=attempt_dir,
@@ -66,16 +68,16 @@ def freeze_candidate(*, attempt_dir: Path, output_dir: Path) -> dict[str, Any]:
         "base_regressor_condition_number": base_condition_number,
         "pinocchio_effective_condition_number": pinocchio_effective_condition_number,
         "rank": rank,
-        "oed_quality_status": (backend.get("oed_quality_gate") or {}).get("status"),
-        "safety_allowed": (source_manifest.get("safety") or {}).get("allowed"),
+        "oed_quality_status": oed_quality_status,
+        "safety_allowed": safety_allowed,
         "target_condition_number": target_condition_number,
         "target_condition_metric": target_condition_metric,
         "target_condition_status": target_condition_status,
         "target_condition_margin": target_condition_margin,
-        "next_gate": (
-            "ready_for_hardware_smoke"
-            if target_condition_status == "pass"
-            else "continue_structural_oed_search"
+        "next_gate": _next_gate(
+            target_condition_status=target_condition_status,
+            oed_quality_status=oed_quality_status,
+            safety_allowed=safety_allowed,
         ),
         "replay_hint": {
             "command": "armctrl sysid plan fourier_multisine",
@@ -149,6 +151,21 @@ def _target_condition_assessment(
         return "not_evaluated", None
     margin = float(condition_number) - float(target_condition_number)
     return ("pass" if margin <= 0.0 else "fail"), margin
+
+
+def _next_gate(
+    *,
+    target_condition_status: str,
+    oed_quality_status: object,
+    safety_allowed: object,
+) -> str:
+    if target_condition_status != "pass":
+        return "continue_structural_oed_search"
+    if oed_quality_status != "pass":
+        return "review_optimizer_convergence_offline"
+    if safety_allowed is not True:
+        return "repair_safety_gate_before_hardware_smoke"
+    return "ready_for_hardware_smoke"
 
 
 if __name__ == "__main__":

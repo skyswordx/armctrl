@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import csv
 from dataclasses import dataclass
 import html
@@ -710,13 +711,15 @@ def _write_trajectory_animation_html(
     frames = link_frame_positions(urdf_path, samples=q_samples)
     selected_indices = _animation_sample_indices(len(q_samples))
     link_order = list(frames[0]) if frames else []
+    urdf_xml, mesh_asset_mode = _urdf_xml_for_browser_preview(urdf_path)
     payload = {
         "title": "URDF kinematic animation",
         "status": status_text,
         "statusColor": status_color,
         "trajectoryPath": str(preview["trajectory_path"]),
         "urdfPath": str(urdf_path),
-        "urdfXml": urdf_path.read_text(encoding="utf-8"),
+        "urdfXml": urdf_xml,
+        "meshAssetMode": mesh_asset_mode,
         "urdfDirectoryUrl": _directory_file_url(urdf_path.parent),
         "warningReasons": reasons,
         "qSamples": [list(q_samples[index]) for index in selected_indices],
@@ -781,6 +784,55 @@ def _directory_file_url(path: Path) -> str:
     return path.resolve().as_uri().rstrip("/") + "/"
 
 
+def _urdf_xml_for_browser_preview(urdf_path: Path) -> tuple[str, str]:
+    tree = ET.parse(urdf_path)
+    root = tree.getroot()
+    embedded_meshes: dict[Path, str] = {}
+    embedded_count = 0
+    for mesh in root.findall(".//mesh"):
+        filename = mesh.attrib.get("filename")
+        if filename is None:
+            continue
+        mesh_path = _resolve_preview_mesh_path(urdf_path, filename)
+        if mesh_path is None or not mesh_path.exists():
+            continue
+        resolved = mesh_path.resolve()
+        data_uri = embedded_meshes.get(resolved)
+        if data_uri is None:
+            data_uri = _mesh_data_uri(resolved)
+            embedded_meshes[resolved] = data_uri
+        mesh.attrib["filename"] = data_uri
+        embedded_count += 1
+    if embedded_count == 0:
+        return urdf_path.read_text(encoding="utf-8"), "external_paths"
+    return ET.tostring(root, encoding="unicode"), "embedded_data_uri"
+
+
+def _resolve_preview_mesh_path(urdf_path: Path, filename: str) -> Path | None:
+    if filename.startswith(("package://", "http://", "https://", "data:")):
+        return None
+    mesh_path = Path(filename)
+    if not mesh_path.is_absolute():
+        mesh_path = urdf_path.parent / mesh_path
+    return mesh_path
+
+
+def _mesh_data_uri(mesh_path: Path) -> str:
+    encoded = base64.b64encode(mesh_path.read_bytes()).decode("ascii")
+    return f"data:{_mesh_mime_type(mesh_path)};base64,{encoded}"
+
+
+def _mesh_mime_type(mesh_path: Path) -> str:
+    suffix = mesh_path.suffix.lower()
+    if suffix == ".stl":
+        return "model/stl"
+    if suffix == ".dae":
+        return "model/vnd.collada+xml"
+    if suffix == ".obj":
+        return "model/obj"
+    return "application/octet-stream"
+
+
 _URDF_ANIMATION_HTML_TEMPLATE = """<!doctype html>
 <html lang="en">
 <head>
@@ -804,7 +856,8 @@ _URDF_ANIMATION_HTML_TEMPLATE = """<!doctype html>
     {
       "imports": {
         "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+        "three/examples/jsm/": "https://unpkg.com/three@0.160.0/examples/jsm/"
       }
     }
   </script>
@@ -824,6 +877,7 @@ _URDF_ANIMATION_HTML_TEMPLATE = """<!doctype html>
   <script type="module">
     import * as THREE from 'three';
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 
     const previewData = __PREVIEW_DATA__;
     const canvas = document.getElementById('viewer');
@@ -867,6 +921,29 @@ _URDF_ANIMATION_HTML_TEMPLATE = """<!doctype html>
     previewData.allowedBoxes.forEach(box => addBox(box, 0x16a34a, 0.045));
     previewData.forbiddenBoxes.forEach(box => addBox(box, 0xdc2626, 0.12));
 
+    function urdfMeshCount(root) {
+      let count = 0;
+      if (!root) return count;
+      root.traverse(child => {
+        if (child.isMesh) count += 1;
+      });
+      return count;
+    }
+
+    function styleUrdfMeshes(root) {
+      if (!root) return;
+      root.traverse(child => {
+        if (child.isMesh) {
+          child.castShadow = false;
+          child.receiveShadow = false;
+          if (child.material) {
+            child.material.side = THREE.DoubleSide;
+            child.material.color.set(0x64748b);
+          }
+        }
+      });
+    }
+
     function sphere(position, radius, color) {
       const mesh = new THREE.Mesh(
         new THREE.SphereGeometry(radius, 20, 12),
@@ -893,19 +970,42 @@ _URDF_ANIMATION_HTML_TEMPLATE = """<!doctype html>
 
     async function tryLoadUrdfRobot() {
       try {
+        const manager = new THREE.LoadingManager();
+        manager.onLoad = () => {
+          styleUrdfMeshes(urdfRobot);
+          useUrdfRobot = urdfMeshCount(urdfRobot) > 0;
+          drawFrame(frame);
+        };
         const module = await import('https://unpkg.com/urdf-loader@0.12.6/src/URDFLoader.js');
         const URDFLoader = module.default || module.URDFLoader;
-        const loader = new URDFLoader();
-        loader.workingPath = previewData.urdfDirectoryUrl;
+        const loader = new URDFLoader(manager);
+        loader.workingPath = previewData.meshAssetMode === 'embedded_data_uri' ? '' : previewData.urdfDirectoryUrl;
+        if (previewData.meshAssetMode === 'embedded_data_uri') {
+          const defaultLoadMesh = loader.defaultMeshLoader.bind(loader);
+          loader.loadMeshCb = (path, manager, done) => {
+            if (path.startsWith('data:model/stl;base64,')) {
+              const stlLoader = new STLLoader(manager);
+              stlLoader.load(
+                path,
+                geometry => {
+                  geometry.computeVertexNormals();
+                  done(new THREE.Mesh(geometry, new THREE.MeshPhongMaterial({ color: 0x64748b, shininess: 24 })));
+                },
+                undefined,
+                error => done(null, error)
+              );
+              return;
+            }
+            defaultLoadMesh(path, manager, done);
+          };
+        }
         urdfRobot = loader.parse(previewData.urdfXml);
-        urdfRobot.traverse(child => {
-          if (child.isMesh) {
-            child.castShadow = false;
-            child.receiveShadow = false;
-          }
-        });
         scene.add(urdfRobot);
-        useUrdfRobot = true;
+        setTimeout(() => {
+          styleUrdfMeshes(urdfRobot);
+          useUrdfRobot = urdfMeshCount(urdfRobot) > 0;
+          drawFrame(frame);
+        }, 0);
       } catch (error) {
         const note = document.createElement('div');
         note.className = 'meta';
