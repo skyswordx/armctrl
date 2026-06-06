@@ -991,6 +991,12 @@ def _fallback_rows(
         duration_s,
         sample_hz=float(request.sample_hz),
     )
+    if str(request.profile_name) == "friction_sweep":
+        return _friction_sweep_rows(
+            request,
+            duration_s=duration_s,
+            sample_count=sample_count,
+        )
     rows: list[dict[str, str]] = []
     for sample_index in range(sample_count):
         t = sample_index / float(request.sample_hz)
@@ -1003,6 +1009,71 @@ def _fallback_rows(
             row[f"q_cmd_{joint_index + 1}"] = f"{q:.6f}"
         rows.append(row)
     return rows
+
+
+def _friction_sweep_rows(
+    request: object,
+    *,
+    duration_s: float,
+    sample_count: int,
+) -> list[dict[str, str]]:
+    dof = int(request.dof)
+    sample_hz = float(request.sample_hz)
+    rows: list[dict[str, str]] = []
+    for sample_index in range(sample_count):
+        t = sample_index / sample_hz
+        u = min(1.0, t / max(duration_s, 1e-9))
+        coefficients = _friction_segmented_coefficients(u, dof)
+        row = {"time_s": f"{t:.6f}"}
+        for joint_index in range(dof):
+            q = float(request.q_center[joint_index])
+            q += float(request.amplitude_rad) * coefficients[joint_index]
+            row[f"q_cmd_{joint_index + 1}"] = f"{q:.6f}"
+        rows.append(row)
+    return rows
+
+
+def _friction_segmented_coefficients(u: float, dof: int) -> tuple[float, ...]:
+    values = [0.0] * dof
+    if dof <= 0:
+        return tuple(values)
+    active_joint = min(dof - 1, int(min(u, 1.0 - 1e-12) * dof))
+    local = (u * dof) - active_joint
+    local = max(0.0, min(1.0, local))
+    values[active_joint] = _friction_local_position(local)
+    return tuple(values)
+
+
+def _friction_local_position(local: float) -> float:
+    if local < 0.01:
+        return 0.0
+    if local < 0.25:
+        return _trapezoid_move(0.0, 1.0, (local - 0.01) / 0.24)
+    if local < 0.26:
+        return 1.0
+    if local < 0.50:
+        return _trapezoid_move(1.0, 0.0, (local - 0.26) / 0.24)
+    if local < 0.51:
+        return 0.0
+    if local < 0.75:
+        return _trapezoid_move(0.0, -1.0, (local - 0.51) / 0.24)
+    if local < 0.76:
+        return -1.0
+    return _trapezoid_move(-1.0, 0.0, (local - 0.76) / 0.24)
+
+
+def _trapezoid_move(start: float, end: float, alpha: float) -> float:
+    alpha = max(0.0, min(1.0, alpha))
+    ramp_fraction = 0.25
+    denominator = ramp_fraction * (1.0 - ramp_fraction)
+    if alpha < ramp_fraction:
+        progress = 0.5 * alpha * alpha / denominator
+    elif alpha <= 1.0 - ramp_fraction:
+        progress = (alpha - 0.5 * ramp_fraction) / (1.0 - ramp_fraction)
+    else:
+        remaining = 1.0 - alpha
+        progress = 1.0 - 0.5 * remaining * remaining / denominator
+    return start + (end - start) * progress
 
 
 def _candidate_rows(path: Path, *, dof: int, sample_hz: float) -> CandidateTrajectory:

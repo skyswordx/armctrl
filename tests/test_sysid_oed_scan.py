@@ -1,8 +1,10 @@
 import json
 from pathlib import Path
 
+import pytest
 import yaml
 
+from scripts.x5_oed_freeze_candidate import freeze_candidate
 from armctrl.sysid_oed_scan import OedScanRequest, OedScanRunner
 from armctrl.sysid_trajectory_backend import TrajectoryCommandError
 
@@ -337,3 +339,107 @@ def test_oed_scan_passes_attempt_timeout_to_plan_request(tmp_path: Path) -> None
     assert result["attempts"][0]["failure_classification"]["kind"] == (
         "optimizer_timeout"
     )
+
+
+def test_freeze_candidate_copies_best_planned_trajectory_with_provenance(
+    tmp_path: Path,
+) -> None:
+    attempt_dir = tmp_path / "attempt-002"
+    attempt_dir.mkdir()
+    planned = attempt_dir / "planned_trajectory.csv"
+    execution = attempt_dir / "execution_trajectory.csv"
+    planned.write_text(
+        "time_s,q_cmd_1,q_cmd_2,q_cmd_3,q_cmd_4,q_cmd_5,q_cmd_6\n"
+        "0.000000,0.000000,0.300000,0.300000,0.000000,0.000000,0.000000\n",
+        encoding="utf-8",
+    )
+    execution.write_text(planned.read_text(encoding="utf-8"), encoding="utf-8")
+    (attempt_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "profile": {"name": "fourier_multisine"},
+                "trajectory_backend": {
+                    "condition_number": 106.27694211039746,
+                    "rank": 36,
+                    "base_regressor_score": {
+                        "status": "computed",
+                        "condition_number": 150.83617311561034,
+                        "rank": 36,
+                    },
+                    "regressor_score": {
+                        "status": "computed",
+                        "effective_condition_number": 106.27694211039746,
+                        "rank": 36,
+                    },
+                    "oed_quality_gate": {"status": "pass"},
+                },
+                "safety": {"allowed": True},
+                "artifacts": {
+                    "planned_trajectory": str(planned),
+                    "execution_trajectory": str(execution),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "frozen"
+
+    result = freeze_candidate(attempt_dir=attempt_dir, output_dir=output_dir)
+
+    recommended = output_dir / "recommended_candidate.csv"
+    manifest = json.loads(
+        (output_dir / "best_candidate_manifest.json").read_text(encoding="utf-8")
+    )
+    assert result["schema"] == "armctrl.x5_oed_frozen_candidate.v1"
+    assert recommended.read_text(encoding="utf-8") == planned.read_text(
+        encoding="utf-8"
+    )
+    assert manifest["source_attempt"] == str(attempt_dir)
+    assert manifest["source_planned_trajectory"] == str(planned)
+    assert manifest["source_execution_trajectory"] == str(execution)
+    assert manifest["condition_number"] == 106.27694211039746
+    assert manifest["base_regressor_condition_number"] == 150.83617311561034
+    assert manifest["pinocchio_effective_condition_number"] == 106.27694211039746
+    assert manifest["rank"] == 36
+    assert manifest["safety_allowed"] is True
+    assert manifest["replay_hint"]["candidate_trajectory"] == str(recommended)
+
+
+def test_freeze_candidate_resolves_repo_relative_execution_artifact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempt_dir = tmp_path / "runs" / "scan" / "attempt-002"
+    attempt_dir.mkdir(parents=True)
+    planned = attempt_dir / "planned_trajectory.csv"
+    execution = attempt_dir / "execution_trajectory.csv"
+    planned.write_text(
+        "time_s,q_cmd_1,q_cmd_2,q_cmd_3,q_cmd_4,q_cmd_5,q_cmd_6\n"
+        "0.000000,0.000000,0.300000,0.300000,0.000000,0.000000,0.000000\n",
+        encoding="utf-8",
+    )
+    execution.write_text(planned.read_text(encoding="utf-8"), encoding="utf-8")
+    (attempt_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "trajectory_backend": {"rank": 36, "condition_number": 150.0},
+                "safety": {"allowed": True},
+                "artifacts": {
+                    "execution_trajectory": (
+                        "runs/scan/attempt-002/execution_trajectory.csv"
+                    ),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    freeze_candidate(attempt_dir=attempt_dir, output_dir=tmp_path / "frozen")
+
+    manifest = json.loads(
+        (tmp_path / "frozen" / "best_candidate_manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert manifest["source_execution_trajectory"] == str(execution.resolve())

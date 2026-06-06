@@ -14,6 +14,7 @@
 - Added `representative_ipopt_stdout.txt` for OED scans when a diagnostic attempt exposes IPOPT stdout, plus last-iteration `objective/inf_pr/inf_du` extraction from IPOPT iteration tails for timeout cases without a final solver summary.
 - Added SysID frequency layering artifacts: `planned_trajectory.csv` remains the low-rate FIGAROH/OED plan, while `execution_trajectory.csv` is resampled at the configured high-rate rollout frequency for final safety gates.
 - Added configurable X5 profile OED velocity and acceleration limits for Fourier, friction, and gravity profiles, avoiding URDF placeholder velocities such as `1000 rad/s` while keeping the values scan-tunable.
+- Added `scripts/x5_oed_freeze_candidate.py` so a safe low-condition Fourier OED attempt can be promoted into a reproducible `recommended_candidate.csv` plus provenance manifest for replay and warm-start follow-up scans.
 
 ### Changed
 
@@ -30,7 +31,7 @@
 - WSL evidence from `runs/oed-scan-fourier-accel30-focused-200-20260606` found the current best Fourier candidate at `duration=1.0`, `amplitude=0.5`, `n_wps=5`, `stack_reps=1`, `seed=3`, and `ipopt_max_iterations=200`: safety gates all pass, rank is `36`, base-regressor condition is about `106.28`, execution max step is about `0.0196 rad`, max velocity about `1.95 rad/s`, and max acceleration about `25.51 rad/s^2`. The remaining OED quality gap is optimizer convergence labeling (`optimizer_dual_infeasible`), not execution safety.
 - WSL evidence from `runs/oed-scan-fourier-gapfill-200-20260606` covered the remaining `seed=12` and `stack_reps=2` focused combinations; all eight attempts faulted in FIGAROH/IPOPT, so the current best remains the earlier safe `condition ~= 106.28` candidate.
 - WSL plan-only checks from `runs/sysid-plan-gravity_sweep-final-check-20260606` and `runs/sysid-plan-friction_sweep-final-check-20260606` show the non-OED smoke profiles now pass URDF, execution step, velocity, acceleration, joint-relation, workspace, and Pinocchio/coal simulation gates at the recommended bring-up amplitudes.
-- Changed the deterministic `friction_sweep` fallback probe to use zero-slope per-joint bump segments, avoiding artificial acceleration spikes at active-joint handoff boundaries while preserving positive/negative velocity coverage.
+- Changed the deterministic `friction_sweep` fallback probe to use per-joint trapezoidal velocity segments, giving each joint positive and negative constant-velocity plateaus plus low-speed zero crossings while staying within the conservative smoke-test safety gates.
 - Narrowed the default `gravity_sweep` safety amplitude ceiling to the verified safe `0.30 rad` plan-only bring-up range; higher gravity amplitudes should be reintroduced only through explicit plan/simulation evidence.
 
 ### Reproduce

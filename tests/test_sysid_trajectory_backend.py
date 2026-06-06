@@ -1,5 +1,6 @@
 import csv
 import json
+import statistics
 import sys
 import types
 import subprocess
@@ -163,6 +164,51 @@ def test_planned_trajectory_is_not_silent_joint1_only_placeholder(
 
     assert ranges[0] > 0.0
     assert sum(value > 0.0 for value in ranges[1:]) >= 2
+
+
+def test_friction_fallback_uses_segmented_positive_negative_velocity_probe(
+    tmp_path: Path,
+) -> None:
+    request = SysIdPlanRequest(
+        profile_name="friction_sweep",
+        dof=6,
+        sample_hz=100,
+        duration_s=8,
+        amplitude_rad=0.10,
+        q_center=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
+        urdf_path="configs/models/X5_camera.urdf",
+        safe_config_path="configs/x5.safe.yaml",
+        output_dir=tmp_path,
+    )
+
+    plan = plan_sysid_trajectory(request)
+    dt = 1.0 / request.sample_hz
+    rows = plan.rows
+
+    for joint_index in range(request.dof):
+        values = [float(row[f"q_cmd_{joint_index + 1}"]) for row in rows]
+        velocities = [
+            (right - left) / dt for left, right in zip(values, values[1:])
+        ]
+        max_positive_velocity = max(velocities)
+        max_negative_speed = abs(min(velocities))
+        positive_plateau = [
+            value for value in velocities if value >= 0.95 * max_positive_velocity
+        ]
+        negative_plateau = [
+            value for value in velocities if value <= -0.95 * max_negative_speed
+        ]
+        zero_crossing = [value for value in velocities if abs(value) < 0.03]
+        assert len(positive_plateau) >= 4
+        assert len(negative_plateau) >= 4
+        assert statistics.pstdev(positive_plateau) / statistics.mean(
+            positive_plateau
+        ) < 0.06
+        assert abs(
+            statistics.pstdev(negative_plateau) / statistics.mean(negative_plateau)
+        ) < 0.06
+        assert len(zero_crossing) >= 2
+        assert max(abs(value) for value in velocities) <= 0.58
 
 
 def test_cli_writes_backend_handoff_config_next_to_trajectory(
