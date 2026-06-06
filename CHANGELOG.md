@@ -15,6 +15,7 @@
 - Added SysID frequency layering artifacts: `planned_trajectory.csv` remains the low-rate FIGAROH/OED plan, while `execution_trajectory.csv` is resampled at the configured high-rate rollout frequency for final safety gates.
 - Added configurable X5 profile OED velocity and acceleration limits for Fourier, friction, and gravity profiles, avoiding URDF placeholder velocities such as `1000 rad/s` while keeping the values scan-tunable.
 - Added `scripts/x5_oed_freeze_candidate.py` so a safe low-condition Fourier OED attempt can be promoted into a reproducible `recommended_candidate.csv` plus provenance manifest for replay and warm-start follow-up scans.
+- Added `scripts/x5_oed_followup_plan.py` to turn a frozen Fourier candidate into explicit replay and focused multi-seed scan commands, while documenting that true FIGAROH warm-start from CSV is not yet exposed by the current wrapper.
 
 ### Changed
 

@@ -5,6 +5,7 @@ import pytest
 import yaml
 
 from scripts.x5_oed_freeze_candidate import freeze_candidate
+from scripts.x5_oed_followup_plan import build_followup_plan
 from armctrl.sysid_oed_scan import OedScanRequest, OedScanRunner
 from armctrl.sysid_trajectory_backend import TrajectoryCommandError
 
@@ -443,3 +444,50 @@ def test_freeze_candidate_resolves_repo_relative_execution_artifact(
         )
     )
     assert manifest["source_execution_trajectory"] == str(execution.resolve())
+
+
+def test_oed_followup_plan_builds_replay_and_focused_scan_commands(
+    tmp_path: Path,
+) -> None:
+    frozen_dir = tmp_path / "frozen"
+    frozen_dir.mkdir()
+    candidate = frozen_dir / "recommended_candidate.csv"
+    candidate.write_text(
+        "time_s,q_cmd_1,q_cmd_2,q_cmd_3,q_cmd_4,q_cmd_5,q_cmd_6\n"
+        "0.000000,0.000000,0.300000,0.300000,0.000000,0.000000,0.000000\n",
+        encoding="utf-8",
+    )
+    manifest = frozen_dir / "best_candidate_manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema": "armctrl.x5_oed_frozen_candidate.v1",
+                "recommended_candidate": str(candidate),
+                "condition_number": 106.27694211039746,
+                "base_regressor_condition_number": 150.83617311561034,
+                "rank": 36,
+                "safety_allowed": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "followup"
+
+    result = build_followup_plan(
+        manifest_path=manifest,
+        output_dir=output_dir,
+        seeds=(2, 3, 4),
+        amplitudes=(0.45, 0.50, 0.55),
+    )
+
+    saved = json.loads((output_dir / "followup_plan.json").read_text(encoding="utf-8"))
+    assert result == saved
+    assert result["schema"] == "armctrl.x5_oed_followup_plan.v1"
+    assert result["baseline"]["condition_number"] == 106.27694211039746
+    assert result["baseline"]["safety_allowed"] is True
+    assert result["warm_start_status"] == "not_supported_by_current_figaroh_wrapper"
+    assert "--candidate-trajectory" in result["commands"]["replay_plan"]
+    assert str(candidate) in result["commands"]["replay_plan"]
+    assert "--seed 2 3 4" in result["commands"]["focused_scan"]
+    assert "--amplitude 0.45 0.5 0.55" in result["commands"]["focused_scan"]
+    assert result["acceptance"]["target_condition_number"] == 100.0
