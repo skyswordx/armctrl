@@ -403,6 +403,10 @@ def test_freeze_candidate_copies_best_planned_trajectory_with_provenance(
     assert manifest["pinocchio_effective_condition_number"] == 106.27694211039746
     assert manifest["rank"] == 36
     assert manifest["safety_allowed"] is True
+    assert manifest["target_condition_number"] == 100.0
+    assert manifest["target_condition_status"] == "fail"
+    assert manifest["target_condition_margin"] == pytest.approx(6.27694211039746)
+    assert manifest["next_gate"] == "continue_focused_oed_search"
     assert manifest["replay_hint"]["candidate_trajectory"] == str(recommended)
 
 
@@ -485,6 +489,21 @@ def test_oed_followup_plan_builds_replay_and_focused_scan_commands(
     assert result["schema"] == "armctrl.x5_oed_followup_plan.v1"
     assert result["baseline"]["condition_number"] == 106.27694211039746
     assert result["baseline"]["safety_allowed"] is True
+    assert result["baseline"]["target_condition_status"] == "fail"
+    assert result["baseline"]["next_gate"] == "continue_focused_oed_search"
+    assert result["host_contract"]["heavy_oed_scan"]["allowed_hosts"] == [
+        "local_wsl",
+        "workstation",
+    ]
+    assert result["host_contract"]["heavy_oed_scan"]["disallowed_hosts"] == [
+        {
+            "host": "n100d",
+            "reason": "memory_constrained_for_figaroh_ipopt_oed_scan",
+        }
+    ]
+    assert result["host_contract"]["n100d_role"] == (
+        "lightweight_replay_hardware_collection_postprocess_solver"
+    )
     assert result["warm_start_status"] == "not_supported_by_current_figaroh_wrapper"
     assert "--candidate-trajectory" in result["commands"]["replay_plan"]
     assert str(candidate) in result["commands"]["replay_plan"]

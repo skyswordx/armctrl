@@ -38,6 +38,11 @@ def freeze_candidate(*, attempt_dir: Path, output_dir: Path) -> dict[str, Any]:
         or pinocchio_effective_condition_number
         or base_condition_number
     )
+    target_condition_number = 100.0
+    target_condition_status, target_condition_margin = _target_condition_assessment(
+        condition_number,
+        target_condition_number=target_condition_number,
+    )
     rank = backend.get("rank") or regressor_score.get("rank") or base_score.get("rank")
     source_execution = _resolve_artifact_path(
         source_artifacts.get("execution_trajectory"),
@@ -58,6 +63,14 @@ def freeze_candidate(*, attempt_dir: Path, output_dir: Path) -> dict[str, Any]:
         "rank": rank,
         "oed_quality_status": (backend.get("oed_quality_gate") or {}).get("status"),
         "safety_allowed": (source_manifest.get("safety") or {}).get("allowed"),
+        "target_condition_number": target_condition_number,
+        "target_condition_status": target_condition_status,
+        "target_condition_margin": target_condition_margin,
+        "next_gate": (
+            "ready_for_hardware_smoke"
+            if target_condition_status == "pass"
+            else "continue_focused_oed_search"
+        ),
         "replay_hint": {
             "command": "armctrl sysid plan fourier_multisine",
             "candidate_trajectory": str(recommended_path),
@@ -119,6 +132,17 @@ def _resolve_artifact_path(
         if candidate.exists():
             return candidate.resolve()
     return (Path.cwd() / path).resolve()
+
+
+def _target_condition_assessment(
+    condition_number: object,
+    *,
+    target_condition_number: float,
+) -> tuple[str, float | None]:
+    if not isinstance(condition_number, int | float):
+        return "not_evaluated", None
+    margin = float(condition_number) - float(target_condition_number)
+    return ("pass" if margin <= 0.0 else "fail"), margin
 
 
 if __name__ == "__main__":

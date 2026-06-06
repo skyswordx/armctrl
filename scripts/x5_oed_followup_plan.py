@@ -62,6 +62,22 @@ def build_followup_plan(
             ),
             "rank": manifest.get("rank"),
             "safety_allowed": manifest.get("safety_allowed"),
+            "target_condition_number": manifest.get(
+                "target_condition_number",
+                100.0,
+            ),
+            "target_condition_status": manifest.get(
+                "target_condition_status",
+                _target_condition_status(manifest.get("condition_number")),
+            ),
+            "target_condition_margin": manifest.get(
+                "target_condition_margin",
+                _target_condition_margin(manifest.get("condition_number")),
+            ),
+            "next_gate": manifest.get(
+                "next_gate",
+                _next_gate_from_condition(manifest.get("condition_number")),
+            ),
         },
         "warm_start_status": "not_supported_by_current_figaroh_wrapper",
         "warm_start_note": (
@@ -69,6 +85,23 @@ def build_followup_plan(
             "from a frozen CSV; use replay plus focused multi-seed scans until "
             "that mature-backend hook is added."
         ),
+        "host_contract": {
+            "heavy_oed_scan": {
+                "allowed_hosts": ["local_wsl", "workstation"],
+                "disallowed_hosts": [
+                    {
+                        "host": "n100d",
+                        "reason": "memory_constrained_for_figaroh_ipopt_oed_scan",
+                    }
+                ],
+                "reason": (
+                    "FIGAROH/IPOPT focused scans are memory-heavy and should run "
+                    "on the local WSL/workstation environment where previous OED "
+                    "searches were computed."
+                ),
+            },
+            "n100d_role": "lightweight_replay_hardware_collection_postprocess_solver",
+        },
         "commands": {
             "replay_plan": replay_plan,
             "focused_scan": focused_scan,
@@ -132,6 +165,34 @@ def _resolve_manifest_path(raw_path: object, *, manifest_path: Path) -> Path:
 
 def _format_float(value: float) -> str:
     return f"{float(value):g}"
+
+
+def _target_condition_status(
+    condition_number: object,
+    *,
+    target_condition_number: float = 100.0,
+) -> str:
+    if not isinstance(condition_number, int | float):
+        return "not_evaluated"
+    return "pass" if float(condition_number) <= target_condition_number else "fail"
+
+
+def _target_condition_margin(
+    condition_number: object,
+    *,
+    target_condition_number: float = 100.0,
+) -> float | None:
+    if not isinstance(condition_number, int | float):
+        return None
+    return float(condition_number) - target_condition_number
+
+
+def _next_gate_from_condition(condition_number: object) -> str:
+    return (
+        "ready_for_hardware_smoke"
+        if _target_condition_status(condition_number) == "pass"
+        else "continue_focused_oed_search"
+    )
 
 
 if __name__ == "__main__":
