@@ -33,10 +33,15 @@ def freeze_candidate(*, attempt_dir: Path, output_dir: Path) -> dict[str, Any]:
     pinocchio_effective_condition_number = regressor_score.get(
         "effective_condition_number"
     )
+    target_condition_metric = (
+        "figaroh_base_regressor"
+        if base_condition_number is not None
+        else "pinocchio_effective_regressor"
+    )
     condition_number = (
-        backend.get("condition_number")
-        or pinocchio_effective_condition_number
-        or base_condition_number
+        base_condition_number
+        if base_condition_number is not None
+        else pinocchio_effective_condition_number or backend.get("condition_number")
     )
     target_condition_number = 100.0
     target_condition_status, target_condition_margin = _target_condition_assessment(
@@ -64,12 +69,13 @@ def freeze_candidate(*, attempt_dir: Path, output_dir: Path) -> dict[str, Any]:
         "oed_quality_status": (backend.get("oed_quality_gate") or {}).get("status"),
         "safety_allowed": (source_manifest.get("safety") or {}).get("allowed"),
         "target_condition_number": target_condition_number,
+        "target_condition_metric": target_condition_metric,
         "target_condition_status": target_condition_status,
         "target_condition_margin": target_condition_margin,
         "next_gate": (
             "ready_for_hardware_smoke"
             if target_condition_status == "pass"
-            else "continue_focused_oed_search"
+            else "continue_structural_oed_search"
         ),
         "replay_hint": {
             "command": "armctrl sysid plan fourier_multisine",

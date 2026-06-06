@@ -72,12 +72,21 @@ def test_oed_scan_writes_candidate_safe_configs_and_summary(tmp_path: Path) -> N
     assert result["best_attempt"]["attempt_id"] in {
         attempt["attempt_id"] for attempt in result["attempts"]
     }
-    assert result["target_condition"] == {
-        "target_condition_number": 100.0,
-        "status": "not_evaluated",
-        "best_condition_number": result["best_attempt"]["condition_number"],
-        "best_attempt_id": result["best_attempt"]["attempt_id"],
-        "next_gate": "run_focused_oed_scan",
+    assert result["target_condition"]["target_condition_number"] == 100.0
+    assert result["target_condition"]["best_condition_metric"] == (
+        result["best_attempt"]["condition_metric"]
+    )
+    assert result["target_condition"]["best_condition_number"] == (
+        result["best_attempt"]["condition_number"]
+    )
+    assert result["target_condition"]["best_attempt_id"] == (
+        result["best_attempt"]["attempt_id"]
+    )
+    assert result["target_condition"]["status"] in {"not_evaluated", "not_met", "met"}
+    assert result["target_condition"]["next_gate"] in {
+        "run_structural_oed_scan",
+        "continue_structural_oed_search",
+        "freeze_reproducible_candidate",
     }
 
 
@@ -128,10 +137,112 @@ def test_oed_scan_target_condition_marks_numeric_near_miss(tmp_path: Path) -> No
     assert result["target_condition"] == {
         "target_condition_number": 100.0,
         "status": "not_met",
+        "best_condition_metric": "pinocchio_effective_regressor",
         "best_condition_number": 106.28,
         "best_attempt_id": "attempt-001",
-        "next_gate": "continue_focused_oed_search",
+        "next_gate": "continue_structural_oed_search",
     }
+
+
+def test_oed_scan_target_condition_uses_figaroh_base_condition(
+    tmp_path: Path,
+) -> None:
+    class MixedMetricPlanner:
+        def write_plan(self, _request):
+            class Plan:
+                def to_json(self):
+                    return {
+                        "trajectory_backend": {
+                            "oed_valid": False,
+                            "hardware_execution_eligible": False,
+                            "oed_quality_gate": {
+                                "status": "fail",
+                                "reasons": ["base_regressor_condition_too_high"],
+                                "primary_metric": "figaroh_base_regressor",
+                            },
+                            "condition_number": 106.28,
+                            "rank": 36,
+                            "base_regressor_score": {
+                                "status": "computed",
+                                "condition_number": 150.84,
+                                "base_parameter_count": 36,
+                            },
+                            "regressor_score": {
+                                "status": "computed",
+                                "effective_condition_number": 106.28,
+                                "rank": 36,
+                            },
+                            "timing_contract": {},
+                            "sampling_contract": {},
+                            "execution_trajectory": {
+                                "max_joint_step_rad": 0.0196,
+                                "max_velocity_rad_s": 1.95,
+                                "max_acceleration_rad_s2": 25.51,
+                            },
+                            "candidate_source": {
+                                "generated_by": {
+                                    "optimizer_convergence": {
+                                        "status": "fail",
+                                        "reason": "dual_infeasible",
+                                    }
+                                }
+                            },
+                        },
+                        "safety": {"allowed": True, "reason": "ok"},
+                        "artifacts": {},
+                    }
+
+            return Plan()
+
+    request = OedScanRequest(
+        profile_name="fourier_multisine",
+        dof=6,
+        sample_hz=20.0,
+        q_center=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
+        urdf_path="configs/models/X5_camera.urdf",
+        safe_config_path="configs/x5.safe.yaml",
+        output_dir=tmp_path,
+        durations_s=(1.0,),
+        amplitudes_rad=(0.5,),
+        n_wps_values=(5,),
+        stack_reps_values=(1,),
+        random_seed_values=(3,),
+        ipopt_max_iterations=500,
+        ipopt_print_level=5,
+        condition_number_threshold=500.0,
+    )
+
+    result = OedScanRunner(planner=MixedMetricPlanner()).run(request)
+    flattened = json.loads(
+        (tmp_path / "oed_scan_attempts.json").read_text(encoding="utf-8")
+    )
+
+    assert result["best_attempt"]["condition_metric"] == "figaroh_base_regressor"
+    assert result["best_attempt"]["condition_number"] == 150.84
+    assert result["best_attempt"]["pinocchio_effective_condition_number"] == 106.28
+    assert result["best_attempt"]["motion_summary"] == {
+        "max_joint_step_rad": 0.0196,
+        "max_velocity_rad_s": 1.95,
+        "max_acceleration_rad_s2": 25.51,
+    }
+    assert result["best_attempt"]["optimizer_status"] == "fail"
+    assert result["best_attempt"]["optimizer_reason"] == "dual_infeasible"
+    assert result["target_condition"] == {
+        "target_condition_number": 100.0,
+        "status": "not_met",
+        "best_condition_metric": "figaroh_base_regressor",
+        "best_condition_number": 150.84,
+        "best_attempt_id": "attempt-001",
+        "next_gate": "continue_structural_oed_search",
+    }
+    assert flattened["attempts"][0]["condition_metric"] == "figaroh_base_regressor"
+    assert flattened["attempts"][0]["condition_number"] == 150.84
+    assert flattened["attempts"][0]["pinocchio_effective_condition_number"] == 106.28
+    assert flattened["attempts"][0]["max_joint_step_rad"] == 0.0196
+    assert flattened["attempts"][0]["max_velocity_rad_s"] == 1.95
+    assert flattened["attempts"][0]["max_acceleration_rad_s2"] == 25.51
+    assert flattened["attempts"][0]["optimizer_status"] == "fail"
+    assert flattened["attempts"][0]["optimizer_reason"] == "dual_infeasible"
 
 
 def test_oed_scan_records_trajectory_command_fault_and_continues(
@@ -217,6 +328,63 @@ def test_oed_scan_records_trajectory_command_fault_and_continues(
         "kind": "optimizer_dual_infeasible",
         "next_action": "tune IPOPT scaling/initialization or reduce objective ill-conditioning before changing hardware safety limits",
     }
+
+
+def test_oed_scan_classifies_figaroh_cubic_spline_infeasible_fault(
+    tmp_path: Path,
+) -> None:
+    class FaultingPlanner:
+        def write_plan(self, _request):
+            raise TrajectoryCommandError(
+                {
+                    "exit_code": 1,
+                    "stdout_json": {
+                        "status": "failed",
+                        "reason": "figaroh_oed_failed",
+                        "message": "FIGAROH results did not include T_F/P_F segments",
+                    },
+                    "optimizer_convergence": {
+                        "status": "not_evaluated",
+                        "reason": "optimizer_exit_not_reported",
+                    },
+                    "stderr": (
+                        "WARNING:figaroh.utils.cubic_spline:"
+                        "Joint vel idx_v 1 limits violated!\n"
+                        "WARNING:figaroh.utils.cubic_spline:"
+                        "FAILED to generate a feasible cubic spline\n"
+                    ),
+                }
+            )
+
+    request = OedScanRequest(
+        profile_name="fourier_multisine",
+        dof=6,
+        sample_hz=20.0,
+        q_center=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
+        urdf_path="configs/models/X5_camera.urdf",
+        safe_config_path="configs/x5.safe.yaml",
+        output_dir=tmp_path,
+        durations_s=(2.0,),
+        amplitudes_rad=(0.45,),
+        n_wps_values=(7,),
+        stack_reps_values=(1,),
+        random_seed_values=(2,),
+        ipopt_max_iterations=300,
+        ipopt_print_level=5,
+        condition_number_threshold=500.0,
+        trajectory_command_argv=("python", "scripts/x5_figaroh_oed.py"),
+        attempt_timeout_s=300.0,
+    )
+
+    result = OedScanRunner(planner=FaultingPlanner()).run(request)
+
+    assert result["attempts"][0]["failure_classification"] == {
+        "kind": "figaroh_cubic_spline_infeasible",
+        "next_action": "repair FIGAROH waypoint initialization or relax OED velocity limits before adding seeds or IPOPT iterations",
+    }
+    assert result["best_diagnostic_attempt"]["failure_classification"] == (
+        result["attempts"][0]["failure_classification"]
+    )
 
 
 def test_oed_scan_writes_representative_ipopt_stdout_artifact(
@@ -458,15 +626,16 @@ def test_freeze_candidate_copies_best_planned_trajectory_with_provenance(
     assert manifest["source_attempt"] == str(attempt_dir)
     assert manifest["source_planned_trajectory"] == str(planned)
     assert manifest["source_execution_trajectory"] == str(execution)
-    assert manifest["condition_number"] == 106.27694211039746
+    assert manifest["condition_number"] == 150.83617311561034
     assert manifest["base_regressor_condition_number"] == 150.83617311561034
     assert manifest["pinocchio_effective_condition_number"] == 106.27694211039746
     assert manifest["rank"] == 36
     assert manifest["safety_allowed"] is True
     assert manifest["target_condition_number"] == 100.0
     assert manifest["target_condition_status"] == "fail"
-    assert manifest["target_condition_margin"] == pytest.approx(6.27694211039746)
-    assert manifest["next_gate"] == "continue_focused_oed_search"
+    assert manifest["target_condition_metric"] == "figaroh_base_regressor"
+    assert manifest["target_condition_margin"] == pytest.approx(50.83617311561034)
+    assert manifest["next_gate"] == "continue_structural_oed_search"
     assert manifest["replay_hint"]["candidate_trajectory"] == str(recommended)
 
 
@@ -547,10 +716,11 @@ def test_oed_followup_plan_builds_replay_and_focused_scan_commands(
     saved = json.loads((output_dir / "followup_plan.json").read_text(encoding="utf-8"))
     assert result == saved
     assert result["schema"] == "armctrl.x5_oed_followup_plan.v1"
-    assert result["baseline"]["condition_number"] == 106.27694211039746
+    assert result["baseline"]["condition_number"] == 150.83617311561034
+    assert result["baseline"]["target_condition_metric"] == "figaroh_base_regressor"
     assert result["baseline"]["safety_allowed"] is True
     assert result["baseline"]["target_condition_status"] == "fail"
-    assert result["baseline"]["next_gate"] == "continue_focused_oed_search"
+    assert result["baseline"]["next_gate"] == "continue_structural_oed_search"
     assert result["host_contract"]["heavy_oed_scan"]["allowed_hosts"] == [
         "local_wsl",
         "workstation",
@@ -567,6 +737,43 @@ def test_oed_followup_plan_builds_replay_and_focused_scan_commands(
     assert result["warm_start_status"] == "not_supported_by_current_figaroh_wrapper"
     assert "--candidate-trajectory" in result["commands"]["replay_plan"]
     assert str(candidate) in result["commands"]["replay_plan"]
-    assert "--seed 2 3 4" in result["commands"]["focused_scan"]
-    assert "--amplitude 0.45 0.5 0.55" in result["commands"]["focused_scan"]
+    structural_scans = result["commands"]["structural_scans"]
+    assert list(structural_scans) == [
+        "A_duration2_nwps7_stack1",
+        "B_duration2_nwps9_stack1",
+        "C_duration3_nwps9_stack1",
+        "D_duration2_nwps7_stack2",
+    ]
+    assert "--duration 2 " in structural_scans["A_duration2_nwps7_stack1"]
+    assert "--n-wps 7 " in structural_scans["A_duration2_nwps7_stack1"]
+    assert "--stack-reps 1 " in structural_scans["A_duration2_nwps7_stack1"]
+    assert "--duration 2 " in structural_scans["B_duration2_nwps9_stack1"]
+    assert "--n-wps 9 " in structural_scans["B_duration2_nwps9_stack1"]
+    assert "--stack-reps 1 " in structural_scans["B_duration2_nwps9_stack1"]
+    assert "--duration 3 " in structural_scans["C_duration3_nwps9_stack1"]
+    assert "--n-wps 9 " in structural_scans["C_duration3_nwps9_stack1"]
+    assert "--stack-reps 1 " in structural_scans["C_duration3_nwps9_stack1"]
+    assert "--duration 2 " in structural_scans["D_duration2_nwps7_stack2"]
+    assert "--n-wps 7 " in structural_scans["D_duration2_nwps7_stack2"]
+    assert "--stack-reps 2 " in structural_scans["D_duration2_nwps7_stack2"]
+    assert all("--seed 2 3 4" in command for command in structural_scans.values())
+    assert all(
+        "--amplitude 0.45 0.5 0.55" in command
+        for command in structural_scans.values()
+    )
+    assert "focused_scan" not in result["commands"]
+    assert result["scan_strategy"] == {
+        "mode": "structural_parameterization_search",
+        "rejected_mode": "seed_or_iteration_only_lottery",
+        "combos": [
+            {"name": "A", "duration_s": 2.0, "n_wps": 7, "stack_reps": 1},
+            {"name": "B", "duration_s": 2.0, "n_wps": 9, "stack_reps": 1},
+            {"name": "C", "duration_s": 3.0, "n_wps": 9, "stack_reps": 1},
+            {"name": "D", "duration_s": 2.0, "n_wps": 7, "stack_reps": 2},
+        ],
+        "amplitude_rad": [0.45, 0.5, 0.55],
+        "seed": [2, 3, 4],
+        "target_acceleration_rad_s2": 20.0,
+    }
     assert result["acceptance"]["target_condition_number"] == 100.0
+    assert result["acceptance"]["target_condition_metric"] == "figaroh_base_regressor"

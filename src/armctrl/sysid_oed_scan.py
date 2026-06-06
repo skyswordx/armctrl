@@ -170,6 +170,7 @@ class OedScanRunner:
             plan = self._planner.write_plan(plan_request)
         except TrajectoryCommandError as exc:
             classification = _classify_optimizer_failure(exc.detail)
+            optimizer_summary = _optimizer_summary_from_command(exc.detail)
             return {
                 "attempt_id": attempt_id,
                 "status": "faulted",
@@ -182,6 +183,7 @@ class OedScanRunner:
                     "detail": exc.detail,
                 },
                 "failure_classification": classification,
+                **optimizer_summary,
             }
         payload = plan.to_json()
         backend = payload.get("trajectory_backend", {}) or {}
@@ -203,8 +205,11 @@ class OedScanRunner:
             "rank": backend.get("rank"),
             "timing_contract": backend.get("timing_contract"),
             "sampling_contract": backend.get("sampling_contract"),
+            "motion_summary": _motion_summary_from_backend(backend),
             "artifacts": payload.get("artifacts", {}),
         }
+        attempt.update(_condition_metrics_from_backend(backend))
+        attempt.update(_optimizer_summary_from_backend(backend))
         candidate_source = backend.get("candidate_source")
         if isinstance(candidate_source, dict) and isinstance(
             candidate_source.get("generated_by"),
@@ -275,7 +280,17 @@ def _best_attempt(attempts: list[dict[str, Any]]) -> dict[str, Any] | None:
         "status": best["status"],
         "safety_allowed": best.get("safety_allowed"),
         "oed_quality_gate": best.get("oed_quality_gate"),
+        "condition_metric": best.get("condition_metric"),
         "condition_number": best.get("condition_number"),
+        "figaroh_base_condition_number": best.get(
+            "figaroh_base_condition_number"
+        ),
+        "pinocchio_effective_condition_number": best.get(
+            "pinocchio_effective_condition_number"
+        ),
+        "motion_summary": best.get("motion_summary"),
+        "optimizer_status": best.get("optimizer_status"),
+        "optimizer_reason": best.get("optimizer_reason"),
         "rank": best.get("rank"),
         "parameters": best.get("parameters"),
         "output_dir": best.get("output_dir"),
@@ -293,28 +308,106 @@ def _target_condition_summary(
             "status": "not_evaluated",
             "best_condition_number": None,
             "best_attempt_id": None,
-            "next_gate": "run_focused_oed_scan",
+            "next_gate": "run_structural_oed_scan",
         }
     condition = best_attempt.get("condition_number")
     if not isinstance(condition, int | float):
         return {
             "target_condition_number": target_condition_number,
             "status": "not_evaluated",
+            "best_condition_metric": best_attempt.get("condition_metric"),
             "best_condition_number": condition,
             "best_attempt_id": best_attempt.get("attempt_id"),
-            "next_gate": "run_focused_oed_scan",
+            "next_gate": "run_structural_oed_scan",
         }
     status = "met" if float(condition) <= target_condition_number else "not_met"
     return {
         "target_condition_number": target_condition_number,
         "status": status,
+        "best_condition_metric": best_attempt.get("condition_metric"),
         "best_condition_number": condition,
         "best_attempt_id": best_attempt.get("attempt_id"),
         "next_gate": (
             "freeze_reproducible_candidate"
             if status == "met"
-            else "continue_focused_oed_search"
+            else "continue_structural_oed_search"
         ),
+    }
+
+
+def _condition_metrics_from_backend(backend: dict[str, Any]) -> dict[str, Any]:
+    base_score = backend.get("base_regressor_score")
+    regressor_score = backend.get("regressor_score")
+    base_condition = _numeric_score(
+        base_score,
+        "condition_number",
+    )
+    pinocchio_condition = _numeric_score(
+        regressor_score,
+        "effective_condition_number",
+    )
+    if base_condition is not None:
+        condition_metric = "figaroh_base_regressor"
+        condition_number = base_condition
+    else:
+        condition_metric = "pinocchio_effective_regressor"
+        condition_number = (
+            pinocchio_condition
+            if pinocchio_condition is not None
+            else backend.get("condition_number")
+        )
+    return {
+        "condition_metric": condition_metric,
+        "condition_number": condition_number,
+        "figaroh_base_condition_number": base_condition,
+        "pinocchio_effective_condition_number": pinocchio_condition,
+    }
+
+
+def _numeric_score(source: object, key: str) -> float | None:
+    if not isinstance(source, dict):
+        return None
+    value = source.get(key)
+    if not isinstance(value, int | float):
+        return None
+    return float(value)
+
+
+def _motion_summary_from_backend(backend: dict[str, Any]) -> dict[str, float] | None:
+    execution = backend.get("execution_trajectory")
+    if not isinstance(execution, dict):
+        return None
+    summary: dict[str, float] = {}
+    for key in (
+        "max_joint_step_rad",
+        "max_velocity_rad_s",
+        "max_acceleration_rad_s2",
+    ):
+        value = execution.get(key)
+        if isinstance(value, int | float):
+            summary[key] = float(value)
+    return summary or None
+
+
+def _optimizer_summary_from_backend(backend: dict[str, Any]) -> dict[str, str | None]:
+    candidate_source = backend.get("candidate_source")
+    if not isinstance(candidate_source, dict):
+        return {"optimizer_status": None, "optimizer_reason": None}
+    command = candidate_source.get("generated_by")
+    if not isinstance(command, dict):
+        return {"optimizer_status": None, "optimizer_reason": None}
+    return _optimizer_summary_from_command(command)
+
+
+def _optimizer_summary_from_command(command: dict[str, Any]) -> dict[str, str | None]:
+    convergence = command.get("optimizer_convergence")
+    if not isinstance(convergence, dict):
+        return {"optimizer_status": None, "optimizer_reason": None}
+    status = convergence.get("status")
+    reason = convergence.get("reason")
+    return {
+        "optimizer_status": str(status) if status is not None else None,
+        "optimizer_reason": str(reason) if reason is not None else None,
     }
 
 
@@ -336,7 +429,31 @@ def _flatten_attempt(attempt: dict[str, Any]) -> dict[str, Any]:
         "failure_kind": (
             failure.get("kind") if isinstance(failure, dict) else None
         ),
+        "condition_metric": attempt.get("condition_metric"),
         "condition_number": attempt.get("condition_number"),
+        "figaroh_base_condition_number": attempt.get(
+            "figaroh_base_condition_number"
+        ),
+        "pinocchio_effective_condition_number": attempt.get(
+            "pinocchio_effective_condition_number"
+        ),
+        "max_joint_step_rad": (attempt.get("motion_summary") or {}).get(
+            "max_joint_step_rad"
+        )
+        if isinstance(attempt.get("motion_summary"), dict)
+        else None,
+        "max_velocity_rad_s": (attempt.get("motion_summary") or {}).get(
+            "max_velocity_rad_s"
+        )
+        if isinstance(attempt.get("motion_summary"), dict)
+        else None,
+        "max_acceleration_rad_s2": (attempt.get("motion_summary") or {}).get(
+            "max_acceleration_rad_s2"
+        )
+        if isinstance(attempt.get("motion_summary"), dict)
+        else None,
+        "optimizer_status": attempt.get("optimizer_status"),
+        "optimizer_reason": attempt.get("optimizer_reason"),
         "rank": attempt.get("rank"),
         "parameters": attempt.get("parameters"),
         "optimizer_iterations": diagnostics.get("iterations"),
@@ -450,7 +567,12 @@ def _scan_report_markdown(result: dict[str, Any]) -> str:
                 "",
                 f"- Attempt: `{best.get('attempt_id')}`",
                 f"- Safety allowed: `{best.get('safety_allowed')}`",
+                f"- Condition metric: `{best.get('condition_metric')}`",
                 f"- Condition number: `{best.get('condition_number')}`",
+                f"- FIGAROH base condition: `{best.get('figaroh_base_condition_number')}`",
+                f"- Pinocchio effective condition: `{best.get('pinocchio_effective_condition_number')}`",
+                f"- Optimizer status: `{best.get('optimizer_status')}`",
+                f"- Optimizer reason: `{best.get('optimizer_reason')}`",
                 f"- Rank: `{best.get('rank')}`",
                 "",
             ]
@@ -471,11 +593,11 @@ def _scan_report_markdown(result: dict[str, Any]) -> str:
             ]
         )
     lines.extend(
-        [
-            "## Attempts",
-            "",
-            "| attempt | status | safety | OED gate | condition | rank | failure |",
-            "| --- | --- | --- | --- | ---: | ---: | --- |",
+            [
+                "## Attempts",
+                "",
+            "| attempt | status | safety | OED gate | optimizer | metric | condition | max step | max vel | max accel | rank | failure |",
+            "| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |",
         ]
     )
     for attempt in result.get("attempts", []):
@@ -485,13 +607,21 @@ def _scan_report_markdown(result: dict[str, Any]) -> str:
         gate_status = gate.get("status") if isinstance(gate, dict) else ""
         failure = attempt.get("failure_classification")
         failure_kind = failure.get("kind") if isinstance(failure, dict) else ""
+        motion = attempt.get("motion_summary")
+        if not isinstance(motion, dict):
+            motion = {}
         lines.append(
-            "| {attempt_id} | {status} | {safety} | {gate_status} | {condition} | {rank} | {failure} |".format(
+            "| {attempt_id} | {status} | {safety} | {gate_status} | {optimizer} | {metric} | {condition} | {max_step} | {max_vel} | {max_accel} | {rank} | {failure} |".format(
                 attempt_id=attempt.get("attempt_id", ""),
                 status=attempt.get("status", ""),
                 safety=attempt.get("safety_allowed", ""),
                 gate_status=gate_status,
+                optimizer=attempt.get("optimizer_status", ""),
+                metric=attempt.get("condition_metric", ""),
                 condition=attempt.get("condition_number", ""),
+                max_step=motion.get("max_joint_step_rad", ""),
+                max_vel=motion.get("max_velocity_rad_s", ""),
+                max_accel=motion.get("max_acceleration_rad_s2", ""),
                 rank=attempt.get("rank", ""),
                 failure=failure_kind,
             )
@@ -576,6 +706,11 @@ def _classify_optimizer_failure(command_result: dict[str, Any]) -> dict[str, str
             "kind": "optimizer_timeout",
             "next_action": "reduce per-attempt problem size or run this scan on a faster workstation with an explicit timeout",
         }
+    if _is_figaroh_cubic_spline_infeasible(command_result):
+        return {
+            "kind": "figaroh_cubic_spline_infeasible",
+            "next_action": "repair FIGAROH waypoint initialization or relax OED velocity limits before adding seeds or IPOPT iterations",
+        }
     convergence = command_result.get("optimizer_convergence")
     diagnostics = command_result.get("optimizer_diagnostics")
     if not isinstance(convergence, dict):
@@ -615,6 +750,21 @@ def _classify_optimizer_failure(command_result: dict[str, Any]) -> dict[str, str
         "kind": "optimizer_not_converged",
         "next_action": "scan seeds and timing knobs, then compare optimizer diagnostics and regressor condition",
     }
+
+
+def _is_figaroh_cubic_spline_infeasible(command_result: dict[str, Any]) -> bool:
+    stdout_json = command_result.get("stdout_json")
+    stdout_reason = ""
+    stdout_message = ""
+    if isinstance(stdout_json, dict):
+        stdout_reason = str(stdout_json.get("reason", ""))
+        stdout_message = str(stdout_json.get("message", ""))
+    stderr = str(command_result.get("stderr", ""))
+    return (
+        stdout_reason == "figaroh_oed_failed"
+        and "T_F/P_F" in stdout_message
+        and "FAILED to generate a feasible cubic spline" in stderr
+    )
 
 
 def _diagnostic_float(diagnostics: dict[str, Any], key: str) -> float | None:
