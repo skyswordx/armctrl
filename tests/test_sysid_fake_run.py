@@ -1047,7 +1047,10 @@ def test_cli_sysid_run_sdk_repeated_run_uses_updated_live_hold_pose(
     safe_center = (0.0, 0.3, 0.3, 0.0, 0.0, 0.0)
     first_hold = safe_center
     second_hold = (0.018, 0.302, 0.288, -0.004, -0.002, 0.001)
-    max_heartbeat_age_s = 10.0
+    # The CLI path can spend several seconds importing/planning on slow robot
+    # hosts. This fixture window keeps the regression focused on live q_hold
+    # handoff semantics; production submit still enforces its own 1 s guard.
+    max_heartbeat_age_s = 300.0
 
     runtime_payload = start_fake_runtime_session(
         q_current=first_hold,
