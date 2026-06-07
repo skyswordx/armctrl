@@ -1313,6 +1313,87 @@ def test_runtime_queue_rejects_explicit_start_policy_before_preposition(
         )
 
 
+def test_cli_runtime_preposition_enables_explicit_q_owner_submit(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    explicit_start = (0.10, 0.3, 0.3)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "runtime",
+            "preposition",
+            "--session-artifact",
+            str(session_artifact),
+            "--q-target",
+            *[str(value) for value in explicit_start],
+            "--send-hz",
+            "50",
+            "--max-joint-step-rad",
+            "0.05",
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+    command = json.loads(Path(payload["artifacts"]["command"]).read_text(encoding="utf-8"))
+    backend = FakeMotionBackend()
+    backend.send_joint_command(
+        tuple(float(value) for value in session["q_meas"]),
+        producer="test_bootstrap",
+        mode=MotionMode.HOLD,
+        monotonic_s=0.0,
+    )
+    runtime = ArmRuntime(
+        backend=backend,
+        safe_center=tuple(float(value) for value in session["safe_center"]),
+        runtime_session_id=str(session["runtime_session_id"]),
+    )
+    runtime.mark_hold_safe(q_hold=tuple(float(value) for value in session["q_hold"]))
+
+    preposition_result = execute_pending_runtime_commands(
+        session_artifact_path=session_artifact,
+        backend=backend,
+        runtime=runtime,
+        max_heartbeat_age_s=1.0,
+    )
+    updated_session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    explicit_submit = submit_trajectory_command(
+        session_artifact_path=session_artifact,
+        owner="recipe",
+        expected_q_start=explicit_start,
+        q_points=[explicit_start, (0.11, 0.3, 0.3)],
+        send_hz=50.0,
+        start_pose_policy="explicit_q",
+        max_start_error_rad=0.02,
+        heartbeat_timeout_s=0.5,
+        max_heartbeat_age_s=1.0,
+    )
+
+    assert payload["status"] == "queued"
+    assert payload["schema"] == "armctrl.runtime_preposition.v1"
+    assert payload["start_pose_policy"] == "live_hold"
+    assert payload["q_start"] == [0.0, 0.3, 0.3]
+    assert payload["q_target"] == list(explicit_start)
+    assert command["owner"] == "runtime_preposition"
+    assert command["start_pose_policy"] == "live_hold"
+    assert command["q_points"][0] == [0.0, 0.3, 0.3]
+    assert command["q_points"][-1] == list(explicit_start)
+    assert preposition_result is not None
+    assert preposition_result["status"] == "completed"
+    assert updated_session["q_hold"] == list(explicit_start)
+    assert explicit_submit["status"] == "queued"
+    assert explicit_submit["start_pose_policy"] == "explicit_q"
+
+
 def test_runtime_queue_holds_final_command_when_readback_lags(
     tmp_path: Path,
 ) -> None:

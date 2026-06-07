@@ -317,6 +317,39 @@ def main(argv: Sequence[str] | None = None) -> int:
     runtime_watchdog_parser.add_argument("--output")
     runtime_watchdog_parser.add_argument("--json", action="store_true", dest="as_json")
 
+    runtime_preposition_parser = runtime_subparsers.add_parser("preposition")
+    runtime_preposition_parser.add_argument("--session-artifact", required=True)
+    runtime_preposition_parser.add_argument(
+        "--q-target",
+        nargs="+",
+        type=float,
+        required=True,
+    )
+    runtime_preposition_parser.add_argument("--send-hz", type=float, default=50.0)
+    runtime_preposition_parser.add_argument(
+        "--max-joint-step-rad",
+        type=float,
+        default=0.01,
+    )
+    runtime_preposition_parser.add_argument(
+        "--max-start-error-rad",
+        type=float,
+        default=0.02,
+    )
+    runtime_preposition_parser.add_argument(
+        "--heartbeat-timeout-s",
+        type=float,
+    )
+    runtime_preposition_parser.add_argument(
+        "--max-heartbeat-age-s",
+        type=float,
+        default=1.0,
+    )
+    runtime_preposition_parser.add_argument("--output")
+    runtime_preposition_parser.add_argument(
+        "--json", action="store_true", dest="as_json"
+    )
+
     runtime_submit_trajectory_parser = runtime_subparsers.add_parser(
         "submit-trajectory"
     )
@@ -1529,6 +1562,83 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         _emit(payload, as_json=args.as_json)
         return 0 if payload.get("status") == "ok" else 3
+
+    if args.command == "runtime" and args.runtime_command == "preposition":
+        try:
+            runtime_status = runtime_status_from_artifact(
+                session_artifact_path=Path(args.session_artifact),
+                max_heartbeat_age_s=args.max_heartbeat_age_s,
+            )
+            q_start = _runtime_float_list(runtime_status.get("q_hold"), name="q_hold")
+            q_target = [float(value) for value in args.q_target]
+            q_points = _linear_q_points(
+                q_start=q_start,
+                q_target=q_target,
+                max_joint_step_rad=args.max_joint_step_rad,
+            )
+            heartbeat_timeout_s = (
+                float(args.heartbeat_timeout_s)
+                if args.heartbeat_timeout_s is not None
+                else max(0.5, (len(q_points) - 1) / float(args.send_hz) + 1.0)
+            )
+            queued = submit_trajectory_command(
+                session_artifact_path=Path(args.session_artifact),
+                owner="runtime_preposition",
+                expected_q_start=q_start,
+                q_points=q_points,
+                send_hz=args.send_hz,
+                max_start_error_rad=args.max_start_error_rad,
+                heartbeat_timeout_s=heartbeat_timeout_s,
+                max_heartbeat_age_s=args.max_heartbeat_age_s,
+                output_path=None,
+                start_pose_policy="live_hold",
+            )
+        except (RuntimeSessionError, RuntimeError, ValueError) as error:
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.runtime_preposition.v1",
+                "reason": str(error),
+                "movement_command_sent": False,
+                "start_pose_policy": "live_hold",
+                "fault_landing_mode": "damping",
+                "next_gate": "restore live runtime hold_safe before preposition",
+            }
+            payload = _attach_output_artifact(
+                payload,
+                args.output,
+                artifact_key="runtime_preposition",
+            )
+            _emit(payload, as_json=args.as_json)
+            return 3
+        payload = {
+            "status": "queued",
+            "schema": "armctrl.runtime_preposition.v1",
+            "movement_command_sent": False,
+            "owner": "runtime_preposition",
+            "mode": "trajectory_replay",
+            "q_start": q_start,
+            "q_target": q_target,
+            "sample_count": len(q_points),
+            "send_hz": float(args.send_hz),
+            "start_pose_policy": "live_hold",
+            "start_pose_guard": queued.get("start_pose_guard"),
+            "runtime": queued.get("runtime"),
+            "runtime_command": {
+                "command_id": queued["command_id"],
+                "status": "queued",
+                "artifacts": queued["artifacts"],
+            },
+            "artifacts": queued["artifacts"],
+            "fault_landing_mode": "damping",
+            "next_gate": "wait for live runtime preposition result artifact",
+        }
+        payload = _attach_output_artifact(
+            payload,
+            args.output,
+            artifact_key="runtime_preposition",
+        )
+        _emit(payload, as_json=args.as_json)
+        return 0
 
     if args.command == "runtime" and args.runtime_command == "submit-trajectory":
         try:
@@ -4131,6 +4241,37 @@ def _runtime_live_hold_start_pose(
         "q_start_error_max_abs_rad": max_abs_error,
         "max_start_error_rad": float(max_start_error_rad),
     }
+
+
+def _linear_q_points(
+    *,
+    q_start: Sequence[float],
+    q_target: Sequence[float],
+    max_joint_step_rad: float,
+) -> list[list[float]]:
+    start = [float(value) for value in q_start]
+    target = [float(value) for value in q_target]
+    if not start:
+        raise ValueError("q_start must not be empty")
+    if len(start) != len(target):
+        raise ValueError("q_start and q_target lengths must match")
+    if max_joint_step_rad <= 0.0:
+        raise ValueError("max_joint_step_rad must be positive")
+    max_delta = max(
+        (
+            abs(target_value - start_value)
+            for start_value, target_value in zip(start, target, strict=True)
+        ),
+        default=0.0,
+    )
+    step_count = max(1, int(math.ceil(max_delta / float(max_joint_step_rad))))
+    return [
+        [
+            start_value + (target_value - start_value) * (step_index / step_count)
+            for start_value, target_value in zip(start, target, strict=True)
+        ]
+        for step_index in range(step_count + 1)
+    ]
 
 
 def _runtime_float_list(values: object, *, name: str) -> list[float]:
