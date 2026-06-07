@@ -273,7 +273,14 @@ def execute_runtime_command(
         }
         session["readiness"] = runtime_readiness(session)
         _write_json_atomic(session_artifact_path, session)
-        motion = _execute_motion_command(command, backend=backend)
+        motion = _execute_motion_command(
+            command,
+            backend=backend,
+            watchdog=lambda: _owner_timeout_watchdog(
+                session_artifact_path=session_artifact_path,
+                owner=owner,
+            ),
+        )
         watchdog = _owner_timeout_watchdog(
             session_artifact_path=session_artifact_path,
             owner=owner,
@@ -337,6 +344,7 @@ def _execute_motion_command(
     command: dict[str, object],
     *,
     backend: MotionBackend,
+    watchdog=None,
 ) -> MotionExecutionResult:
     motion = MotionRuntime(backend=backend)
     kind = command.get("kind")
@@ -357,6 +365,7 @@ def _execute_motion_command(
             producer=str(command.get("owner")),
             trajectory_sample_hz=send_hz,
             hold_after=True,
+            watchdog=watchdog,
         )
     if kind == "intent":
         return motion.execute_intent_frame(
@@ -373,6 +382,7 @@ def _execute_motion_command(
             producer=str(command.get("owner")),
             send_hz=send_hz,
             hold_after=True,
+            watchdog=watchdog,
         )
     raise ValueError(f"unsupported runtime command kind: {kind}")
 

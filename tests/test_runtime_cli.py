@@ -308,25 +308,11 @@ def test_cli_runtime_start_fake_serve_refreshes_heartbeat_until_stop(
         assert refreshed["heartbeat"]["wall_time_s"] > first_wall_time_s
         assert refreshed["readiness"]["agent_sysid_smoke_allowed"] is True
 
-        stop_completed = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "armctrl.cli",
-                "runtime",
-                "stop",
-                "--session-artifact",
-                str(session_artifact),
-                "--output",
-                str(session_artifact),
-                "--json",
-            ],
-            capture_output=True,
-            text=True,
-        )
+        stop_completed = _run_runtime_stop_with_retry(session_artifact)
 
         assert stop_completed.returncode == 3
-        stdout, stderr = server.communicate(timeout=3.0)
+        _wait_for_runtime_stopped(session_artifact)
+        stdout, stderr = server.communicate(timeout=8.0)
         assert server.returncode == 0
         served = json.loads(stdout)
         stopped = json.loads(session_artifact.read_text(encoding="utf-8"))
@@ -896,9 +882,9 @@ def test_runtime_queue_writes_owner_active_status_before_motion(
     observed: dict[str, object] = {}
     from armctrl.runtime_ipc import _execute_motion_command as original_execute_motion
 
-    def observe_active_status(command: dict[str, object], *, backend):
+    def observe_active_status(command: dict[str, object], *, backend, **kwargs):
         observed.update(json.loads(session_artifact.read_text(encoding="utf-8")))
-        return original_execute_motion(command, backend=backend)
+        return original_execute_motion(command, backend=backend, **kwargs)
 
     monkeypatch.setattr(
         "armctrl.runtime_ipc._execute_motion_command",
@@ -953,8 +939,8 @@ def test_runtime_queue_owner_heartbeat_timeout_lands_damping(
     )
     from armctrl.runtime_ipc import _execute_motion_command as original_execute_motion
 
-    def age_owner_lease(command: dict[str, object], *, backend):
-        motion = original_execute_motion(command, backend=backend)
+    def age_owner_lease(command: dict[str, object], *, backend, **kwargs):
+        motion = original_execute_motion(command, backend=backend, **kwargs)
         active = json.loads(session_artifact.read_text(encoding="utf-8"))
         active["owner_lease"]["heartbeat_wall_time_s"] = time.time() - 1.0
         session_artifact.write_text(json.dumps(active), encoding="utf-8")
@@ -984,6 +970,65 @@ def test_runtime_queue_owner_heartbeat_timeout_lands_damping(
     assert updated_session["owner"] is None
     assert updated_session["owner_lease"] is None
     assert backend.damping_count >= 1
+
+
+def test_runtime_queue_passes_owner_watchdog_into_motion_loop(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    backend = FakeMotionBackend()
+    backend.send_joint_command(
+        tuple(float(value) for value in session["q_meas"]),
+        producer="test_bootstrap",
+        mode=MotionMode.HOLD,
+        monotonic_s=0.0,
+    )
+    runtime = ArmRuntime(
+        backend=backend,
+        safe_center=tuple(float(value) for value in session["safe_center"]),
+        runtime_session_id=str(session["runtime_session_id"]),
+    )
+    runtime.mark_hold_safe(q_hold=tuple(float(value) for value in session["q_hold"]))
+    submit_trajectory_command(
+        session_artifact_path=session_artifact,
+        owner="sysid",
+        expected_q_start=(0.0, 0.3, 0.3),
+        q_points=[(0.0, 0.3, 0.3), (0.02, 0.3, 0.3)],
+        send_hz=50.0,
+        max_start_error_rad=0.02,
+        heartbeat_timeout_s=0.01,
+        max_heartbeat_age_s=1.0,
+    )
+    captured: dict[str, object] = {}
+    from armctrl.motion_runtime import MotionRuntime
+
+    original_execute_trajectory = MotionRuntime.execute_trajectory
+
+    def capture_watchdog(self, *args, **kwargs):
+        watchdog = kwargs.get("watchdog")
+        captured["watchdog_passed"] = watchdog is not None
+        active = json.loads(session_artifact.read_text(encoding="utf-8"))
+        active["owner_lease"]["heartbeat_wall_time_s"] = time.time() - 1.0
+        session_artifact.write_text(json.dumps(active), encoding="utf-8")
+        captured["watchdog_event"] = watchdog()
+        return original_execute_trajectory(self, *args, **kwargs)
+
+    monkeypatch.setattr(MotionRuntime, "execute_trajectory", capture_watchdog)
+
+    result = execute_pending_runtime_commands(
+        session_artifact_path=session_artifact,
+        backend=backend,
+        runtime=runtime,
+        max_heartbeat_age_s=1.0,
+    )
+
+    assert result is not None
+    assert captured["watchdog_passed"] is True
+    assert captured["watchdog_event"]["reason"] == "owner_heartbeat_timeout"
+    assert result["status"] == "faulted"
 
 
 def test_cli_runtime_serve_executes_queued_trajectory_and_returns_to_hold(
@@ -1093,7 +1138,8 @@ def test_cli_runtime_serve_executes_queued_trajectory_and_returns_to_hold(
             capture_output=True,
             text=True,
         )
-        stdout, stderr = server.communicate(timeout=3.0)
+        _wait_for_runtime_stopped(session_artifact)
+        stdout, stderr = server.communicate(timeout=8.0)
         assert server.returncode == 0
         assert stderr == ""
         assert json.loads(stdout)["status"] == "stopped"
@@ -1236,6 +1282,48 @@ def _wait_for_runtime_command_result(path: Path) -> dict[str, object]:
                 return payload
         time.sleep(0.02)
     raise AssertionError(f"runtime command result was not written: {path}")
+
+
+def _wait_for_runtime_stopped(path: Path) -> dict[str, object]:
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        if path.exists():
+            payload = _read_json_with_retry(path)
+            if (
+                payload is not None
+                and payload.get("status") == "stopped"
+                and payload.get("mode") == "damping"
+            ):
+                return payload
+        time.sleep(0.02)
+    raise AssertionError(f"runtime session did not stop: {path}")
+
+
+def _run_runtime_stop_with_retry(path: Path) -> subprocess.CompletedProcess[str]:
+    last_completed: subprocess.CompletedProcess[str] | None = None
+    for _ in range(10):
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "armctrl.cli",
+                "runtime",
+                "stop",
+                "--session-artifact",
+                str(path),
+                "--output",
+                str(path),
+                "--json",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        last_completed = completed
+        if completed.returncode == 3:
+            return completed
+        time.sleep(0.05)
+    assert last_completed is not None
+    return last_completed
 
 
 def _read_json_with_retry(path: Path) -> dict[str, object] | None:

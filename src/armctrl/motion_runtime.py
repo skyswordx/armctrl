@@ -201,6 +201,7 @@ class MotionRuntime:
         producer: str,
         trajectory_sample_hz: float,
         hold_after: bool = False,
+        watchdog: Callable[[], dict[str, object] | None] | None = None,
     ) -> MotionExecutionResult:
         points = list(trajectory)
         _validate_trajectory_inputs(
@@ -217,6 +218,21 @@ class MotionRuntime:
                 begin_trajectory(points)
             start_s = self._monotonic()
             for point in points:
+                watchdog_event = watchdog() if watchdog is not None else None
+                if watchdog_event is not None:
+                    self._damping()
+                    return _motion_execution_result(
+                        status="faulted",
+                        producer=producer,
+                        mode=MotionMode.TRAJECTORY_REPLAY,
+                        trajectory_sample_hz=float(trajectory_sample_hz),
+                        sent_times=sent_times,
+                        expected_period_s=1.0 / float(trajectory_sample_hz),
+                        controller_dt_s=getattr(self._backend, "controller_dt_s", None),
+                        samples=samples,
+                        landing_mode=MotionMode.DAMPING.value,
+                        error=_watchdog_error(watchdog_event),
+                    )
                 target_s = start_s + float(point.time_s)
                 now_s = self._monotonic()
                 if now_s < target_s:
@@ -256,6 +272,21 @@ class MotionRuntime:
                         controller_dt_s=getattr(self._backend, "controller_dt_s", None),
                         samples=samples,
                         landing_mode=MotionMode.DAMPING.value,
+                    )
+                watchdog_event = watchdog() if watchdog is not None else None
+                if watchdog_event is not None:
+                    self._damping()
+                    return _motion_execution_result(
+                        status="faulted",
+                        producer=producer,
+                        mode=MotionMode.TRAJECTORY_REPLAY,
+                        trajectory_sample_hz=float(trajectory_sample_hz),
+                        sent_times=sent_times,
+                        expected_period_s=1.0 / float(trajectory_sample_hz),
+                        controller_dt_s=getattr(self._backend, "controller_dt_s", None),
+                        samples=samples,
+                        landing_mode=MotionMode.DAMPING.value,
+                        error=_watchdog_error(watchdog_event),
                     )
             if hold_after:
                 landing_mode = self._hold()
@@ -297,6 +328,7 @@ class MotionRuntime:
         producer: str,
         send_hz: float,
         hold_after: bool = False,
+        watchdog: Callable[[], dict[str, object] | None] | None = None,
     ) -> MotionExecutionResult:
         if send_hz <= 0.0:
             raise ValueError("send_hz must be positive")
@@ -313,6 +345,21 @@ class MotionRuntime:
             self._last_intent_frame_s = start_s
             self._stale_intent_held = False
             for point in points:
+                watchdog_event = watchdog() if watchdog is not None else None
+                if watchdog_event is not None:
+                    self._damping()
+                    return _motion_execution_result(
+                        status="faulted",
+                        producer=producer,
+                        mode=MotionMode.AGENT_SERVO,
+                        trajectory_sample_hz=float(send_hz),
+                        sent_times=sent_times,
+                        expected_period_s=1.0 / float(send_hz),
+                        controller_dt_s=getattr(self._backend, "controller_dt_s", None),
+                        samples=samples,
+                        landing_mode=MotionMode.DAMPING.value,
+                        error=_watchdog_error(watchdog_event),
+                    )
                 target_s = start_s + float(point.time_s)
                 now_s = self._monotonic()
                 if now_s < target_s:
@@ -352,6 +399,21 @@ class MotionRuntime:
                         controller_dt_s=getattr(self._backend, "controller_dt_s", None),
                         samples=samples,
                         landing_mode=MotionMode.DAMPING.value,
+                    )
+                watchdog_event = watchdog() if watchdog is not None else None
+                if watchdog_event is not None:
+                    self._damping()
+                    return _motion_execution_result(
+                        status="faulted",
+                        producer=producer,
+                        mode=MotionMode.AGENT_SERVO,
+                        trajectory_sample_hz=float(send_hz),
+                        sent_times=sent_times,
+                        expected_period_s=1.0 / float(send_hz),
+                        controller_dt_s=getattr(self._backend, "controller_dt_s", None),
+                        samples=samples,
+                        landing_mode=MotionMode.DAMPING.value,
+                        error=_watchdog_error(watchdog_event),
                     )
             if hold_after:
                 landing_mode = self._hold()
@@ -731,6 +793,11 @@ def _motion_execution_result(
 
 def _motion_error(exc: Exception) -> dict[str, str]:
     return {"type": exc.__class__.__name__, "message": str(exc)}
+
+
+def _watchdog_error(event: dict[str, object]) -> dict[str, str]:
+    reason = str(event.get("reason") or "watchdog_timeout")
+    return {"type": "watchdog", "message": reason}
 
 
 def _validate_trajectory_inputs(

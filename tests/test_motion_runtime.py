@@ -310,6 +310,47 @@ def test_execute_trajectory_lands_damping_and_stops_on_fault_flags():
     assert runtime.mode == MotionMode.DAMPING
 
 
+def test_execute_trajectory_lands_damping_on_watchdog_timeout():
+    clock = ManualClock()
+    backend = FakeMotionBackend()
+    runtime = MotionRuntime(backend=backend, monotonic=clock.monotonic, sleep=clock.sleep)
+    watchdog_calls = 0
+
+    def watchdog() -> dict[str, object] | None:
+        nonlocal watchdog_calls
+        watchdog_calls += 1
+        if watchdog_calls >= 2:
+            return {
+                "reason": "owner_heartbeat_timeout",
+                "landing_mode": MotionMode.DAMPING.value,
+            }
+        return None
+
+    result = runtime.execute_trajectory(
+        [
+            JointTrajectoryPoint(time_s=0.0, q=(0.0, 0.0)),
+            JointTrajectoryPoint(time_s=0.01, q=(0.01, 0.0)),
+            JointTrajectoryPoint(time_s=0.02, q=(0.02, 0.0)),
+        ],
+        producer="sysid",
+        trajectory_sample_hz=100.0,
+        hold_after=True,
+        watchdog=watchdog,
+    )
+
+    assert result.status == "faulted"
+    assert result.landing_mode == "damping"
+    assert result.error == {
+        "type": "watchdog",
+        "message": "owner_heartbeat_timeout",
+    }
+    assert [command.q for command in backend.joint_commands] == [(0.0, 0.0)]
+    assert len(result.samples) == 1
+    assert backend.hold_count == 0
+    assert backend.damping_count == 1
+    assert runtime.mode == MotionMode.DAMPING
+
+
 def test_execute_trajectory_returns_aborted_result_on_send_exception():
     clock = ManualClock()
     backend = FailingSendBackend(fail_on_send=2)
@@ -356,6 +397,47 @@ def test_execute_intent_frame_lands_damping_and_stops_on_fault_flags():
     assert result.landing_mode == "damping"
     assert result.actual_send_hz == pytest.approx(50.0)
     assert len(backend.joint_commands) == 2
+    assert backend.hold_count == 0
+    assert backend.damping_count == 1
+    assert runtime.mode == MotionMode.DAMPING
+
+
+def test_execute_intent_frame_lands_damping_on_watchdog_timeout():
+    clock = ManualClock()
+    backend = FakeMotionBackend()
+    runtime = MotionRuntime(backend=backend, monotonic=clock.monotonic, sleep=clock.sleep)
+    watchdog_calls = 0
+
+    def watchdog() -> dict[str, object] | None:
+        nonlocal watchdog_calls
+        watchdog_calls += 1
+        if watchdog_calls >= 2:
+            return {
+                "reason": "owner_heartbeat_timeout",
+                "landing_mode": MotionMode.DAMPING.value,
+            }
+        return None
+
+    result = runtime.execute_intent_frame(
+        JointIntentFrame(
+            q_start=(0.0, 0.0),
+            q_target=(0.1, 0.05),
+            control_period_s=0.1,
+        ),
+        producer="agent",
+        send_hz=50.0,
+        hold_after=True,
+        watchdog=watchdog,
+    )
+
+    assert result.status == "faulted"
+    assert result.landing_mode == "damping"
+    assert result.error == {
+        "type": "watchdog",
+        "message": "owner_heartbeat_timeout",
+    }
+    assert len(backend.joint_commands) == 1
+    assert len(result.samples) == 1
     assert backend.hold_count == 0
     assert backend.damping_count == 1
     assert runtime.mode == MotionMode.DAMPING
