@@ -4,14 +4,14 @@ This is the short lab-facing checklist for the current armctrl-clean branch.
 
 Mainline target:
 
-`power on passive/droop -> runtime start arx5_sdk --serve -> recover to SAFE_CENTER -> active hold -> status -> Agent/SysID attach is blocked until live queue exists -> runtime stop`
+`power on passive/droop -> runtime start arx5_sdk --serve -> recover to SAFE_CENTER -> active hold -> status -> Agent/SysID submit queued owner command -> runtime consumes queue -> runtime stop`
 
 Important semantics:
 
 - Droop/passive pose can be physically safe at rest, but it is not the Agent/SysID start pose.
 - `SAFE_CENTER="0.0 0.3 0.3 0.0 0.0 0.0"` is a controlled hover pose and must be continuously held.
 - Readiness must mean the live runtime is fresh and still holding near `SAFE_CENTER`, not that an older command once reached it.
-- Real Agent/SysID CLIs must not open SDK/CAN directly. They now require a runtime artifact and currently return `blocked` until the live command queue/IPC execution path is implemented.
+- Real Agent/SysID CLIs must not open SDK/CAN directly. They now require a runtime artifact and submit queued owner commands for the live runtime to execute.
 
 Stop immediately on unexpected sag, collision risk, abnormal sound, high current, non-empty fault flags, or any `status` other than the expected value.
 
@@ -113,14 +113,15 @@ uv run armctrl agent-flow runtime-smoke-real \
   --json
 ```
 
-Expected current result:
+Expected result:
 
-- `status == "blocked"`
-- `movement_command_sent == false`
-- `reason` mentions live `MotionRuntime IPC`
-- The arm should continue holding at `SAFE_CENTER`; it should not perform Agent motion yet.
+- `status == "queued"`
+- `movement_command_sent == false` in the submit artifact; motion is sent only by the serving runtime.
+- `runtime.owner == "agent"` and `runtime.mode == "agent_servo"`.
+- A runtime command result artifact should appear under the session command queue.
+- The arm should make only the requested small intent motion, then return to active hold.
 
-This is intentional for the current branch. The next implementation step is the live runtime command queue/IPC that lets Agent acquire owner lease and stream commands through the already-open runtime.
+If this returns `blocked` or `rejected`, inspect `runtime_status.json` first; readiness must be fresh live hold at `SAFE_CENTER`.
 
 ## 4. SysID Attach Gate
 
@@ -145,15 +146,16 @@ uv run armctrl sysid run gravity_sweep \
   --json
 ```
 
-Expected current result:
+Expected result:
 
-- `status == "blocked"`
-- `movement_command_sent == false`
+- `status == "queued"`
+- `movement_command_sent == false` in the submit artifact; motion is sent only by the serving runtime.
 - `runtime.owner == "sysid"`
 - `runtime.mode == "trajectory_replay"`
-- The arm should continue holding at `SAFE_CENTER`; it should not run a SysID trajectory yet.
+- A runtime command result artifact should appear under the session command queue.
+- The arm should execute the safety-reviewed SysID trajectory, then return to active hold.
 
-This is also intentional for the current branch.
+If this returns `blocked` or `rejected`, inspect `runtime_status.json` and the generated SysID plan safety result before retrying.
 
 ## 5. Stop Runtime
 

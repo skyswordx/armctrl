@@ -3658,6 +3658,9 @@ def _serve_runtime_session_until_stopped(
             payload,
             max_heartbeat_age_s=max_heartbeat_age_s,
         )
+        latest = _read_json_retry(session_artifact_path)
+        if latest.get("status") == "stopped" or latest.get("mode") == "damping":
+            return latest
         _write_json_atomic(session_artifact_path, payload)
         time.sleep(float(heartbeat_period_s))
 

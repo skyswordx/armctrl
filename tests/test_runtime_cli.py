@@ -6,6 +6,7 @@ from pathlib import Path
 
 from armctrl.motion_runtime import FakeMotionBackend, JointStateSnapshot
 from armctrl.cli import _serve_runtime_session_until_stopped
+from armctrl.runtime_session import heartbeat_runtime_session_payload
 from armctrl.runtime_session import ARX5_RUNTIME_START_CONFIRMATION
 from armctrl.runtime_session import start_fake_runtime_session, stop_runtime_session_from_artifact
 from armctrl.runtime_session import start_arx5_runtime_session
@@ -371,6 +372,66 @@ def test_runtime_serve_loop_streams_active_hold_until_stop(tmp_path: Path) -> No
     assert hold_ticks == [(0.0, 0.3, 0.3), (0.0, 0.3, 0.3)]
     assert result["status"] == "stopped"
     assert result["mode"] == "damping"
+
+
+def test_runtime_serve_loop_does_not_overwrite_concurrent_stop(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    payload = start_fake_runtime_session(
+        q_current=(0.0, 0.3, 0.3),
+        safe_center=(0.0, 0.3, 0.3),
+        send_hz=50.0,
+        hold_hz=50.0,
+        max_joint_step_rad=0.01,
+        max_heartbeat_age_s=1.0,
+    )
+    session_artifact.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    stop_writes = 0
+
+    def stop_during_heartbeat(
+        current: dict[str, object],
+        *,
+        max_heartbeat_age_s: float,
+    ) -> dict[str, object]:
+        nonlocal stop_writes
+        if stop_writes == 0:
+            stopped = stop_runtime_session_from_artifact(
+                session_artifact_path=session_artifact,
+                max_heartbeat_age_s=1.0,
+            )
+            session_artifact.write_text(
+                json.dumps(stopped, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            stop_writes += 1
+        return heartbeat_runtime_session_payload(
+            current,
+            max_heartbeat_age_s=max_heartbeat_age_s,
+        )
+
+    monkeypatch.setattr(
+        "armctrl.cli.heartbeat_runtime_session_payload",
+        stop_during_heartbeat,
+    )
+    monkeypatch.setattr("armctrl.cli.time.sleep", lambda _seconds: None)
+
+    result = _serve_runtime_session_until_stopped(
+        session_artifact_path=session_artifact,
+        heartbeat_period_s=0.01,
+        max_heartbeat_age_s=1.0,
+    )
+    stopped = json.loads(session_artifact.read_text(encoding="utf-8"))
+
+    assert result["status"] == "stopped"
+    assert result["mode"] == "damping"
+    assert stopped["status"] == "stopped"
+    assert stopped["mode"] == "damping"
+    assert stop_writes == 1
 
 
 def test_cli_runtime_status_blocks_stale_heartbeat(tmp_path: Path) -> None:
