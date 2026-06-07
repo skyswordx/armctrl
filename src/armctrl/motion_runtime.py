@@ -646,10 +646,18 @@ class ArmRuntime:
         self._last_heartbeat_s = now_s
 
     def release_owner(self, *, owner: str) -> None:
+        q_meas = self._read_q_meas()
+        self._release_owner_to_hold(owner=owner, q_hold=q_meas)
+
+    def _release_owner_to_hold(
+        self,
+        *,
+        owner: str,
+        q_hold: tuple[float, ...],
+    ) -> None:
         if self._owner != owner:
             raise ArmRuntimeError(f"runtime is not owned by {owner}")
-        q_meas = self._read_q_meas()
-        self.mark_hold_safe(q_hold=q_meas)
+        self.mark_hold_safe(q_hold=q_hold)
         self._backend.hold()
 
     def watchdog_tick(self) -> dict[str, str] | None:
@@ -757,7 +765,12 @@ class ArmRuntime:
         result: MotionExecutionResult,
     ) -> MotionExecutionResult:
         if result.status == "completed":
-            self.release_owner(owner=owner)
+            final_q_cmd = (
+                result.samples[-1].q_cmd
+                if result.samples
+                else self._read_q_meas()
+            )
+            self._release_owner_to_hold(owner=owner, q_hold=final_q_cmd)
             return replace(result, landing_mode=MotionMode.HOLD.value)
         self._owner = None
         self._owner_mode = None

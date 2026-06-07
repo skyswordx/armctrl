@@ -284,13 +284,17 @@ def execute_runtime_command(
         }
         session["readiness"] = runtime_readiness(session)
         _write_json_atomic(session_artifact_path, session)
-        progress = lambda _sample: _refresh_active_owner_session(
+        progress = _active_owner_session_progress_throttle(
             session_artifact_path=session_artifact_path,
             runtime=live_runtime,
             owner=owner,
             mode=mode,
             heartbeat_timeout_s=float(command.get("heartbeat_timeout_s", 0.5)),
             max_heartbeat_age_s=max_heartbeat_age_s,
+            min_period_s=min(
+                0.2,
+                max(0.001, float(command.get("heartbeat_timeout_s", 0.5)) / 2.0),
+            ),
         )
         motion = _execute_motion_command(
             command,
@@ -429,6 +433,38 @@ def _session_from_runtime_status(
         max_heartbeat_age_s=max_heartbeat_age_s,
     )
     return updated
+
+
+def _active_owner_session_progress_throttle(
+    *,
+    session_artifact_path: Path,
+    runtime: ArmRuntime,
+    owner: str,
+    mode: str,
+    heartbeat_timeout_s: float,
+    max_heartbeat_age_s: float,
+    min_period_s: float,
+):
+    last_write_monotonic_s: float | None = None
+
+    def on_sample(sample: MotionAuditSample) -> None:
+        nonlocal last_write_monotonic_s
+        if (
+            last_write_monotonic_s is not None
+            and sample.sent_monotonic_s - last_write_monotonic_s < min_period_s
+        ):
+            return
+        last_write_monotonic_s = sample.sent_monotonic_s
+        _refresh_active_owner_session(
+            session_artifact_path=session_artifact_path,
+            runtime=runtime,
+            owner=owner,
+            mode=mode,
+            heartbeat_timeout_s=heartbeat_timeout_s,
+            max_heartbeat_age_s=max_heartbeat_age_s,
+        )
+
+    return on_sample
 
 
 def _refresh_active_owner_session(
