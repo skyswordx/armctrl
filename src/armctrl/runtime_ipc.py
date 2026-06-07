@@ -421,6 +421,9 @@ def _session_from_runtime_status(
     updated["q_meas"] = list(status.get("q_meas") or [])
     updated["q_hold"] = list(status.get("q_hold") or [])
     updated["fault_flags"] = list(status.get("fault_flags") or [])
+    updated["hold_fresh"] = False
+    updated["hold_age_s"] = None
+    updated["last_hold_wall_time_s"] = None
     updated = heartbeat_runtime_session_payload(
         updated,
         max_heartbeat_age_s=max_heartbeat_age_s,

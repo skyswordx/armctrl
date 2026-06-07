@@ -43,8 +43,10 @@ from armctrl.runtime_session import (
     heartbeat_runtime_session_payload,
     owner_heartbeat_from_artifact,
     recover_runtime_session_from_artifact,
+    record_runtime_hold_tick,
     refresh_runtime_status_payload,
     release_owner_from_artifact,
+    runtime_readiness,
     runtime_status_from_artifact,
     start_arx5_runtime_session,
     stop_runtime_session_from_artifact,
@@ -3876,11 +3878,47 @@ def _serve_runtime_session_until_stopped(
             payload = _read_json_retry(session_artifact_path)
             if payload.get("status") == "stopped" or payload.get("mode") == "damping":
                 return payload
-        if hold_tick is not None and payload.get("mode") == "hold_safe":
-            hold_tick(payload)
-            payload = _read_json_retry(session_artifact_path)
-            if payload.get("status") == "stopped" or payload.get("mode") == "damping":
-                return payload
+        if payload.get("mode") == "hold_safe":
+            if hold_tick is not None:
+                hold_tick(payload)
+            if backend is not None:
+                latest = _read_json_retry(session_artifact_path)
+                if latest.get("status") == "stopped" or latest.get("mode") == "damping":
+                    return latest
+                if latest.get("mode") == "hold_safe":
+                    try:
+                        state = backend.read_joint_state()
+                    except Exception as error:
+                        try:
+                            backend.damping()
+                        except Exception:
+                            pass
+                        faulted = dict(latest)
+                        faulted["status"] = "faulted"
+                        faulted["mode"] = "damping"
+                        faulted["owner"] = None
+                        faulted["owner_lease"] = None
+                        faulted["owner_deadman"] = None
+                        faulted["landing_mode"] = "damping"
+                        faulted["fault_landing_mode"] = "damping"
+                        faulted["error"] = {
+                            "type": type(error).__name__,
+                            "message": str(error),
+                        }
+                        faulted["readiness"] = runtime_readiness(faulted)
+                        _write_json_atomic(session_artifact_path, faulted)
+                        return faulted
+                    payload = record_runtime_hold_tick(
+                        latest,
+                        q_meas=state.q_meas,
+                        fault_flags=state.fault_flags,
+                        max_heartbeat_age_s=max_heartbeat_age_s,
+                    )
+                    _write_json_atomic(session_artifact_path, payload)
+            else:
+                payload = _read_json_retry(session_artifact_path)
+                if payload.get("status") == "stopped" or payload.get("mode") == "damping":
+                    return payload
         payload = heartbeat_runtime_session_payload(
             payload,
             max_heartbeat_age_s=max_heartbeat_age_s,

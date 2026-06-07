@@ -12,7 +12,7 @@ from armctrl.sysid_run import (
     SdkSysIdRunner,
     SDK_CONFIRMATION,
 )
-from armctrl.runtime_session import start_fake_runtime_session
+from armctrl.runtime_session import record_runtime_hold_tick, start_fake_runtime_session
 
 
 def _passing_readiness_artifact() -> dict[str, object]:
@@ -44,6 +44,12 @@ def _write_fake_runtime_session(path: Path) -> None:
         send_hz=50.0,
         hold_hz=50.0,
         max_joint_step_rad=0.01,
+        max_heartbeat_age_s=1.0,
+    )
+    payload = record_runtime_hold_tick(
+        payload,
+        q_meas=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
+        fault_flags=(),
         max_heartbeat_age_s=1.0,
     )
     path.write_text(
@@ -264,16 +270,23 @@ def test_cli_sysid_run_fake_acquires_runtime_owner_lease(tmp_path: Path) -> None
     output_dir = tmp_path / "ident-run"
     runtime_session_artifact = tmp_path / "runtime-session.json"
     safe_center = [0.0, 0.3, 0.3, 0.0, 0.0, 0.0]
+    runtime_payload = start_fake_runtime_session(
+        q_current=safe_center,
+        safe_center=safe_center,
+        send_hz=50.0,
+        hold_hz=50.0,
+        max_joint_step_rad=0.01,
+        max_heartbeat_age_s=5.0,
+    )
+    runtime_payload = record_runtime_hold_tick(
+        runtime_payload,
+        q_meas=safe_center,
+        fault_flags=(),
+        max_heartbeat_age_s=5.0,
+    )
     runtime_session_artifact.write_text(
         json.dumps(
-            start_fake_runtime_session(
-                q_current=safe_center,
-                safe_center=safe_center,
-                send_hz=50.0,
-                hold_hz=50.0,
-                max_joint_step_rad=0.01,
-                max_heartbeat_age_s=5.0,
-            ),
+            runtime_payload,
             ensure_ascii=False,
             indent=2,
         ),

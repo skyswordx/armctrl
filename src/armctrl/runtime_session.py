@@ -257,6 +257,37 @@ def heartbeat_runtime_session_payload(
     return refreshed
 
 
+def record_runtime_hold_tick(
+    payload: dict[str, object],
+    *,
+    q_meas: Sequence[float] | None,
+    fault_flags: Sequence[str] | None,
+    max_heartbeat_age_s: float,
+) -> dict[str, object]:
+    """Refresh live hold evidence written by the serving runtime process."""
+    updated = dict(payload)
+    now_s = time.time()
+    if q_meas is not None:
+        updated["q_meas"] = list(_float_tuple(q_meas, name="q_meas"))
+    if fault_flags is not None:
+        updated["fault_flags"] = [str(flag) for flag in fault_flags]
+    updated["hold_tick_count"] = int(updated.get("hold_tick_count") or 0) + 1
+    updated["last_hold_wall_time_s"] = now_s
+    updated["hold_fresh"] = True
+    updated["heartbeat"] = _heartbeat_status(
+        {"wall_time_s": now_s},
+        max_heartbeat_age_s=float(max_heartbeat_age_s),
+    )
+    updated["readiness"] = runtime_readiness(updated)
+    if updated.get("status") not in {"stopped", "faulted"}:
+        updated["status"] = (
+            "ok"
+            if updated["readiness"]["agent_sysid_smoke_allowed"] is True
+            else "blocked"
+        )
+    return updated
+
+
 def reject_arx5_runtime_start_without_confirmation(
     *,
     model: str,
@@ -494,6 +525,12 @@ def refresh_runtime_status_payload(
     )
     refreshed["heartbeat"] = heartbeat
     refreshed["owner_deadman"] = _owner_deadman_status(refreshed)
+    hold = _hold_fresh_status(
+        refreshed.get("last_hold_wall_time_s"),
+        max_heartbeat_age_s=float(max_heartbeat_age_s),
+    )
+    refreshed["hold_fresh"] = hold["fresh"]
+    refreshed["hold_age_s"] = hold["age_s"]
     readiness = runtime_readiness(refreshed)
     refreshed["readiness"] = readiness
     if readiness["agent_sysid_smoke_allowed"] is not True:
@@ -516,6 +553,8 @@ def runtime_readiness(payload: dict[str, object]) -> dict[str, object]:
         failed_checks.append("q_hold_close_to_safe_center")
     if not isinstance(heartbeat, dict) or heartbeat.get("fresh") is not True:
         failed_checks.append("heartbeat_fresh")
+    if payload.get("hold_fresh") is not True:
+        failed_checks.append("hold_fresh")
     if payload.get("fault_flags") not in ([], ()):
         failed_checks.append("no_fault_flags")
     return {
@@ -543,6 +582,9 @@ def runtime_status_summary(payload: dict[str, object]) -> dict[str, object]:
         "controller_dt_s": payload.get("controller_dt_s"),
         "send_hz": payload.get("send_hz"),
         "hold_hz": payload.get("hold_hz"),
+        "hold_tick_count": payload.get("hold_tick_count"),
+        "last_hold_wall_time_s": payload.get("last_hold_wall_time_s"),
+        "hold_fresh": payload.get("hold_fresh"),
         "fault_flags": payload.get("fault_flags"),
         "heartbeat": heartbeat if isinstance(heartbeat, dict) else None,
         "readiness": readiness if isinstance(readiness, dict) else runtime_readiness(payload),
@@ -579,6 +621,9 @@ def runtime_status_payload(
         "controller_dt_s": status.get("controller_dt_s"),
         "send_hz": float(send_hz),
         "hold_hz": float(hold_hz),
+        "hold_tick_count": 0,
+        "last_hold_wall_time_s": None,
+        "hold_fresh": False,
         "fault_flags": list(status.get("fault_flags") or []),
         "heartbeat": heartbeat,
         "runtime_contract": {
@@ -633,6 +678,22 @@ def _heartbeat_status(
             wall_time_s = float(heartbeat.get("wall_time_s"))
         except (TypeError, ValueError):
             wall_time_s = None
+    now_s = time.time()
+    age_s = None if wall_time_s is None else max(0.0, now_s - wall_time_s)
+    return {
+        "wall_time_s": wall_time_s,
+        "age_s": age_s,
+        "max_age_s": float(max_heartbeat_age_s),
+        "fresh": age_s is not None and age_s <= float(max_heartbeat_age_s),
+    }
+
+
+def _hold_fresh_status(
+    last_hold_wall_time_s: object,
+    *,
+    max_heartbeat_age_s: float,
+) -> dict[str, object]:
+    wall_time_s = _float_or_none(last_hold_wall_time_s)
     now_s = time.time()
     age_s = None if wall_time_s is None else max(0.0, now_s - wall_time_s)
     return {

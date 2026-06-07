@@ -11,7 +11,7 @@ from armctrl.agent_flow import (
     AgentFlowRealRuntimeSmoker,
 )
 from armctrl.motion_runtime import FakeMotionBackend, JointStateSnapshot
-from armctrl.runtime_session import start_fake_runtime_session
+from armctrl.runtime_session import record_runtime_hold_tick, start_fake_runtime_session
 
 
 class ManualClock:
@@ -295,7 +295,6 @@ def test_cli_agent_flow_review_replays_saved_contract(
         capture_output=True,
         text=True,
     )
-
     completed = subprocess.run(
         [
             sys.executable,
@@ -360,7 +359,6 @@ def test_cli_agent_flow_runtime_smoke_fake_replays_checked_intent_contract(
         capture_output=True,
         text=True,
     )
-
     completed = subprocess.run(
         [
             sys.executable,
@@ -530,6 +528,17 @@ def test_cli_agent_flow_runtime_smoke_fake_acquires_runtime_owner_lease(
         check=True,
         capture_output=True,
         text=True,
+    )
+    runtime_payload = json.loads(runtime_session.read_text(encoding="utf-8"))
+    runtime_payload = record_runtime_hold_tick(
+        runtime_payload,
+        q_meas=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
+        fault_flags=(),
+        max_heartbeat_age_s=1.0,
+    )
+    runtime_session.write_text(
+        json.dumps(runtime_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
     )
 
     completed = subprocess.run(
@@ -852,6 +861,12 @@ def test_cli_agent_flow_runtime_smoke_real_routes_to_gated_smoker(
         send_hz=50.0,
         hold_hz=50.0,
         max_joint_step_rad=0.01,
+        max_heartbeat_age_s=1.0,
+    )
+    runtime_payload = record_runtime_hold_tick(
+        runtime_payload,
+        q_meas=(0.0, 0.3),
+        fault_flags=(),
         max_heartbeat_age_s=1.0,
     )
     runtime_session.write_text(

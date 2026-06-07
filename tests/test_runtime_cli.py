@@ -13,6 +13,8 @@ from armctrl.motion_runtime import (
 from armctrl.cli import _runtime_stop_request_path, _serve_runtime_session_until_stopped
 from armctrl.runtime_session import heartbeat_runtime_session_payload
 from armctrl.runtime_session import ARX5_RUNTIME_START_CONFIRMATION
+from armctrl.runtime_session import record_runtime_hold_tick
+from armctrl.runtime_session import refresh_runtime_status_payload
 from armctrl.runtime_session import start_fake_runtime_session, stop_runtime_session_from_artifact
 from armctrl.runtime_session import start_arx5_runtime_session
 from armctrl.runtime_ipc import execute_pending_runtime_commands, submit_trajectory_command
@@ -99,7 +101,7 @@ def test_start_arx5_runtime_session_recovers_and_exports_live_hold_status() -> N
         max_heartbeat_age_s=1.0,
     )
 
-    assert payload["status"] == "ok"
+    assert payload["status"] == "blocked"
     assert payload["schema"] == "armctrl.arm_runtime_session.v1"
     assert payload["backend"] == "arx5_sdk"
     assert payload["model"] == "X5"
@@ -115,7 +117,10 @@ def test_start_arx5_runtime_session_recovers_and_exports_live_hold_status() -> N
     assert payload["hardware_motion"] is True
     assert payload["sdk_opened"] is True
     assert payload["movement_command_sent"] is True
-    assert payload["readiness"]["agent_sysid_smoke_allowed"] is True
+    assert payload["hold_tick_count"] == 0
+    assert payload["hold_fresh"] is False
+    assert payload["readiness"]["agent_sysid_smoke_allowed"] is False
+    assert payload["readiness"]["failed_checks"] == ["hold_fresh"]
     assert payload["recovery"]["status"] == "completed"
     assert payload["recovery"]["sample_count"] > 0
     assert backend.enter_count == 1
@@ -158,7 +163,7 @@ def test_cli_runtime_start_fake_recovers_to_hold_safe_session(tmp_path: Path) ->
 
     payload = json.loads(completed.stdout)
 
-    assert payload["status"] == "ok"
+    assert payload["status"] == "blocked"
     assert payload["schema"] == "armctrl.arm_runtime_session.v1"
     assert payload["backend"] == "fake"
     assert payload["mode"] == "hold_safe"
@@ -168,8 +173,12 @@ def test_cli_runtime_start_fake_recovers_to_hold_safe_session(tmp_path: Path) ->
     assert payload["safe_center"] == [0.0, 0.3, 0.3]
     assert payload["send_hz"] == 50.0
     assert payload["hold_hz"] == 50.0
+    assert payload["hold_tick_count"] == 0
+    assert payload["last_hold_wall_time_s"] is None
+    assert payload["hold_fresh"] is False
     assert payload["heartbeat"]["fresh"] is True
-    assert payload["readiness"]["agent_sysid_smoke_allowed"] is True
+    assert payload["readiness"]["agent_sysid_smoke_allowed"] is False
+    assert payload["readiness"]["failed_checks"] == ["hold_fresh"]
     assert payload["runtime_session_id"]
     assert payload["artifacts"]["runtime_session"] == str(session_artifact)
     assert json.loads(session_artifact.read_text(encoding="utf-8")) == payload
@@ -356,25 +365,55 @@ def test_runtime_serve_loop_streams_active_hold_until_stop(tmp_path: Path) -> No
     def hold_tick(current: dict[str, object]) -> None:
         hold_ticks.append(tuple(float(value) for value in current["q_hold"]))
         if len(hold_ticks) == 2:
-            stopped = stop_runtime_session_from_artifact(
-                session_artifact_path=session_artifact,
-                max_heartbeat_age_s=1.0,
-            )
-            session_artifact.write_text(
-                json.dumps(stopped, ensure_ascii=False, indent=2),
+            _runtime_stop_request_path(session_artifact).write_text(
+                "stop\n",
                 encoding="utf-8",
             )
+
+    backend = FakeMotionBackend()
+    backend.send_joint_command(
+        (0.0, 0.3, 0.3),
+        producer="test_bootstrap",
+        mode=MotionMode.HOLD,
+        monotonic_s=0.0,
+    )
 
     result = _serve_runtime_session_until_stopped(
         session_artifact_path=session_artifact,
         heartbeat_period_s=0.01,
         max_heartbeat_age_s=1.0,
+        backend=backend,
         hold_tick=hold_tick,
     )
 
     assert hold_ticks == [(0.0, 0.3, 0.3), (0.0, 0.3, 0.3)]
+    served = json.loads(session_artifact.read_text(encoding="utf-8"))
+    assert served["hold_tick_count"] == 2
+    assert served["last_hold_wall_time_s"] is not None
+    assert served["hold_fresh"] is True
     assert result["status"] == "stopped"
     assert result["mode"] == "damping"
+
+
+def test_runtime_status_blocks_when_hold_evidence_is_stale() -> None:
+    payload = start_fake_runtime_session(
+        q_current=(0.0, 0.3, 0.3),
+        safe_center=(0.0, 0.3, 0.3),
+        send_hz=50.0,
+        hold_hz=50.0,
+        max_joint_step_rad=0.01,
+        max_heartbeat_age_s=1.0,
+    )
+    payload["heartbeat"]["wall_time_s"] = time.time()
+    payload["hold_tick_count"] = 3
+    payload["last_hold_wall_time_s"] = time.time() - 10.0
+
+    refreshed = refresh_runtime_status_payload(payload, max_heartbeat_age_s=1.0)
+
+    assert refreshed["status"] == "blocked"
+    assert refreshed["hold_fresh"] is False
+    assert refreshed["readiness"]["agent_sysid_smoke_allowed"] is False
+    assert refreshed["readiness"]["failed_checks"] == ["hold_fresh"]
 
 
 def test_runtime_serve_loop_does_not_overwrite_concurrent_stop(
@@ -574,7 +613,10 @@ def test_cli_runtime_status_blocks_stale_heartbeat(tmp_path: Path) -> None:
     assert payload["schema"] == "armctrl.arm_runtime_status.v1"
     assert payload["mode"] == "hold_safe"
     assert payload["readiness"]["agent_sysid_smoke_allowed"] is False
-    assert payload["readiness"]["failed_checks"] == ["heartbeat_fresh"]
+    assert payload["readiness"]["failed_checks"] == [
+        "heartbeat_fresh",
+        "hold_fresh",
+    ]
 
 
 def test_cli_runtime_status_reports_active_owner_deadman(tmp_path: Path) -> None:
@@ -623,6 +665,8 @@ def test_cli_runtime_recover_fake_returns_session_to_hold_safe(
     session["mode"] = "passive_safe"
     session["q_meas"] = [0.8, 0.0, 0.0]
     session["q_hold"] = [0.8, 0.0, 0.0]
+    session["hold_fresh"] = False
+    session["last_hold_wall_time_s"] = None
     session["readiness"] = {"agent_sysid_smoke_allowed": False}
     session_artifact.write_text(json.dumps(session), encoding="utf-8")
 
@@ -647,14 +691,14 @@ def test_cli_runtime_recover_fake_returns_session_to_hold_safe(
             str(session_artifact),
             "--json",
         ],
-        check=True,
         capture_output=True,
         text=True,
     )
 
     payload = json.loads(completed.stdout)
 
-    assert payload["status"] == "ok"
+    assert completed.returncode == 3
+    assert payload["status"] == "blocked"
     assert payload["schema"] == "armctrl.arm_runtime_session.v1"
     assert payload["mode"] == "hold_safe"
     assert payload["owner"] is None
@@ -662,7 +706,10 @@ def test_cli_runtime_recover_fake_returns_session_to_hold_safe(
     assert payload["q_hold"] == [0.0, 0.3, 0.3]
     assert payload["safe_center"] == [0.0, 0.3, 0.3]
     assert payload["recovery"]["status"] == "completed"
-    assert payload["readiness"]["agent_sysid_smoke_allowed"] is True
+    assert payload["hold_tick_count"] == 0
+    assert payload["hold_fresh"] is False
+    assert payload["readiness"]["agent_sysid_smoke_allowed"] is False
+    assert payload["readiness"]["failed_checks"] == ["hold_fresh"]
     assert json.loads(session_artifact.read_text(encoding="utf-8")) == payload
 
 
@@ -732,6 +779,9 @@ def test_cli_sysid_readiness_accepts_fresh_live_runtime_status(
                 "controller_dt_s": 0.002,
                 "send_hz": 50.0,
                 "hold_hz": 50.0,
+                "hold_tick_count": 3,
+                "last_hold_wall_time_s": time.time(),
+                "hold_fresh": True,
                 "fault_flags": [],
                 "heartbeat": {
                     "fresh": True,
@@ -882,7 +932,8 @@ def test_cli_runtime_release_owner_returns_to_hold_safe(
     assert payload["status"] == "ok"
     assert payload["mode"] == "hold_safe"
     assert payload["owner"] is None
-    assert payload["readiness"]["agent_sysid_smoke_allowed"] is True
+    assert payload["readiness"]["agent_sysid_smoke_allowed"] is False
+    assert payload["readiness"]["failed_checks"] == ["hold_fresh"]
     assert payload["owner_lease"] is None
     assert json.loads(session_artifact.read_text(encoding="utf-8")) == payload
 
@@ -1537,6 +1588,14 @@ def _start_fake_hold_session(path: Path) -> None:
         capture_output=True,
         text=True,
     )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload = record_runtime_hold_tick(
+        payload,
+        q_meas=(0.0, 0.3, 0.3),
+        fault_flags=(),
+        max_heartbeat_age_s=1.0,
+    )
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _wait_for_session_artifact(path: Path) -> dict[str, object]:
