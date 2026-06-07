@@ -303,7 +303,32 @@ Expected runtime result checks:
 
 Do not pass `--runtime-session-artifact` to `recipe runtime-smoke-fake`; that command is pure fake/local validation only.
 
-## 6. Stop Runtime
+## 6. Combined Runtime Result Summary
+
+After Agent, SysID, or Recipe commands have produced runtime result artifacts,
+summarize all results in the run directory:
+
+```bash
+uv run armctrl runtime result-check \
+  --run-dir "$RUN_DIR" \
+  --all \
+  --max-jitter-p99-ms 5 \
+  --json
+```
+
+Expected result:
+
+- `status == "pass"`
+- `result_count` matches the number of executed runtime owner commands
+- `fail_count == 0`
+- each item in `results[]` has `checks.acceptance_passed == true`
+- each item in `results[]` has `checks.timing_gate_passed == true`
+- each item in `results[]` has `checks.status_publish_gate_passed == true`
+
+If this summary fails, inspect the failed item before continuing to postprocess,
+solver, or additional motion tests.
+
+## 7. Stop Runtime
 
 Stop from the second terminal:
 

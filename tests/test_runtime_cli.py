@@ -1533,6 +1533,81 @@ def test_cli_runtime_result_check_can_find_latest_result_from_run_dir(
     assert payload["owner"] == "sysid"
 
 
+def test_cli_runtime_result_check_all_summarizes_run_dir_results(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    from armctrl import cli
+
+    run_dir = tmp_path / "lab-run"
+    results_dir = run_dir / "runtime_session_commands" / "results"
+    results_dir.mkdir(parents=True)
+    for name, owner, status, jitter in [
+        ("agent.json", "agent", "pass", 0.4),
+        ("sysid.json", "sysid", "pass", 0.8),
+        ("recipe.json", "recipe", "fail", 9.0),
+    ]:
+        (results_dir / name).write_text(
+            json.dumps(
+                {
+                    "schema": "armctrl.arm_runtime_command_result.v1",
+                    "status": "completed",
+                    "owner": owner,
+                    "mode": (
+                        "agent_servo" if owner == "agent" else "trajectory_replay"
+                    ),
+                    "motion": {
+                        "status": "completed",
+                        "sample_count": 2,
+                        "runtime_send_hz": 50.0,
+                        "actual_send_hz": 50.0,
+                        "send_jitter_ms_p99": jitter,
+                        "dt_max_s": 0.02,
+                    },
+                    "timing": {
+                        "queue_latency_s": 0.01,
+                        "first_send_latency_s": 0.01,
+                        "execution_elapsed_s": 0.1,
+                    },
+                    "acceptance": {
+                        "status": status,
+                        "timing_gate": {"status": status},
+                        "status_publish_gate": {"status": "pass"},
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    exit_code = cli.main(
+        [
+            "runtime",
+            "result-check",
+            "--run-dir",
+            str(run_dir),
+            "--all",
+            "--max-jitter-p99-ms",
+            "5",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 3
+    assert payload["status"] == "fail"
+    assert payload["result_count"] == 3
+    assert payload["pass_count"] == 2
+    assert payload["fail_count"] == 1
+    assert [result["owner"] for result in payload["results"]] == [
+        "agent",
+        "recipe",
+        "sysid",
+    ]
+    assert payload["results"][1]["status"] == "fail"
+    assert payload["next_gate"] == "inspect failed runtime result artifacts"
+
+
 def test_cli_runtime_result_check_rejects_failed_timing_gate(
     tmp_path: Path,
     capsys,

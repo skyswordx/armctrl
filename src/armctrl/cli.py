@@ -323,6 +323,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     runtime_result_source.add_argument("--result-artifact")
     runtime_result_source.add_argument("--run-dir")
+    runtime_result_check_parser.add_argument("--all", action="store_true")
     runtime_result_check_parser.add_argument("--expect-owner")
     runtime_result_check_parser.add_argument("--expect-mode")
     runtime_result_check_parser.add_argument("--expect-sample-count", type=int)
@@ -1614,16 +1615,22 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "runtime" and args.runtime_command == "result-check":
         try:
-            payload = _runtime_result_check_payload(
-                result_artifact_path=_runtime_result_artifact_path_from_args(
-                    result_artifact=args.result_artifact,
-                    run_dir=args.run_dir,
-                ),
-                expect_owner=args.expect_owner,
-                expect_mode=args.expect_mode,
-                expect_sample_count=args.expect_sample_count,
-                max_jitter_p99_ms=args.max_jitter_p99_ms,
-            )
+            if args.all:
+                payload = _runtime_result_check_all_payload(
+                    run_dir=Path(args.run_dir) if args.run_dir is not None else None,
+                    max_jitter_p99_ms=args.max_jitter_p99_ms,
+                )
+            else:
+                payload = _runtime_result_check_payload(
+                    result_artifact_path=_runtime_result_artifact_path_from_args(
+                        result_artifact=args.result_artifact,
+                        run_dir=args.run_dir,
+                    ),
+                    expect_owner=args.expect_owner,
+                    expect_mode=args.expect_mode,
+                    expect_sample_count=args.expect_sample_count,
+                    max_jitter_p99_ms=args.max_jitter_p99_ms,
+                )
         except (OSError, ValueError) as error:
             payload = {
                 "status": "fail",
@@ -4677,6 +4684,52 @@ def _runtime_result_artifact_path_from_args(
     if not candidates:
         raise ValueError(f"no runtime result artifacts found under {results_dir}")
     return max(candidates, key=lambda path: path.stat().st_mtime)
+
+
+def _runtime_result_check_all_payload(
+    *,
+    run_dir: Path | None,
+    max_jitter_p99_ms: float | None,
+) -> dict[str, object]:
+    if run_dir is None:
+        raise ValueError("--all requires --run-dir")
+    result_paths = _runtime_result_artifact_paths_for_run_dir(run_dir)
+    results = [
+        _runtime_result_check_payload(
+            result_artifact_path=path,
+            expect_owner=None,
+            expect_mode=None,
+            expect_sample_count=None,
+            max_jitter_p99_ms=max_jitter_p99_ms,
+        )
+        for path in result_paths
+    ]
+    pass_count = sum(1 for result in results if result.get("status") == "pass")
+    fail_count = len(results) - pass_count
+    payload = {
+        "status": "pass" if fail_count == 0 else "fail",
+        "schema": "armctrl.runtime_result_check_summary.v1",
+        "run_dir": str(run_dir),
+        "result_count": len(results),
+        "pass_count": pass_count,
+        "fail_count": fail_count,
+        "owners": [result.get("owner") for result in results],
+        "results": results,
+    }
+    if fail_count:
+        payload["next_gate"] = "inspect failed runtime result artifacts"
+    return payload
+
+
+def _runtime_result_artifact_paths_for_run_dir(run_dir: Path) -> list[Path]:
+    results_dir = run_dir / "runtime_session_commands" / "results"
+    candidates = sorted(
+        (path for path in results_dir.glob("*.json") if path.is_file()),
+        key=lambda path: path.name,
+    )
+    if not candidates:
+        raise ValueError(f"no runtime result artifacts found under {results_dir}")
+    return candidates
 
 
 def _sysid_run_readiness_allowed(readiness_artifact: dict[str, object]) -> bool:
