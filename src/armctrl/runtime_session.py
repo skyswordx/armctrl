@@ -102,6 +102,78 @@ def runtime_status_from_artifact(
     )
 
 
+def recover_runtime_session_from_artifact(
+    *,
+    session_artifact_path: Path,
+    safe_center: Sequence[float],
+    send_hz: float,
+    hold_hz: float,
+    max_joint_step_rad: float,
+    max_heartbeat_age_s: float,
+) -> dict[str, object]:
+    payload = _read_json_object(session_artifact_path)
+    if payload.get("schema") not in {RUNTIME_SESSION_SCHEMA, RUNTIME_STATUS_SCHEMA}:
+        raise ValueError("invalid runtime session/status schema")
+    if payload.get("owner") is not None:
+        raise RuntimeSessionError(
+            f"runtime is owned by {payload.get('owner')}",
+            payload,
+        )
+    q_current = payload.get("q_meas")
+    if not isinstance(q_current, (list, tuple)):
+        raise RuntimeSessionError("runtime session has no measured q_meas", payload)
+    recovered = start_fake_runtime_session(
+        q_current=q_current,
+        safe_center=safe_center,
+        send_hz=send_hz,
+        hold_hz=hold_hz,
+        max_joint_step_rad=max_joint_step_rad,
+        max_heartbeat_age_s=max_heartbeat_age_s,
+    )
+    recovered["runtime_session_id"] = payload.get(
+        "runtime_session_id",
+        recovered.get("runtime_session_id"),
+    )
+    recovered["lifecycle"] = {
+        "action": "recover",
+        "from_mode": payload.get("mode"),
+        "to_mode": ArmRuntimeMode.HOLD_SAFE.value,
+    }
+    recovered["readiness"] = runtime_readiness(recovered)
+    if recovered["readiness"]["agent_sysid_smoke_allowed"] is not True:
+        recovered["status"] = "blocked"
+    return recovered
+
+
+def stop_runtime_session_from_artifact(
+    *,
+    session_artifact_path: Path,
+    max_heartbeat_age_s: float,
+) -> dict[str, object]:
+    payload = _read_json_object(session_artifact_path)
+    if payload.get("schema") not in {RUNTIME_SESSION_SCHEMA, RUNTIME_STATUS_SCHEMA}:
+        raise ValueError("invalid runtime session/status schema")
+    now_s = time.time()
+    stopped = dict(payload)
+    stopped["status"] = "stopped"
+    stopped["schema"] = RUNTIME_SESSION_SCHEMA
+    stopped["mode"] = MotionMode.DAMPING.value
+    stopped["owner"] = None
+    stopped["owner_lease"] = None
+    stopped["landing_mode"] = MotionMode.DAMPING.value
+    stopped["heartbeat"] = _heartbeat_status(
+        {"wall_time_s": now_s},
+        max_heartbeat_age_s=float(max_heartbeat_age_s),
+    )
+    stopped["lifecycle"] = {
+        "action": "stop",
+        "from_mode": payload.get("mode"),
+        "to_mode": MotionMode.DAMPING.value,
+    }
+    stopped["readiness"] = runtime_readiness(stopped)
+    return stopped
+
+
 def acquire_owner_from_artifact(
     *,
     session_artifact_path: Path,

@@ -34,9 +34,11 @@ from armctrl.recipe_runtime import (
 from armctrl.runtime_session import (
     RuntimeSessionError,
     acquire_owner_from_artifact,
+    recover_runtime_session_from_artifact,
     refresh_runtime_status_payload,
     release_owner_from_artifact,
     runtime_status_from_artifact,
+    stop_runtime_session_from_artifact,
     start_fake_runtime_session,
     watchdog_tick_from_artifact,
 )
@@ -186,6 +188,39 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     runtime_status_parser.add_argument("--output")
     runtime_status_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    runtime_recover_parser = runtime_subparsers.add_parser("recover")
+    runtime_recover_parser.add_argument("--session-artifact", required=True)
+    runtime_recover_parser.add_argument(
+        "--safe-center",
+        nargs="+",
+        type=float,
+        required=True,
+    )
+    runtime_recover_parser.add_argument("--send-hz", type=float, default=50.0)
+    runtime_recover_parser.add_argument("--hold-hz", type=float, default=50.0)
+    runtime_recover_parser.add_argument(
+        "--max-joint-step-rad",
+        type=float,
+        default=0.01,
+    )
+    runtime_recover_parser.add_argument(
+        "--max-heartbeat-age-s",
+        type=float,
+        default=1.0,
+    )
+    runtime_recover_parser.add_argument("--output")
+    runtime_recover_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    runtime_stop_parser = runtime_subparsers.add_parser("stop")
+    runtime_stop_parser.add_argument("--session-artifact", required=True)
+    runtime_stop_parser.add_argument(
+        "--max-heartbeat-age-s",
+        type=float,
+        default=1.0,
+    )
+    runtime_stop_parser.add_argument("--output")
+    runtime_stop_parser.add_argument("--json", action="store_true", dest="as_json")
 
     runtime_acquire_parser = runtime_subparsers.add_parser("acquire-owner")
     runtime_acquire_parser.add_argument("--session-artifact", required=True)
@@ -1105,6 +1140,46 @@ def main(argv: Sequence[str] | None = None) -> int:
             payload,
             args.output,
             artifact_key="runtime_status",
+        )
+        _emit(payload, as_json=args.as_json)
+        return 0 if payload.get("status") == "ok" else 3
+
+    if args.command == "runtime" and args.runtime_command == "recover":
+        try:
+            payload = recover_runtime_session_from_artifact(
+                session_artifact_path=Path(args.session_artifact),
+                safe_center=tuple(args.safe_center),
+                send_hz=args.send_hz,
+                hold_hz=args.hold_hz,
+                max_joint_step_rad=args.max_joint_step_rad,
+                max_heartbeat_age_s=args.max_heartbeat_age_s,
+            )
+        except RuntimeSessionError as error:
+            payload = {
+                **error.payload,
+                "status": "rejected",
+                "schema": "armctrl.arm_runtime_status.v1",
+                "reason": str(error),
+            }
+            _emit(payload, as_json=args.as_json)
+            return 3
+        payload = _attach_output_artifact(
+            payload,
+            args.output,
+            artifact_key="runtime_session",
+        )
+        _emit(payload, as_json=args.as_json)
+        return 0 if payload.get("status") == "ok" else 3
+
+    if args.command == "runtime" and args.runtime_command == "stop":
+        payload = stop_runtime_session_from_artifact(
+            session_artifact_path=Path(args.session_artifact),
+            max_heartbeat_age_s=args.max_heartbeat_age_s,
+        )
+        payload = _attach_output_artifact(
+            payload,
+            args.output,
+            artifact_key="runtime_session",
         )
         _emit(payload, as_json=args.as_json)
         return 0 if payload.get("status") == "ok" else 3

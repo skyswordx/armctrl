@@ -151,6 +151,96 @@ def test_cli_runtime_status_blocks_stale_heartbeat(tmp_path: Path) -> None:
     assert payload["readiness"]["failed_checks"] == ["heartbeat_fresh"]
 
 
+def test_cli_runtime_recover_fake_returns_session_to_hold_safe(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    session["mode"] = "passive_safe"
+    session["q_meas"] = [0.8, 0.0, 0.0]
+    session["q_hold"] = [0.8, 0.0, 0.0]
+    session["readiness"] = {"agent_sysid_smoke_allowed": False}
+    session_artifact.write_text(json.dumps(session), encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "runtime",
+            "recover",
+            "--session-artifact",
+            str(session_artifact),
+            "--safe-center",
+            "0.0",
+            "0.3",
+            "0.3",
+            "--send-hz",
+            "50",
+            "--hold-hz",
+            "50",
+            "--output",
+            str(session_artifact),
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+
+    assert payload["status"] == "ok"
+    assert payload["schema"] == "armctrl.arm_runtime_session.v1"
+    assert payload["mode"] == "hold_safe"
+    assert payload["owner"] is None
+    assert payload["q_meas"] == [0.0, 0.3, 0.3]
+    assert payload["q_hold"] == [0.0, 0.3, 0.3]
+    assert payload["safe_center"] == [0.0, 0.3, 0.3]
+    assert payload["recovery"]["status"] == "completed"
+    assert payload["readiness"]["agent_sysid_smoke_allowed"] is True
+    assert json.loads(session_artifact.read_text(encoding="utf-8")) == payload
+
+
+def test_cli_runtime_stop_fake_lands_damping_and_clears_owner(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    _acquire_owner(session_artifact, owner="agent", mode="agent_servo")
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "runtime",
+            "stop",
+            "--session-artifact",
+            str(session_artifact),
+            "--output",
+            str(session_artifact),
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+
+    assert completed.returncode == 3
+    assert payload["status"] == "stopped"
+    assert payload["schema"] == "armctrl.arm_runtime_session.v1"
+    assert payload["mode"] == "damping"
+    assert payload["owner"] is None
+    assert payload["owner_lease"] is None
+    assert payload["landing_mode"] == "damping"
+    assert payload["readiness"]["agent_sysid_smoke_allowed"] is False
+    assert "mode_hold_safe" in payload["readiness"]["failed_checks"]
+    assert json.loads(session_artifact.read_text(encoding="utf-8")) == payload
+
+
 def test_cli_sysid_readiness_accepts_fresh_live_runtime_status(
     tmp_path: Path,
 ) -> None:
