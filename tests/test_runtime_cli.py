@@ -768,6 +768,76 @@ def test_cli_runtime_release_owner_returns_to_hold_safe(
     assert json.loads(session_artifact.read_text(encoding="utf-8")) == payload
 
 
+def test_cli_runtime_owner_heartbeat_refreshes_deadman(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    _acquire_owner(
+        session_artifact,
+        owner="agent",
+        mode="agent_servo",
+        heartbeat_timeout_s=5.0,
+    )
+    stale_session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    acquired_wall_time_s = stale_session["owner_lease"]["acquired_wall_time_s"]
+    stale_session["owner_lease"]["heartbeat_wall_time_s"] = time.time() - 1.0
+    session_artifact.write_text(json.dumps(stale_session), encoding="utf-8")
+
+    heartbeat = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "runtime",
+            "owner-heartbeat",
+            "--session-artifact",
+            str(session_artifact),
+            "--owner",
+            "agent",
+            "--output",
+            str(session_artifact),
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    heartbeat_payload = json.loads(heartbeat.stdout)
+
+    assert heartbeat_payload["status"] == "blocked"
+    assert heartbeat_payload["owner"] == "agent"
+    assert heartbeat_payload["owner_lease"]["owner"] == "agent"
+    assert heartbeat_payload["owner_lease"]["heartbeat_wall_time_s"] > acquired_wall_time_s
+    assert heartbeat_payload["owner_lease"]["acquired_wall_time_s"] == acquired_wall_time_s
+    assert heartbeat_payload["readiness"]["agent_sysid_smoke_allowed"] is False
+    assert "no_owner" in heartbeat_payload["readiness"]["failed_checks"]
+
+    watchdog = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "runtime",
+            "watchdog-tick",
+            "--session-artifact",
+            str(session_artifact),
+            "--output",
+            str(session_artifact),
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    watchdog_payload = json.loads(watchdog.stdout)
+
+    assert watchdog.returncode == 3
+    assert watchdog_payload["status"] == "blocked"
+    assert watchdog_payload["owner"] == "agent"
+    assert watchdog_payload["mode"] == "agent_servo"
+    assert "watchdog" not in watchdog_payload
+
+
 def test_cli_runtime_watchdog_timeout_lands_damping(
     tmp_path: Path,
 ) -> None:

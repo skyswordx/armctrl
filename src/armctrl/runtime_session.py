@@ -403,6 +403,35 @@ def release_owner_from_artifact(
     return updated
 
 
+def owner_heartbeat_from_artifact(
+    *,
+    session_artifact_path: Path,
+    owner: str,
+    max_heartbeat_age_s: float,
+) -> dict[str, object]:
+    payload = refresh_runtime_status_payload(
+        _read_json_object(session_artifact_path),
+        max_heartbeat_age_s=float(max_heartbeat_age_s),
+    )
+    owner_lease = payload.get("owner_lease")
+    if payload.get("owner") != owner or not isinstance(owner_lease, dict):
+        raise RuntimeSessionError(f"runtime is not owned by {owner}", payload)
+    now_s = time.time()
+    updated = dict(payload)
+    updated["status"] = "ok"
+    updated_lease = dict(owner_lease)
+    updated_lease["heartbeat_wall_time_s"] = now_s
+    updated["owner_lease"] = updated_lease
+    updated["heartbeat"] = _heartbeat_status(
+        {"wall_time_s": now_s},
+        max_heartbeat_age_s=float(max_heartbeat_age_s),
+    )
+    updated["readiness"] = runtime_readiness(updated)
+    if updated["readiness"]["agent_sysid_smoke_allowed"] is not True:
+        updated["status"] = "blocked"
+    return updated
+
+
 def watchdog_tick_from_artifact(
     *,
     session_artifact_path: Path,

@@ -41,6 +41,7 @@ from armctrl.runtime_session import (
     acquire_owner_from_artifact,
     arx5_runtime_start_preflight,
     heartbeat_runtime_session_payload,
+    owner_heartbeat_from_artifact,
     recover_runtime_session_from_artifact,
     refresh_runtime_status_payload,
     release_owner_from_artifact,
@@ -290,6 +291,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     runtime_release_parser.add_argument("--output")
     runtime_release_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    runtime_owner_heartbeat_parser = runtime_subparsers.add_parser("owner-heartbeat")
+    runtime_owner_heartbeat_parser.add_argument("--session-artifact", required=True)
+    runtime_owner_heartbeat_parser.add_argument("--owner", required=True)
+    runtime_owner_heartbeat_parser.add_argument(
+        "--max-heartbeat-age-s",
+        type=float,
+        default=1.0,
+    )
+    runtime_owner_heartbeat_parser.add_argument("--output")
+    runtime_owner_heartbeat_parser.add_argument(
+        "--json", action="store_true", dest="as_json"
+    )
 
     runtime_watchdog_parser = runtime_subparsers.add_parser("watchdog-tick")
     runtime_watchdog_parser.add_argument("--session-artifact", required=True)
@@ -1470,6 +1484,30 @@ def main(argv: Sequence[str] | None = None) -> int:
             artifact_key="runtime_session",
         )
         return _emit(payload, as_json=args.as_json)
+
+    if args.command == "runtime" and args.runtime_command == "owner-heartbeat":
+        try:
+            payload = owner_heartbeat_from_artifact(
+                session_artifact_path=Path(args.session_artifact),
+                owner=args.owner,
+                max_heartbeat_age_s=args.max_heartbeat_age_s,
+            )
+        except RuntimeSessionError as error:
+            payload = {
+                **error.payload,
+                "status": "rejected",
+                "schema": "armctrl.arm_runtime_status.v1",
+                "reason": str(error),
+            }
+            _emit(payload, as_json=args.as_json)
+            return 3
+        payload = _attach_output_artifact(
+            payload,
+            args.output,
+            artifact_key="runtime_session",
+        )
+        _emit(payload, as_json=args.as_json)
+        return 0 if payload.get("status") in {"ok", "blocked"} else 3
 
     if args.command == "runtime" and args.runtime_command == "watchdog-tick":
         payload = watchdog_tick_from_artifact(
