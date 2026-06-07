@@ -1,0 +1,17 @@
+/home/circlemoon/Roboclaw/references/projects/armctrl-clean-codex-20260607-102002/.venv/lib/python3.12/site-packages/arx5_interface/__init__.py	228
+/home/circlemoon/Roboclaw/references/projects/armctrl-clean-codex-20260607-102002/.venv/lib/python3.12/site-packages/arx5_interface/lib/x86_64/libhardware.so	270376
+/home/circlemoon/Roboclaw/references/projects/armctrl-clean-codex-20260607-102002/.venv/lib/python3.12/site-packages/arx5_interface/lib/x86_64/libsolver.so	1028545
+/home/circlemoon/Roboclaw/references/projects/armctrl-clean-codex-20260607-102002/.venv/lib/python3.12/site-packages/arx5_interface/models/L5_iphumi.urdf	8349
+/home/circlemoon/Roboclaw/references/projects/armctrl-clean-codex-20260607-102002/.venv/lib/python3.12/site-packages/arx5_interface/models/L5_umi.urdf	8269
+/home/circlemoon/Roboclaw/references/projects/armctrl-clean-codex-20260607-102002/.venv/lib/python3.12/site-packages/arx5_interface/models/L5.urdf	8548
+/home/circlemoon/Roboclaw/references/projects/armctrl-clean-codex-20260607-102002/.venv/lib/python3.12/site-packages/arx5_interface/models/X5_iphumi.urdf	8398
+/home/circlemoon/Roboclaw/references/projects/armctrl-clean-codex-20260607-102002/.venv/lib/python3.12/site-packages/arx5_interface/models/X5_no_gripper.urdf	8852
+/home/circlemoon/Roboclaw/references/projects/armctrl-clean-codex-20260607-102002/.venv/lib/python3.12/site-packages/arx5_interface/models/X5_umi.urdf	8832
+/home/circlemoon/Roboclaw/references/projects/armctrl-clean-codex-20260607-102002/.venv/lib/python3.12/site-packages/arx5_interface/models/X5.urdf	8499
+/home/circlemoon/Roboclaw/references/projects/armctrl-clean-codex-20260607-102002/.venv/lib/python3.12/site-packages/arx5_interface/models/X7_left_new.urdf	10322
+/home/circlemoon/Roboclaw/references/projects/armctrl-clean-codex-20260607-102002/.venv/lib/python3.12/site-packages/arx5_interface/models/X7_left.urdf	10153
+/home/circlemoon/Roboclaw/references/projects/armctrl-clean-codex-20260607-102002/.venv/lib/python3.12/site-packages/arx5_interface/models/X7_right_new.urdf	10371
+/home/circlemoon/Roboclaw/references/projects/armctrl-clean-codex-20260607-102002/.venv/lib/python3.12/site-packages/arx5_interface/models/X7_right.urdf	10298
+/home/circlemoon/Roboclaw/references/projects/armctrl-clean-codex-20260607-102002/.venv/lib/python3.12/site-packages/arx5_interface/__pycache__/__init__.cpython-312.pyc	432
+/home/circlemoon/Roboclaw/references/projects/armctrl-clean-codex-20260607-102002/.venv/lib/python3.12/site-packages/arx5_interface/python/arx5_interface.cpython-312-x86_64-linux-gnu.so	1075985
+/home/circlemoon/Roboclaw/references/projects/armctrl-clean-codex-20260607-102002/.venv/lib/python3.12/site-packages/arx5_interface/python/arx5_interface.pyi	7469

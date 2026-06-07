@@ -1,0 +1,249 @@
+python_executable /home/circlemoon/Roboclaw/references/projects/armctrl-clean-codex-20260607-102002/.venv/bin/python3
+python_version 3.12.3 (main, Mar 23 2026, 19:04:32) [GCC 13.3.0]
+module_repr <module 'arx5_interface' from '/home/circlemoon/Roboclaw/references/projects/armctrl-clean-codex-20260607-102002/.venv/lib/python3.12/site-packages/arx5_interface/__init__.py'>
+module_file /home/circlemoon/Roboclaw/references/projects/armctrl-clean-codex-20260607-102002/.venv/lib/python3.12/site-packages/arx5_interface/__init__.py
+module_package arx5_interface
+module_version None
+module_doc None
+
+=== TOP_LEVEL_NAMES ===
+{"kind": "class", "name": "Arx5CartesianController"}
+{"kind": "class", "name": "Arx5JointController"}
+{"kind": "class", "name": "Arx5Solver"}
+{"kind": "LogLevel", "name": "CRITICAL"}
+{"kind": "class", "name": "ControllerConfig"}
+{"kind": "class", "name": "ControllerConfigFactory"}
+{"kind": "LogLevel", "name": "DEBUG"}
+{"kind": "class", "name": "EEFState"}
+{"kind": "LogLevel", "name": "ERROR"}
+{"kind": "class", "name": "Gain"}
+{"kind": "LogLevel", "name": "INFO"}
+{"kind": "class", "name": "JointState"}
+{"kind": "class", "name": "LogLevel"}
+{"kind": "class", "name": "MotorType"}
+{"kind": "LogLevel", "name": "OFF"}
+{"kind": "class", "name": "RobotConfig"}
+{"kind": "class", "name": "RobotConfigFactory"}
+{"kind": "LogLevel", "name": "TRACE"}
+{"kind": "LogLevel", "name": "WARNING"}
+{"kind": "list", "name": "all"}
+{"kind": "module", "name": "python"}
+
+=== CLASSES_AND_MEMBERS ===
+
+## CLASS Arx5CartesianController
+class_doc None
+{"class": "Arx5CartesianController", "doc": "None", "kind": "callable", "name": "_pybind11_conduit_v1_", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod _pybind11_conduit_v1_ at 0x7cc224420340>>"}
+{"class": "Arx5CartesianController", "doc": "'get_controller_config(self: arx5_interface.python.arx5_interface.Arx5CartesianController) -> arx::ControllerConfig\\n'", "kind": "callable", "name": "get_controller_config", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod get_controller_config at 0x7cc2244205e0>>"}
+{"class": "Arx5CartesianController", "doc": "'get_eef_cmd(self: arx5_interface.python.arx5_interface.Arx5CartesianController) -> arx5_interface.python.arx5_interface.EEFState\\n'", "kind": "callable", "name": "get_eef_cmd", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod get_eef_cmd at 0x7cc224420430>>"}
+{"class": "Arx5CartesianController", "doc": "'get_eef_state(self: arx5_interface.python.arx5_interface.Arx5CartesianController) -> arx5_interface.python.arx5_interface.EEFState\\n'", "kind": "callable", "name": "get_eef_state", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod get_eef_state at 0x7cc224420460>>"}
+{"class": "Arx5CartesianController", "doc": "'get_gain(self: arx5_interface.python.arx5_interface.Arx5CartesianController) -> arx5_interface.python.arx5_interface.Gain\\n'", "kind": "callable", "name": "get_gain", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod get_gain at 0x7cc224420550>>"}
+{"class": "Arx5CartesianController", "doc": "'get_home_pose(self: arx5_interface.python.arx5_interface.Arx5CartesianController) -> typing.Annotated[numpy.typing.NDArray[numpy.float64], \"[6, 1]\"]\\n'", "kind": "callable", "name": "get_home_pose", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod get_home_pose at 0x7cc2244204f0>>"}
+{"class": "Arx5CartesianController", "doc": "'get_joint_cmd(self: arx5_interface.python.arx5_interface.Arx5CartesianController) -> arx5_interface.python.arx5_interface.JointState\\n'", "kind": "callable", "name": "get_joint_cmd", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod get_joint_cmd at 0x7cc224420400>>"}
+{"class": "Arx5CartesianController", "doc": "'get_joint_state(self: arx5_interface.python.arx5_interface.Arx5CartesianController) -> arx5_interface.python.arx5_interface.JointState\\n'", "kind": "callable", "name": "get_joint_state", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod get_joint_state at 0x7cc224420490>>"}
+{"class": "Arx5CartesianController", "doc": "'get_robot_config(self: arx5_interface.python.arx5_interface.Arx5CartesianController) -> arx::RobotConfig\\n'", "kind": "callable", "name": "get_robot_config", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod get_robot_config at 0x7cc2244205b0>>"}
+{"class": "Arx5CartesianController", "doc": "'get_timestamp(self: arx5_interface.python.arx5_interface.Arx5CartesianController) -> float\\n'", "kind": "callable", "name": "get_timestamp", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod get_timestamp at 0x7cc2244204c0>>"}
+{"class": "Arx5CartesianController", "doc": "'multi_trial_ik(self: arx5_interface.python.arx5_interface.Arx5CartesianController, arg0: typing.Annotated[numpy.typing.ArrayLike, numpy.float64, \"[6, 1]\"], arg1: typing.Annotated[numpy.typing.ArrayLike, numpy.float64, \"[m, 1]\"], arg2: typing.SupportsInt | typing.SupportsIndex) -> tuple[int, typing.Annotated[numpy.typing.NDArray[numpy.float64], \"[m, 1]\"]]\\n'", "kind": "callable", "name": "multi_trial_ik", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod multi_trial_ik at 0x7cc224646c20>>"}
+{"class": "Arx5CartesianController", "doc": "'reset_to_home(self: arx5_interface.python.arx5_interface.Arx5CartesianController) -> None\\n'", "kind": "callable", "name": "reset_to_home", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod reset_to_home at 0x7cc224420610>>"}
+{"class": "Arx5CartesianController", "doc": "'set_eef_cmd(self: arx5_interface.python.arx5_interface.Arx5CartesianController, arg0: arx5_interface.python.arx5_interface.EEFState) -> None\\n'", "kind": "callable", "name": "set_eef_cmd", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod set_eef_cmd at 0x7cc224420370>>"}
+{"class": "Arx5CartesianController", "doc": "'set_eef_traj(self: arx5_interface.python.arx5_interface.Arx5CartesianController, arg0: collections.abc.Sequence[arx5_interface.python.arx5_interface.EEFState]) -> None\\n'", "kind": "callable", "name": "set_eef_traj", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod set_eef_traj at 0x7cc2244203d0>>"}
+{"class": "Arx5CartesianController", "doc": "'set_gain(self: arx5_interface.python.arx5_interface.Arx5CartesianController, arg0: arx5_interface.python.arx5_interface.Gain) -> None\\n'", "kind": "callable", "name": "set_gain", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod set_gain at 0x7cc224420520>>"}
+{"class": "Arx5CartesianController", "doc": "'set_log_level(self: arx5_interface.python.arx5_interface.Arx5CartesianController, arg0: arx5_interface.python.arx5_interface.LogLevel) -> None\\n'", "kind": "callable", "name": "set_log_level", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod set_log_level at 0x7cc224420580>>"}
+{"class": "Arx5CartesianController", "doc": "'set_to_damping(self: arx5_interface.python.arx5_interface.Arx5CartesianController) -> None\\n'", "kind": "callable", "name": "set_to_damping", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod set_to_damping at 0x7cc224420640>>"}
+
+## CLASS Arx5JointController
+class_doc None
+{"class": "Arx5JointController", "doc": "None", "kind": "callable", "name": "_pybind11_conduit_v1_", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod _pybind11_conduit_v1_ at 0x7cc224403f70>>"}
+{"class": "Arx5JointController", "doc": "'calibrate_gripper(self: arx5_interface.python.arx5_interface.Arx5JointController) -> None\\n'", "kind": "callable", "name": "calibrate_gripper", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod calibrate_gripper at 0x7cc2244202e0>>"}
+{"class": "Arx5JointController", "doc": "'calibrate_joint(self: arx5_interface.python.arx5_interface.Arx5JointController, arg0: typing.SupportsInt | typing.SupportsIndex) -> None\\n'", "kind": "callable", "name": "calibrate_joint", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod calibrate_joint at 0x7cc2244202b0>>"}
+{"class": "Arx5JointController", "doc": "'get_controller_config(self: arx5_interface.python.arx5_interface.Arx5JointController) -> arx::ControllerConfig\\n'", "kind": "callable", "name": "get_controller_config", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod get_controller_config at 0x7cc2244201f0>>"}
+{"class": "Arx5JointController", "doc": "'get_eef_state(self: arx5_interface.python.arx5_interface.Arx5JointController) -> arx5_interface.python.arx5_interface.EEFState\\n'", "kind": "callable", "name": "get_eef_state", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod get_eef_state at 0x7cc224420100>>"}
+{"class": "Arx5JointController", "doc": "'get_gain(self: arx5_interface.python.arx5_interface.Arx5JointController) -> arx5_interface.python.arx5_interface.Gain\\n'", "kind": "callable", "name": "get_gain", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod get_gain at 0x7cc224420190>>"}
+{"class": "Arx5JointController", "doc": "'get_home_pose(self: arx5_interface.python.arx5_interface.Arx5JointController) -> typing.Annotated[numpy.typing.NDArray[numpy.float64], \"[6, 1]\"]\\n'", "kind": "callable", "name": "get_home_pose", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod get_home_pose at 0x7cc2244200d0>>"}
+{"class": "Arx5JointController", "doc": "'get_joint_cmd(self: arx5_interface.python.arx5_interface.Arx5JointController) -> arx5_interface.python.arx5_interface.JointState\\n'", "kind": "callable", "name": "get_joint_cmd", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod get_joint_cmd at 0x7cc224420130>>"}
+{"class": "Arx5JointController", "doc": "'get_joint_state(self: arx5_interface.python.arx5_interface.Arx5JointController) -> arx5_interface.python.arx5_interface.JointState\\n'", "kind": "callable", "name": "get_joint_state", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod get_joint_state at 0x7cc22454f760>>"}
+{"class": "Arx5JointController", "doc": "'get_robot_config(self: arx5_interface.python.arx5_interface.Arx5JointController) -> arx::RobotConfig\\n'", "kind": "callable", "name": "get_robot_config", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod get_robot_config at 0x7cc2244201c0>>"}
+{"class": "Arx5JointController", "doc": "'get_timestamp(self: arx5_interface.python.arx5_interface.Arx5JointController) -> float\\n'", "kind": "callable", "name": "get_timestamp", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod get_timestamp at 0x7cc224420040>>"}
+{"class": "Arx5JointController", "doc": "'recv_once(self: arx5_interface.python.arx5_interface.Arx5JointController) -> None\\n'", "kind": "callable", "name": "recv_once", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod recv_once at 0x7cc224403fa0>>"}
+{"class": "Arx5JointController", "doc": "'reset_to_home(self: arx5_interface.python.arx5_interface.Arx5JointController) -> None\\n'", "kind": "callable", "name": "reset_to_home", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod reset_to_home at 0x7cc224420220>>"}
+{"class": "Arx5JointController", "doc": "'send_recv_once(self: arx5_interface.python.arx5_interface.Arx5JointController) -> None\\n'", "kind": "callable", "name": "send_recv_once", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod send_recv_once at 0x7cc22459fbb0>>"}
+{"class": "Arx5JointController", "doc": "'set_gain(self: arx5_interface.python.arx5_interface.Arx5JointController, arg0: arx5_interface.python.arx5_interface.Gain) -> None\\n'", "kind": "callable", "name": "set_gain", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod set_gain at 0x7cc224420160>>"}
+{"class": "Arx5JointController", "doc": "'set_joint_cmd(self: arx5_interface.python.arx5_interface.Arx5JointController, arg0: arx5_interface.python.arx5_interface.JointState) -> None\\n'", "kind": "callable", "name": "set_joint_cmd", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod set_joint_cmd at 0x7cc224420070>>"}
+{"class": "Arx5JointController", "doc": "'set_joint_traj(self: arx5_interface.python.arx5_interface.Arx5JointController, arg0: collections.abc.Sequence[arx5_interface.python.arx5_interface.JointState]) -> None\\n'", "kind": "callable", "name": "set_joint_traj", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod set_joint_traj at 0x7cc2244200a0>>"}
+{"class": "Arx5JointController", "doc": "'set_log_level(self: arx5_interface.python.arx5_interface.Arx5JointController, arg0: arx5_interface.python.arx5_interface.LogLevel) -> None\\n'", "kind": "callable", "name": "set_log_level", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod set_log_level at 0x7cc224420280>>"}
+{"class": "Arx5JointController", "doc": "'set_to_damping(self: arx5_interface.python.arx5_interface.Arx5JointController) -> None\\n'", "kind": "callable", "name": "set_to_damping", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod set_to_damping at 0x7cc224420250>>"}
+
+## CLASS Arx5Solver
+class_doc None
+{"class": "Arx5Solver", "doc": "None", "kind": "callable", "name": "_pybind11_conduit_v1_", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod _pybind11_conduit_v1_ at 0x7cc2244206a0>>"}
+{"class": "Arx5Solver", "doc": "'forward_kinematics(self: arx5_interface.python.arx5_interface.Arx5Solver, arg0: typing.Annotated[numpy.typing.ArrayLike, numpy.float64, \"[m, 1]\"]) -> typing.Annotated[numpy.typing.NDArray[numpy.float64], \"[6, 1]\"]\\n'", "kind": "callable", "name": "forward_kinematics", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod forward_kinematics at 0x7cc224420730>>"}
+{"class": "Arx5Solver", "doc": "'get_ik_status_name(self: arx5_interface.python.arx5_interface.Arx5Solver, arg0: typing.SupportsInt | typing.SupportsIndex) -> str\\n'", "kind": "callable", "name": "get_ik_status_name", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod get_ik_status_name at 0x7cc224420790>>"}
+{"class": "Arx5Solver", "doc": "'inverse_dynamics(self: arx5_interface.python.arx5_interface.Arx5Solver, arg0: typing.Annotated[numpy.typing.ArrayLike, numpy.float64, \"[m, 1]\"], arg1: typing.Annotated[numpy.typing.ArrayLike, numpy.float64, \"[m, 1]\"], arg2: typing.Annotated[numpy.typing.ArrayLike, numpy.float64, \"[m, 1]\"]) -> typing.Annotated[numpy.typing.NDArray[numpy.float64], \"[m, 1]\"]\\n'", "kind": "callable", "name": "inverse_dynamics", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod inverse_dynamics at 0x7cc2244206d0>>"}
+{"class": "Arx5Solver", "doc": "'inverse_kinematics(self: arx5_interface.python.arx5_interface.Arx5Solver, arg0: typing.Annotated[numpy.typing.ArrayLike, numpy.float64, \"[6, 1]\"], arg1: typing.Annotated[numpy.typing.ArrayLike, numpy.float64, \"[m, 1]\"]) -> tuple[int, typing.Annotated[numpy.typing.NDArray[numpy.float64], \"[m, 1]\"]]\\n'", "kind": "callable", "name": "inverse_kinematics", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod inverse_kinematics at 0x7cc224420760>>"}
+{"class": "Arx5Solver", "doc": "'multi_trial_ik(self: arx5_interface.python.arx5_interface.Arx5Solver, arg0: typing.Annotated[numpy.typing.ArrayLike, numpy.float64, \"[6, 1]\"], arg1: typing.Annotated[numpy.typing.ArrayLike, numpy.float64, \"[m, 1]\"], arg2: typing.SupportsInt | typing.SupportsIndex) -> tuple[int, typing.Annotated[numpy.typing.NDArray[numpy.float64], \"[m, 1]\"]]\\n'", "kind": "callable", "name": "multi_trial_ik", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod multi_trial_ik at 0x7cc2247efb50>>"}
+
+## CLASS ControllerConfig
+class_doc None
+{"class": "ControllerConfig", "doc": "None", "kind": "callable", "name": "_pybind11_conduit_v1_", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod _pybind11_conduit_v1_ at 0x7cc224420ee0>>"}
+{"class": "ControllerConfig", "kind": "property", "name": "background_send_recv"}
+{"class": "ControllerConfig", "kind": "property", "name": "controller_dt"}
+{"class": "ControllerConfig", "kind": "property", "name": "controller_type"}
+{"class": "ControllerConfig", "kind": "property", "name": "default_gripper_kd"}
+{"class": "ControllerConfig", "kind": "property", "name": "default_gripper_kp"}
+{"class": "ControllerConfig", "kind": "property", "name": "default_kd"}
+{"class": "ControllerConfig", "kind": "property", "name": "default_kp"}
+{"class": "ControllerConfig", "kind": "property", "name": "default_preview_time"}
+{"class": "ControllerConfig", "kind": "property", "name": "gravity_compensation"}
+{"class": "ControllerConfig", "kind": "property", "name": "interpolation_method"}
+{"class": "ControllerConfig", "kind": "property", "name": "over_current_cnt_max"}
+{"class": "ControllerConfig", "kind": "property", "name": "shutdown_to_passive"}
+
+## CLASS ControllerConfigFactory
+class_doc None
+{"class": "ControllerConfigFactory", "doc": "None", "kind": "callable", "name": "_pybind11_conduit_v1_", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod _pybind11_conduit_v1_ at 0x7cc224421390>>"}
+{"class": "ControllerConfigFactory", "doc": "'get_config(self: arx5_interface.python.arx5_interface.ControllerConfigFactory, arg0: str, arg1: typing.SupportsInt | typing.SupportsIndex) -> arx5_interface.python.arx5_interface.ControllerConfig\\n'", "kind": "callable", "name": "get_config", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod get_config at 0x7cc2244213f0>>"}
+{"class": "ControllerConfigFactory", "doc": "'get_instance() -> arx5_interface.python.arx5_interface.ControllerConfigFactory\\n'", "kind": "callable", "name": "get_instance", "signature": "<signature unavailable: ValueError: no signature found for builtin <built-in method get_instance of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7cc2245de230>>"}
+
+## CLASS EEFState
+class_doc None
+{"class": "EEFState", "doc": "None", "kind": "callable", "name": "_pybind11_conduit_v1_", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod _pybind11_conduit_v1_ at 0x7cc2244038e0>>"}
+{"class": "EEFState", "kind": "property", "name": "gripper_pos"}
+{"class": "EEFState", "kind": "property", "name": "gripper_torque"}
+{"class": "EEFState", "kind": "property", "name": "gripper_vel"}
+{"class": "EEFState", "doc": "'pose_6d(self: arx5_interface.python.arx5_interface.EEFState) -> typing.Annotated[numpy.typing.NDArray[numpy.float64], \"[6, 1]\"]\\n'", "kind": "callable", "name": "pose_6d", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod pose_6d at 0x7cc224403b80>>"}
+{"class": "EEFState", "kind": "property", "name": "timestamp"}
+
+## CLASS Gain
+class_doc None
+{"class": "Gain", "doc": "None", "kind": "callable", "name": "_pybind11_conduit_v1_", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod _pybind11_conduit_v1_ at 0x7cc224403c40>>"}
+{"class": "Gain", "kind": "property", "name": "gripper_kd"}
+{"class": "Gain", "kind": "property", "name": "gripper_kp"}
+{"class": "Gain", "doc": "'kd(self: arx5_interface.python.arx5_interface.Gain) -> typing.Annotated[numpy.typing.NDArray[numpy.float64], \"[m, 1]\"]\\n'", "kind": "callable", "name": "kd", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod kd at 0x7cc224403ee0>>"}
+{"class": "Gain", "doc": "'kp(self: arx5_interface.python.arx5_interface.Gain) -> typing.Annotated[numpy.typing.NDArray[numpy.float64], \"[m, 1]\"]\\n'", "kind": "callable", "name": "kp", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod kp at 0x7cc224403e50>>"}
+
+## CLASS JointState
+class_doc None
+{"class": "JointState", "doc": "None", "kind": "callable", "name": "_pybind11_conduit_v1_", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod _pybind11_conduit_v1_ at 0x7cc2244034f0>>"}
+{"class": "JointState", "kind": "property", "name": "gripper_pos"}
+{"class": "JointState", "kind": "property", "name": "gripper_torque"}
+{"class": "JointState", "kind": "property", "name": "gripper_vel"}
+{"class": "JointState", "doc": "'pos(self: arx5_interface.python.arx5_interface.JointState) -> typing.Annotated[numpy.typing.NDArray[numpy.float64], \"[m, 1]\"]\\n'", "kind": "callable", "name": "pos", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod pos at 0x7cc224403790>>"}
+{"class": "JointState", "kind": "property", "name": "timestamp"}
+{"class": "JointState", "doc": "'torque(self: arx5_interface.python.arx5_interface.JointState) -> typing.Annotated[numpy.typing.NDArray[numpy.float64], \"[m, 1]\"]\\n'", "kind": "callable", "name": "torque", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod torque at 0x7cc2247ec5e0>>"}
+{"class": "JointState", "doc": "'vel(self: arx5_interface.python.arx5_interface.JointState) -> typing.Annotated[numpy.typing.NDArray[numpy.float64], \"[m, 1]\"]\\n'", "kind": "callable", "name": "vel", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod vel at 0x7cc2244037f0>>"}
+
+## CLASS LogLevel
+class_doc 'Members:\n\n  TRACE\n\n  DEBUG\n\n  INFO\n\n  WARNING\n\n  ERROR\n\n  CRITICAL\n\n  OFF'
+{"class": "LogLevel", "kind": "LogLevel", "name": "CRITICAL"}
+{"class": "LogLevel", "kind": "LogLevel", "name": "DEBUG"}
+{"class": "LogLevel", "kind": "LogLevel", "name": "ERROR"}
+{"class": "LogLevel", "kind": "LogLevel", "name": "INFO"}
+{"class": "LogLevel", "kind": "LogLevel", "name": "OFF"}
+{"class": "LogLevel", "kind": "LogLevel", "name": "TRACE"}
+{"class": "LogLevel", "kind": "LogLevel", "name": "WARNING"}
+{"class": "LogLevel", "doc": "None", "kind": "callable", "name": "_pybind11_conduit_v1_", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod _pybind11_conduit_v1_ at 0x7cc2244031c0>>"}
+{"class": "LogLevel", "kind": "property", "name": "name"}
+{"class": "LogLevel", "kind": "property", "name": "value"}
+
+## CLASS MotorType
+class_doc 'Members:\n\n  EC_A4310\n\n  DM_J4310\n\n  DM_J4340\n\n  NONE'
+{"class": "MotorType", "kind": "MotorType", "name": "DM_J4310"}
+{"class": "MotorType", "kind": "MotorType", "name": "DM_J4340"}
+{"class": "MotorType", "kind": "MotorType", "name": "EC_A4310"}
+{"class": "MotorType", "kind": "MotorType", "name": "NONE"}
+{"class": "MotorType", "doc": "None", "kind": "callable", "name": "_pybind11_conduit_v1_", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod _pybind11_conduit_v1_ at 0x7cc224421450>>"}
+{"class": "MotorType", "kind": "property", "name": "name"}
+{"class": "MotorType", "kind": "property", "name": "value"}
+
+## CLASS RobotConfig
+class_doc None
+{"class": "RobotConfig", "doc": "None", "kind": "callable", "name": "_pybind11_conduit_v1_", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod _pybind11_conduit_v1_ at 0x7cc2244207f0>>"}
+{"class": "RobotConfig", "kind": "property", "name": "base_link_name"}
+{"class": "RobotConfig", "kind": "property", "name": "ee_vel_max"}
+{"class": "RobotConfig", "kind": "property", "name": "eef_link_name"}
+{"class": "RobotConfig", "kind": "property", "name": "gravity_vector"}
+{"class": "RobotConfig", "kind": "property", "name": "gripper_motor_id"}
+{"class": "RobotConfig", "kind": "property", "name": "gripper_motor_type"}
+{"class": "RobotConfig", "kind": "property", "name": "gripper_open_readout"}
+{"class": "RobotConfig", "kind": "property", "name": "gripper_torque_max"}
+{"class": "RobotConfig", "kind": "property", "name": "gripper_vel_max"}
+{"class": "RobotConfig", "kind": "property", "name": "gripper_width"}
+{"class": "RobotConfig", "kind": "property", "name": "joint_dof"}
+{"class": "RobotConfig", "kind": "property", "name": "joint_pos_max"}
+{"class": "RobotConfig", "kind": "property", "name": "joint_pos_min"}
+{"class": "RobotConfig", "kind": "property", "name": "joint_torque_max"}
+{"class": "RobotConfig", "kind": "property", "name": "joint_vel_max"}
+{"class": "RobotConfig", "kind": "property", "name": "motor_id"}
+{"class": "RobotConfig", "kind": "property", "name": "motor_type"}
+{"class": "RobotConfig", "kind": "property", "name": "robot_model"}
+{"class": "RobotConfig", "kind": "property", "name": "urdf_path"}
+
+## CLASS RobotConfigFactory
+class_doc None
+{"class": "RobotConfigFactory", "doc": "None", "kind": "callable", "name": "_pybind11_conduit_v1_", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod _pybind11_conduit_v1_ at 0x7cc224421330>>"}
+{"class": "RobotConfigFactory", "doc": "'get_config(self: arx5_interface.python.arx5_interface.RobotConfigFactory, arg0: str) -> arx5_interface.python.arx5_interface.RobotConfig\\n'", "kind": "callable", "name": "get_config", "signature": "<signature unavailable: ValueError: no signature found for builtin <instancemethod get_config at 0x7cc224421360>>"}
+{"class": "RobotConfigFactory", "doc": "'get_instance() -> arx5_interface.python.arx5_interface.RobotConfigFactory\\n'", "kind": "callable", "name": "get_instance", "signature": "<signature unavailable: ValueError: no signature found for builtin <built-in method get_instance of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7cc2245de1b0>>"}
+
+=== KEYWORD_SCAN ===
+module
+   Arx5CartesianController
+   Arx5JointController
+   ControllerConfig
+   ControllerConfigFactory
+   EEFState
+   JointState
+   RobotConfig
+   RobotConfigFactory
+Arx5CartesianController
+   __getstate__
+   get_controller_config
+   get_eef_cmd
+   get_eef_state
+   get_joint_cmd
+   get_joint_state
+   get_robot_config
+   set_eef_cmd
+   set_to_damping
+Arx5JointController
+   __getstate__
+   calibrate_joint
+   get_controller_config
+   get_eef_state
+   get_joint_cmd
+   get_joint_state
+   get_robot_config
+   set_joint_cmd
+   set_joint_traj
+   set_to_damping
+Arx5Solver
+   __getstate__
+ControllerConfig
+   __getstate__
+   controller_dt
+   controller_type
+ControllerConfigFactory
+   __getstate__
+   get_config
+EEFState
+   __getstate__
+Gain
+   __getstate__
+JointState
+   __getstate__
+LogLevel
+   __getstate__
+   __setstate__
+MotorType
+   __getstate__
+   __setstate__
+RobotConfig
+   __getstate__
+   joint_dof
+   joint_pos_max
+   joint_pos_min
+   joint_torque_max
+   joint_vel_max
+   robot_model
+RobotConfigFactory
+   __getstate__
+   get_config

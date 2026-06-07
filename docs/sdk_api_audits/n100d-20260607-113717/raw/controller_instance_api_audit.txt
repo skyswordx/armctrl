@@ -1,0 +1,124 @@
+The root link base_link has an inertia specified in the URDF, but KDL does not support a root link with an inertia.  As a workaround, you can add an extra dummy link to your URDF.Found dynamic library path: /home/circlemoon/Roboclaw/references/projects/armctrl-clean-codex-20260607-102002/.venv/lib/python3.12/site-packages/arx5_interface/python/arx5_interface.cpython-312-x86_64-linux-gnu.so
+Found root directory: /home/circlemoon/Roboclaw/references/projects/armctrl-clean-codex-20260607-102002/.venv/lib/python3.12/site-packages/arx5_interface
+URDF models directory: /home/circlemoon/Roboclaw/references/projects/armctrl-clean-codex-20260607-102002/.venv/lib/python3.12/site-packages/arx5_interface/models
+SocketCAN adapter created.
+Created CAN socket with descriptor 3.
+Found: can0 has interface index 8.
+Successfully bound socket to interface 8.
+Successfully started receiver thread with ID -354433344.
+m_interface_ptr use count: 1
+Link link1 had 1 childrenLink link2 had 1 childrenLink link3 had 1 childrenLink link4 had 1 childrenLink link5 had 1 childrenLink link6 had 1 childrenLink eef_link had 0 childrenParsed 6 non-fixed joints and 7 segments. Base link: base_link. Using eef_link for kinematics and link6 for inverse dynamics.
+[11:39:07 X5_can0 info] Clearing motor controller states...
+[11:39:07 X5_can0 info] Background send_recv task is running at ID: 1058741
+robot_config_type <class 'arx5_interface.python.arx5_interface.RobotConfig'>
+controller_config_type <class 'arx5_interface.python.arx5_interface.ControllerConfig'>
+
+=== robot_config ATTRS ===
+{"name": "_pybind11_conduit_v1_", "owner": "robot_config", "value": "callable <signature unavailable: ValueError: no signature found for builtin <built-in method _pybind11_conduit_v1_ of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d39fa1dda90>>"}
+{"name": "base_link_name", "owner": "robot_config", "value": "'base_link'"}
+{"name": "ee_vel_max", "owner": "robot_config", "value": "array([0.6, 0.6, 0.6, 1.8, 1.8, 1.8])"}
+{"name": "eef_link_name", "owner": "robot_config", "value": "'eef_link'"}
+{"name": "gravity_vector", "owner": "robot_config", "value": "array([ 0.   ,  0.   , -9.807])"}
+{"name": "gripper_motor_id", "owner": "robot_config", "value": "8"}
+{"name": "gripper_motor_type", "owner": "robot_config", "value": "<MotorType.DM_J4310: 1>"}
+{"name": "gripper_open_readout", "owner": "robot_config", "value": "5.03"}
+{"name": "gripper_torque_max", "owner": "robot_config", "value": "1.5"}
+{"name": "gripper_vel_max", "owner": "robot_config", "value": "0.3"}
+{"name": "gripper_width", "owner": "robot_config", "value": "0.088"}
+{"name": "joint_dof", "owner": "robot_config", "value": "6"}
+{"name": "joint_pos_max", "owner": "robot_config", "value": "array([2.618, 3.5  , 3.2  , 1.55 , 1.57 , 2.   ])"}
+{"name": "joint_pos_min", "owner": "robot_config", "value": "array([-3.14, -0.05, -0.1 , -1.6 , -1.57, -2.  ])"}
+{"name": "joint_torque_max", "owner": "robot_config", "value": "array([30., 40., 30., 15., 10., 10.])"}
+{"name": "joint_vel_max", "owner": "robot_config", "value": "array([5. , 5. , 5.5, 5.5, 5. , 5. ])"}
+{"name": "motor_id", "owner": "robot_config", "value": "[1, 2, 4, 5, 6, 7]"}
+{"name": "motor_type", "owner": "robot_config", "value": "[<MotorType.EC_A4310: 0>, <MotorType.EC_A4310: 0>, <MotorType.EC_A4310: 0>, <MotorType.DM_J4310: 1>, <MotorType.DM_J4310: 1>, <MotorType.DM_J4310: 1>]"}
+{"name": "robot_model", "owner": "robot_config", "value": "'X5'"}
+{"name": "urdf_path", "owner": "robot_config", "value": "'/home/circlemoon/Roboclaw/references/projects/armctrl-clean-codex-20260607-102002/.venv/lib/python3.12/site-packages/arx5_interface/models/X5.urdf'"}
+
+=== controller_config ATTRS ===
+{"name": "_pybind11_conduit_v1_", "owner": "controller_config", "value": "callable <signature unavailable: ValueError: no signature found for builtin <built-in method _pybind11_conduit_v1_ of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d39fa1ddf90>>"}
+{"name": "background_send_recv", "owner": "controller_config", "value": "True"}
+{"name": "controller_dt", "owner": "controller_config", "value": "0.002"}
+{"name": "controller_type", "owner": "controller_config", "value": "'joint_controller'"}
+{"name": "default_gripper_kd", "owner": "controller_config", "value": "0.2"}
+{"name": "default_gripper_kp", "owner": "controller_config", "value": "5.0"}
+{"name": "default_kd", "owner": "controller_config", "value": "array([2. , 2. , 2. , 1. , 1. , 0.7])"}
+{"name": "default_kp", "owner": "controller_config", "value": "array([80., 70., 70., 30., 30., 20.])"}
+{"name": "default_preview_time", "owner": "controller_config", "value": "0.0"}
+{"name": "gravity_compensation", "owner": "controller_config", "value": "True"}
+{"name": "interpolation_method", "owner": "controller_config", "value": "'linear'"}
+{"name": "over_current_cnt_max", "owner": "controller_config", "value": "20"}
+{"name": "shutdown_to_passive", "owner": "controller_config", "value": "True"}
+
+controller_type <class 'arx5_interface.python.arx5_interface.Arx5JointController'>
+controller_repr <arx5_interface.python.arx5_interface.Arx5JointController object at 0x7d39f9149d70>
+
+=== CONTROLLER_ALL_PUBLIC_MEMBERS ===
+{"doc": "None", "kind": "callable", "name": "_pybind11_conduit_v1_", "signature": "<signature unavailable: ValueError: no signature found for builtin <built-in method _pybind11_conduit_v1_ of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d39fa1dd490>>"}
+{"doc": "'calibrate_gripper(self: arx5_interface.python.arx5_interface.Arx5JointController) -> None\\n'", "kind": "callable", "name": "calibrate_gripper", "signature": "<signature unavailable: ValueError: no signature found for builtin <built-in method calibrate_gripper of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d39fa1dd6f0>>"}
+{"doc": "'calibrate_joint(self: arx5_interface.python.arx5_interface.Arx5JointController, arg0: typing.SupportsInt | typing.SupportsIndex) -> None\\n'", "kind": "callable", "name": "calibrate_joint", "signature": "<signature unavailable: ValueError: no signature found for builtin <built-in method calibrate_joint of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d39fa1dd6d0>>"}
+{"doc": "'get_controller_config(self: arx5_interface.python.arx5_interface.Arx5JointController) -> arx::ControllerConfig\\n'", "kind": "callable", "name": "get_controller_config", "signature": "<signature unavailable: ValueError: no signature found for builtin <built-in method get_controller_config of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d39fa1dd650>>"}
+{"doc": "'get_eef_state(self: arx5_interface.python.arx5_interface.Arx5JointController) -> arx5_interface.python.arx5_interface.EEFState\\n'", "kind": "callable", "name": "get_eef_state", "signature": "<signature unavailable: ValueError: no signature found for builtin <built-in method get_eef_state of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d39fa1dd5b0>>"}
+{"doc": "'get_gain(self: arx5_interface.python.arx5_interface.Arx5JointController) -> arx5_interface.python.arx5_interface.Gain\\n'", "kind": "callable", "name": "get_gain", "signature": "<signature unavailable: ValueError: no signature found for builtin <built-in method get_gain of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d39fa1dd610>>"}
+{"doc": "'get_home_pose(self: arx5_interface.python.arx5_interface.Arx5JointController) -> typing.Annotated[numpy.typing.NDArray[numpy.float64], \"[6, 1]\"]\\n'", "kind": "callable", "name": "get_home_pose", "signature": "<signature unavailable: ValueError: no signature found for builtin <built-in method get_home_pose of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d39fa1dd590>>"}
+{"doc": "'get_joint_cmd(self: arx5_interface.python.arx5_interface.Arx5JointController) -> arx5_interface.python.arx5_interface.JointState\\n'", "kind": "callable", "name": "get_joint_cmd", "signature": "<signature unavailable: ValueError: no signature found for builtin <built-in method get_joint_cmd of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d39fa1dd5d0>>"}
+{"doc": "'get_joint_state(self: arx5_interface.python.arx5_interface.Arx5JointController) -> arx5_interface.python.arx5_interface.JointState\\n'", "kind": "callable", "name": "get_joint_state", "signature": "<signature unavailable: ValueError: no signature found for builtin <built-in method get_joint_state of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d39fa1dd510>>"}
+{"doc": "'get_robot_config(self: arx5_interface.python.arx5_interface.Arx5JointController) -> arx::RobotConfig\\n'", "kind": "callable", "name": "get_robot_config", "signature": "<signature unavailable: ValueError: no signature found for builtin <built-in method get_robot_config of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d39fa1dd630>>"}
+{"doc": "'get_timestamp(self: arx5_interface.python.arx5_interface.Arx5JointController) -> float\\n'", "kind": "callable", "name": "get_timestamp", "signature": "<signature unavailable: ValueError: no signature found for builtin <built-in method get_timestamp of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d39fa1dd530>>"}
+{"doc": "'recv_once(self: arx5_interface.python.arx5_interface.Arx5JointController) -> None\\n'", "kind": "callable", "name": "recv_once", "signature": "<signature unavailable: ValueError: no signature found for builtin <built-in method recv_once of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d39fa1dd4f0>>"}
+{"doc": "'reset_to_home(self: arx5_interface.python.arx5_interface.Arx5JointController) -> None\\n'", "kind": "callable", "name": "reset_to_home", "signature": "<signature unavailable: ValueError: no signature found for builtin <built-in method reset_to_home of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d39fa1dd670>>"}
+{"doc": "'send_recv_once(self: arx5_interface.python.arx5_interface.Arx5JointController) -> None\\n'", "kind": "callable", "name": "send_recv_once", "signature": "<signature unavailable: ValueError: no signature found for builtin <built-in method send_recv_once of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d39fa1dd4d0>>"}
+{"doc": "'set_gain(self: arx5_interface.python.arx5_interface.Arx5JointController, arg0: arx5_interface.python.arx5_interface.Gain) -> None\\n'", "kind": "callable", "name": "set_gain", "signature": "<signature unavailable: ValueError: no signature found for builtin <built-in method set_gain of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d39fa1dd5f0>>"}
+{"doc": "'set_joint_cmd(self: arx5_interface.python.arx5_interface.Arx5JointController, arg0: arx5_interface.python.arx5_interface.JointState) -> None\\n'", "kind": "callable", "name": "set_joint_cmd", "signature": "<signature unavailable: ValueError: no signature found for builtin <built-in method set_joint_cmd of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d39fa1dd550>>"}
+{"doc": "'set_joint_traj(self: arx5_interface.python.arx5_interface.Arx5JointController, arg0: collections.abc.Sequence[arx5_interface.python.arx5_interface.JointState]) -> None\\n'", "kind": "callable", "name": "set_joint_traj", "signature": "<signature unavailable: ValueError: no signature found for builtin <built-in method set_joint_traj of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d39fa1dd570>>"}
+{"doc": "'set_log_level(self: arx5_interface.python.arx5_interface.Arx5JointController, arg0: arx5_interface.python.arx5_interface.LogLevel) -> None\\n'", "kind": "callable", "name": "set_log_level", "signature": "<signature unavailable: ValueError: no signature found for builtin <built-in method set_log_level of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d39fa1dd6b0>>"}
+{"doc": "'set_to_damping(self: arx5_interface.python.arx5_interface.Arx5JointController) -> None\\n'", "kind": "callable", "name": "set_to_damping", "signature": "<signature unavailable: ValueError: no signature found for builtin <built-in method set_to_damping of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d39fa1dd690>>"}
+
+=== CONTROLLER_KEYWORD_MEMBERS ===
+{"kind": "callable", "name": "__getstate__", "signature": "()"}
+{"kind": "callable", "name": "calibrate_joint", "signature": "<signature unavailable: ValueError: no signature found for builtin <built-in method calibrate_joint of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d39fa1dd6d0>>"}
+{"kind": "callable", "name": "get_controller_config", "signature": "<signature unavailable: ValueError: no signature found for builtin <built-in method get_controller_config of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d39fa1dd650>>"}
+{"kind": "callable", "name": "get_eef_state", "signature": "<signature unavailable: ValueError: no signature found for builtin <built-in method get_eef_state of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d39fa1dd5b0>>"}
+{"kind": "callable", "name": "get_joint_cmd", "signature": "<signature unavailable: ValueError: no signature found for builtin <built-in method get_joint_cmd of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d39fa1dd5d0>>"}
+{"kind": "callable", "name": "get_joint_state", "signature": "<signature unavailable: ValueError: no signature found for builtin <built-in method get_joint_state of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d39fa1dd510>>"}
+{"kind": "callable", "name": "get_robot_config", "signature": "<signature unavailable: ValueError: no signature found for builtin <built-in method get_robot_config of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d39fa1dd630>>"}
+{"kind": "callable", "name": "set_joint_cmd", "signature": "<signature unavailable: ValueError: no signature found for builtin <built-in method set_joint_cmd of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d39fa1dd550>>"}
+{"kind": "callable", "name": "set_joint_traj", "signature": "<signature unavailable: ValueError: no signature found for builtin <built-in method set_joint_traj of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d39fa1dd570>>"}
+{"kind": "callable", "name": "set_to_damping", "signature": "<signature unavailable: ValueError: no signature found for builtin <built-in method set_to_damping of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d39fa1dd690>>"}
+
+=== EXPLICIT_CANDIDATES ===
+{"callable": false, "exists": false, "name": "set_to_hold", "signature": ""}
+{"callable": false, "exists": false, "name": "set_hold", "signature": ""}
+{"callable": false, "exists": false, "name": "hold", "signature": ""}
+{"callable": true, "exists": true, "name": "set_to_damping", "signature": "<signature unavailable: ValueError: no signature found for builtin <built-in method set_to_damping of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d39fa1dd690>>"}
+{"callable": false, "exists": false, "name": "set_damping", "signature": ""}
+{"callable": false, "exists": false, "name": "damping", "signature": ""}
+{"callable": false, "exists": false, "name": "set_mode", "signature": ""}
+{"callable": false, "exists": false, "name": "get_mode", "signature": ""}
+{"callable": false, "exists": false, "name": "set_to_servo", "signature": ""}
+{"callable": false, "exists": false, "name": "set_to_zero_force", "signature": ""}
+{"callable": false, "exists": false, "name": "set_to_brake", "signature": ""}
+{"callable": false, "exists": false, "name": "brake", "signature": ""}
+{"callable": false, "exists": false, "name": "stop", "signature": ""}
+{"callable": false, "exists": false, "name": "emergency_stop", "signature": ""}
+{"callable": false, "exists": false, "name": "enable", "signature": ""}
+{"callable": false, "exists": false, "name": "disable", "signature": ""}
+{"callable": true, "exists": true, "name": "set_joint_cmd", "signature": "<signature unavailable: ValueError: no signature found for builtin <built-in method set_joint_cmd of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d39fa1dd550>>"}
+{"callable": true, "exists": true, "name": "get_joint_state", "signature": "<signature unavailable: ValueError: no signature found for builtin <built-in method get_joint_state of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d39fa1dd510>>"}
+{"callable": true, "exists": true, "name": "get_joint_cmd", "signature": "<signature unavailable: ValueError: no signature found for builtin <built-in method get_joint_cmd of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d39fa1dd5d0>>"}
+{"callable": false, "exists": false, "name": "clear_motor_states", "signature": ""}
+{"callable": false, "exists": false, "name": "reset", "signature": ""}
+
+=== READ_ONLY_STATE_PROBE ===
+joint_state_type <class 'arx5_interface.python.arx5_interface.JointState'>
+joint_state_members ['_pybind11_conduit_v1_', 'gripper_pos', 'gripper_torque', 'gripper_vel', 'pos', 'timestamp', 'torque', 'vel']
+pos [ 1.67448711  0.00247955  0.00934601 -0.05588627 -0.00400543  0.00667572]
+vel [-0.00439644  0.0747261   0.29450607  0.84615326 -0.07692337 -0.01099014]
+
+=== CLEANUP ===
+set_to_damping_called_for_cleanup
+[11:39:07 X5_can0 info] Set to damping before exit
+[11:39:09 X5_can0 info] background send_recv task joined
+Waiting for receiver thread to terminate.
+Receiver thread terminated.
+CAN socket destroyed.
