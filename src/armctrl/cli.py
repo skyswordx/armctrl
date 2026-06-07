@@ -6,7 +6,7 @@ import math
 import sys
 import time
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Sequence
 
 from armctrl.acceptance import build_real_motion_acceptance
 from armctrl.agent_flow import (
@@ -1197,6 +1197,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.output,
                 artifact_key="runtime_session",
             )
+            if args.serve:
+                payload = _serve_runtime_session_until_stopped(
+                    session_artifact_path=Path(args.output),
+                    heartbeat_period_s=args.heartbeat_period_s,
+                    max_heartbeat_age_s=args.max_heartbeat_age_s,
+                    hold_tick=_arx5_active_hold_tick(
+                        backend=backend,
+                        hold_hz=args.hold_hz,
+                    ),
+                )
             _emit(payload, as_json=args.as_json)
             return 3
         if args.q_current is None:
@@ -3301,6 +3311,7 @@ def _serve_runtime_session_until_stopped(
     session_artifact_path: Path,
     heartbeat_period_s: float,
     max_heartbeat_age_s: float,
+    hold_tick: Callable[[dict[str, object]], None] | None = None,
 ) -> dict[str, object]:
     if heartbeat_period_s <= 0.0:
         raise ValueError("heartbeat_period_s must be positive")
@@ -3308,6 +3319,11 @@ def _serve_runtime_session_until_stopped(
         payload = json.loads(session_artifact_path.read_text(encoding="utf-8"))
         if payload.get("status") == "stopped" or payload.get("mode") == "damping":
             return payload
+        if hold_tick is not None and payload.get("mode") == "hold_safe":
+            hold_tick(payload)
+            payload = json.loads(session_artifact_path.read_text(encoding="utf-8"))
+            if payload.get("status") == "stopped" or payload.get("mode") == "damping":
+                return payload
         payload = heartbeat_runtime_session_payload(
             payload,
             max_heartbeat_age_s=max_heartbeat_age_s,
@@ -3317,6 +3333,24 @@ def _serve_runtime_session_until_stopped(
             encoding="utf-8",
         )
         time.sleep(float(heartbeat_period_s))
+
+
+def _arx5_active_hold_tick(
+    *,
+    backend: Arx5InterfaceCollectionBackend,
+    hold_hz: float,
+) -> Callable[[dict[str, object]], None]:
+    def hold_tick(payload: dict[str, object]) -> None:
+        q_hold = payload.get("q_hold")
+        if not isinstance(q_hold, list | tuple):
+            raise RuntimeError("runtime session has no q_hold for active hold")
+        backend.hold_joint_position_for_duration(
+            tuple(float(value) for value in q_hold),
+            duration_s=1.0 / float(hold_hz),
+            hold_hz=float(hold_hz),
+        )
+
+    return hold_tick
 
 
 def _attach_sysid_run_manifest(
