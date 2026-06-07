@@ -19,7 +19,11 @@ from armctrl.runtime_session import record_runtime_hold_tick
 from armctrl.runtime_session import refresh_runtime_status_payload
 from armctrl.runtime_session import start_fake_runtime_session, stop_runtime_session_from_artifact
 from armctrl.runtime_session import start_arx5_runtime_session
-from armctrl.runtime_ipc import execute_pending_runtime_commands, submit_trajectory_command
+from armctrl.runtime_ipc import (
+    execute_pending_runtime_commands,
+    submit_intent_command,
+    submit_trajectory_command,
+)
 
 
 def _passing_doctor_artifact() -> dict[str, object]:
@@ -1629,6 +1633,66 @@ def test_runtime_queue_passes_owner_watchdog_into_motion_loop(
     assert captured["watchdog_passed"] is True
     assert captured["watchdog_event"]["reason"] == "owner_heartbeat_timeout"
     assert result["status"] == "faulted"
+
+
+def test_runtime_queue_agent_intent_records_frequency_and_missed_intent_policy(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    clock = ManualClock()
+    backend = FakeMotionBackend()
+    backend.send_joint_command(
+        tuple(float(value) for value in session["q_meas"]),
+        producer="test_bootstrap",
+        mode=MotionMode.HOLD,
+        monotonic_s=0.0,
+    )
+    runtime = ArmRuntime(
+        backend=backend,
+        safe_center=tuple(float(value) for value in session["safe_center"]),
+        runtime_session_id=str(session["runtime_session_id"]),
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+    runtime.mark_hold_safe(q_hold=tuple(float(value) for value in session["q_hold"]))
+    submitted = submit_intent_command(
+        session_artifact_path=session_artifact,
+        owner="agent",
+        expected_q_start=(0.0, 0.3, 0.3),
+        q_target=(0.01, 0.3, 0.3),
+        control_period_s=0.1,
+        send_hz=50.0,
+        max_joint_delta_rad=0.02,
+        max_start_error_rad=0.02,
+        heartbeat_timeout_s=1.0,
+        max_heartbeat_age_s=1.0,
+    )
+
+    result = execute_pending_runtime_commands(
+        session_artifact_path=session_artifact,
+        backend=backend,
+        runtime=runtime,
+        max_heartbeat_age_s=1.0,
+    )
+    result_artifact = json.loads(Path(submitted["artifacts"]["result"]).read_text())
+
+    assert result is not None
+    assert result["status"] == "completed"
+    assert result["owner"] == "agent"
+    assert result["motion"]["mode"] == "agent_servo"
+    assert result["motion"]["agent_intent_hz"] == pytest.approx(10.0)
+    assert result["motion"]["runtime_send_hz"] == 50.0
+    assert result["motion"]["interpolation_policy"] == "linear_intent_frame"
+    assert result["motion"]["resampling_policy"] == "intent_frame_to_runtime_send_hz"
+    assert result["motion"]["missed_intent_policy"] == "hold_then_damping"
+    assert result["motion"]["missed_intent_timeout_s"] == pytest.approx(0.3)
+    assert result["motion"]["fault_timeout_s"] == pytest.approx(1.0)
+    assert result["motion"]["sample_count"] == 6
+    assert result["motion"]["samples"][0]["q_cmd"] == [0.0, 0.3, 0.3]
+    assert result["motion"]["samples"][-1]["q_cmd"] == [0.01, 0.3, 0.3]
+    assert result_artifact["motion"]["missed_intent_policy"] == "hold_then_damping"
 
 
 def test_cli_runtime_serve_executes_queued_trajectory_and_returns_to_hold(

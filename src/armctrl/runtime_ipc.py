@@ -642,6 +642,8 @@ def _command_result_payload(
             "error": motion.error,
         },
     }
+    if command.get("kind") == "intent":
+        payload["motion"].update(_intent_motion_contract(command))
     if watchdog is not None:
         payload["watchdog"] = watchdog
     return payload
@@ -833,6 +835,18 @@ def _trajectory_interpolation_policy(*, resampling_policy: str, kind: str) -> st
     if resampling_policy == "linear_time_resample":
         return "linear_joint_position"
     return "pre_sampled_joint_positions"
+
+
+def _intent_motion_contract(command: dict[str, object]) -> dict[str, object]:
+    control_period_s = _optional_float(command.get("control_period_s"))
+    return {
+        "agent_intent_hz": (
+            None if control_period_s is None else 1.0 / control_period_s
+        ),
+        "missed_intent_policy": "hold_then_damping",
+        "missed_intent_timeout_s": 0.3,
+        "fault_timeout_s": _optional_float(command.get("heartbeat_timeout_s")),
+    }
 
 
 def _optional_float(value: object) -> float | None:
