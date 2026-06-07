@@ -1355,6 +1355,154 @@ def test_runtime_queue_executes_with_live_arm_runtime(
     ] == [0.0, 0.02]
 
 
+def test_cli_runtime_result_check_summarizes_passing_owner_result(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    from armctrl import cli
+
+    result_artifact = tmp_path / "runtime-result.json"
+    result_artifact.write_text(
+        json.dumps(
+            {
+                "schema": "armctrl.arm_runtime_command_result.v1",
+                "status": "completed",
+                "owner": "sysid",
+                "mode": "trajectory_replay",
+                "runtime_session_id": "session-1",
+                "motion": {
+                    "status": "completed",
+                    "sample_count": 801,
+                    "trajectory_sample_hz": 100.0,
+                    "runtime_send_hz": 100.0,
+                    "resampling_policy": "none_sample_hz_matches_send_hz",
+                    "interpolation_policy": "pre_sampled_joint_positions",
+                    "actual_send_hz": 99.9,
+                    "send_jitter_ms_p95": 0.4,
+                    "send_jitter_ms_p99": 0.8,
+                    "send_jitter_ms_summary": {"buckets": {"le_1": 800}},
+                    "dt_min_s": 0.0098,
+                    "dt_max_s": 0.0102,
+                    "dt_avg_s": 0.01,
+                    "landing_mode": "hold",
+                },
+                "timing": {
+                    "queue_latency_s": 0.02,
+                    "acquire_latency_s": 0.01,
+                    "first_send_latency_s": 0.005,
+                    "execution_elapsed_s": 8.0,
+                },
+                "acceptance": {
+                    "status": "pass",
+                    "timing_gate": {"status": "pass"},
+                    "status_publish_gate": {"status": "pass"},
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = cli.main(
+        [
+            "runtime",
+            "result-check",
+            "--result-artifact",
+            str(result_artifact),
+            "--expect-owner",
+            "sysid",
+            "--expect-mode",
+            "trajectory_replay",
+            "--expect-sample-count",
+            "801",
+            "--max-jitter-p99-ms",
+            "5",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["status"] == "pass"
+    assert payload["owner"] == "sysid"
+    assert payload["mode"] == "trajectory_replay"
+    assert payload["sample_count"] == 801
+    assert payload["checks"]["acceptance_passed"] is True
+    assert payload["checks"]["owner_matches"] is True
+    assert payload["checks"]["sample_count_matches"] is True
+    assert payload["checks"]["jitter_p99_within_limit"] is True
+    assert payload["metrics"]["send_jitter_ms_p99"] == pytest.approx(0.8)
+    assert payload["metrics"]["dt_max_s"] == pytest.approx(0.0102)
+
+
+def test_cli_runtime_result_check_rejects_failed_timing_gate(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    from armctrl import cli
+
+    result_artifact = tmp_path / "runtime-result-fail.json"
+    result_artifact.write_text(
+        json.dumps(
+            {
+                "schema": "armctrl.arm_runtime_command_result.v1",
+                "status": "completed",
+                "owner": "sysid",
+                "mode": "trajectory_replay",
+                "motion": {
+                    "status": "completed",
+                    "sample_count": 801,
+                    "runtime_send_hz": 100.0,
+                    "actual_send_hz": 83.0,
+                    "send_jitter_ms_p99": 20.0,
+                    "dt_max_s": 0.021,
+                },
+                "timing": {
+                    "queue_latency_s": 0.02,
+                    "acquire_latency_s": 0.01,
+                    "first_send_latency_s": 0.005,
+                    "execution_elapsed_s": 8.0,
+                },
+                "acceptance": {
+                    "status": "fail",
+                    "timing_gate": {"status": "fail"},
+                    "status_publish_gate": {"status": "pass"},
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = cli.main(
+        [
+            "runtime",
+            "result-check",
+            "--result-artifact",
+            str(result_artifact),
+            "--expect-owner",
+            "sysid",
+            "--expect-sample-count",
+            "801",
+            "--max-jitter-p99-ms",
+            "5",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 3
+    assert payload["status"] == "fail"
+    assert payload["checks"]["acceptance_passed"] is False
+    assert payload["checks"]["timing_gate_passed"] is False
+    assert payload["checks"]["jitter_p99_within_limit"] is False
+    assert payload["next_gate"] == "inspect runtime result timing and safety evidence"
+
+
 def test_runtime_command_result_records_tracking_error_summary(
     tmp_path: Path,
 ) -> None:

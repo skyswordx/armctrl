@@ -317,6 +317,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     runtime_watchdog_parser.add_argument("--output")
     runtime_watchdog_parser.add_argument("--json", action="store_true", dest="as_json")
 
+    runtime_result_check_parser = runtime_subparsers.add_parser("result-check")
+    runtime_result_check_parser.add_argument("--result-artifact", required=True)
+    runtime_result_check_parser.add_argument("--expect-owner")
+    runtime_result_check_parser.add_argument("--expect-mode")
+    runtime_result_check_parser.add_argument("--expect-sample-count", type=int)
+    runtime_result_check_parser.add_argument("--max-jitter-p99-ms", type=float)
+    runtime_result_check_parser.add_argument("--output")
+    runtime_result_check_parser.add_argument(
+        "--json", action="store_true", dest="as_json"
+    )
+
     runtime_preposition_parser = runtime_subparsers.add_parser("preposition")
     runtime_preposition_parser.add_argument("--session-artifact", required=True)
     runtime_preposition_parser.add_argument(
@@ -1596,6 +1607,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         _emit(payload, as_json=args.as_json)
         return 0 if payload.get("status") == "ok" else 3
+
+    if args.command == "runtime" and args.runtime_command == "result-check":
+        payload = _runtime_result_check_payload(
+            result_artifact_path=Path(args.result_artifact),
+            expect_owner=args.expect_owner,
+            expect_mode=args.expect_mode,
+            expect_sample_count=args.expect_sample_count,
+            max_jitter_p99_ms=args.max_jitter_p99_ms,
+        )
+        payload = _attach_output_artifact(
+            payload,
+            args.output,
+            artifact_key="runtime_result_check",
+        )
+        _emit(payload, as_json=args.as_json)
+        return 0 if payload.get("status") == "pass" else 3
 
     if args.command == "runtime" and args.runtime_command == "preposition":
         try:
@@ -4413,6 +4440,24 @@ def _runtime_float_list(values: object, *, name: str) -> list[float]:
     return result
 
 
+def _runtime_optional_float(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _runtime_optional_int(value: object) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _agent_flow_contract_control_period_s(contract: dict[str, object]) -> float:
     eef = contract.get("eef")
     plan = eef.get("plan") if isinstance(eef, dict) else None
@@ -4498,6 +4543,107 @@ def _runtime_first_sysid_readiness_artifact(
         readiness_artifact,
         max_heartbeat_age_s=1.0,
     )
+
+
+def _runtime_result_check_payload(
+    *,
+    result_artifact_path: Path,
+    expect_owner: str | None,
+    expect_mode: str | None,
+    expect_sample_count: int | None,
+    max_jitter_p99_ms: float | None,
+) -> dict[str, object]:
+    result = json.loads(result_artifact_path.read_text(encoding="utf-8"))
+    motion = result.get("motion") if isinstance(result.get("motion"), dict) else {}
+    timing = result.get("timing") if isinstance(result.get("timing"), dict) else {}
+    acceptance = (
+        result.get("acceptance") if isinstance(result.get("acceptance"), dict) else {}
+    )
+    timing_gate = (
+        acceptance.get("timing_gate")
+        if isinstance(acceptance.get("timing_gate"), dict)
+        else {}
+    )
+    status_publish_gate = (
+        acceptance.get("status_publish_gate")
+        if isinstance(acceptance.get("status_publish_gate"), dict)
+        else {}
+    )
+    owner = result.get("owner")
+    mode = result.get("mode")
+    sample_count = _runtime_optional_int(motion.get("sample_count"))
+    jitter_p99_ms = _runtime_optional_float(motion.get("send_jitter_ms_p99"))
+    checks = {
+        "schema": result.get("schema") == "armctrl.arm_runtime_command_result.v1",
+        "result_completed": result.get("status") == "completed",
+        "motion_completed": motion.get("status") == "completed",
+        "acceptance_passed": acceptance.get("status") == "pass",
+        "timing_gate_passed": timing_gate.get("status") == "pass",
+        "status_publish_gate_passed": status_publish_gate.get("status") == "pass",
+        "owner_matches": expect_owner is None or owner == expect_owner,
+        "mode_matches": expect_mode is None or mode == expect_mode,
+        "sample_count_matches": (
+            expect_sample_count is None or sample_count == expect_sample_count
+        ),
+        "jitter_p99_present": jitter_p99_ms is not None,
+        "jitter_p99_within_limit": (
+            max_jitter_p99_ms is None
+            or (
+                jitter_p99_ms is not None
+                and jitter_p99_ms <= float(max_jitter_p99_ms)
+            )
+        ),
+        "queue_latency_present": timing.get("queue_latency_s") is not None,
+        "first_send_latency_present": timing.get("first_send_latency_s") is not None,
+        "execution_elapsed_present": timing.get("execution_elapsed_s") is not None,
+    }
+    payload = {
+        "status": "pass" if all(checks.values()) else "fail",
+        "schema": "armctrl.runtime_result_check.v1",
+        "result_artifact": str(result_artifact_path),
+        "runtime_session_id": result.get("runtime_session_id"),
+        "owner": owner,
+        "mode": mode,
+        "sample_count": sample_count,
+        "checks": checks,
+        "metrics": {
+            "trajectory_sample_hz": _runtime_optional_float(
+                motion.get("trajectory_sample_hz")
+            ),
+            "runtime_send_hz": _runtime_optional_float(motion.get("runtime_send_hz")),
+            "actual_send_hz": _runtime_optional_float(motion.get("actual_send_hz")),
+            "send_jitter_ms_p95": _runtime_optional_float(
+                motion.get("send_jitter_ms_p95")
+            ),
+            "send_jitter_ms_p99": jitter_p99_ms,
+            "dt_min_s": _runtime_optional_float(motion.get("dt_min_s")),
+            "dt_max_s": _runtime_optional_float(motion.get("dt_max_s")),
+            "dt_avg_s": _runtime_optional_float(motion.get("dt_avg_s")),
+            "queue_latency_s": _runtime_optional_float(timing.get("queue_latency_s")),
+            "acquire_latency_s": _runtime_optional_float(
+                timing.get("acquire_latency_s")
+            ),
+            "first_send_latency_s": _runtime_optional_float(
+                timing.get("first_send_latency_s")
+            ),
+            "execution_elapsed_s": _runtime_optional_float(
+                timing.get("execution_elapsed_s")
+            ),
+        },
+        "policies": {
+            "resampling_policy": motion.get("resampling_policy"),
+            "interpolation_policy": motion.get("interpolation_policy"),
+            "landing_mode": motion.get("landing_mode"),
+        },
+        "acceptance": {
+            "status": acceptance.get("status"),
+            "timing_gate": timing_gate.get("status"),
+            "status_publish_gate": status_publish_gate.get("status"),
+        },
+    }
+    if payload["status"] != "pass":
+        payload["next_gate"] = "inspect runtime result timing and safety evidence"
+    return payload
 
 
 def _sysid_run_readiness_allowed(readiness_artifact: dict[str, object]) -> bool:
