@@ -1156,6 +1156,83 @@ def test_runtime_queue_executes_with_live_arm_runtime(
     ] == [0.0, 0.02]
 
 
+def test_runtime_queue_records_live_hold_start_pose_policy(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    backend = FakeMotionBackend()
+    backend.send_joint_command(
+        tuple(float(value) for value in session["q_meas"]),
+        producer="test_bootstrap",
+        mode=MotionMode.HOLD,
+        monotonic_s=0.0,
+    )
+    runtime = ArmRuntime(
+        backend=backend,
+        safe_center=tuple(float(value) for value in session["safe_center"]),
+        runtime_session_id=str(session["runtime_session_id"]),
+    )
+    runtime.mark_hold_safe(q_hold=tuple(float(value) for value in session["q_hold"]))
+    submitted = submit_trajectory_command(
+        session_artifact_path=session_artifact,
+        owner="sysid",
+        expected_q_start=(0.0, 0.3, 0.3),
+        q_points=[(0.0, 0.3, 0.3), (0.02, 0.3, 0.3)],
+        send_hz=50.0,
+        start_pose_policy="live_hold",
+        max_start_error_rad=0.02,
+        heartbeat_timeout_s=0.5,
+        max_heartbeat_age_s=1.0,
+    )
+
+    result = execute_pending_runtime_commands(
+        session_artifact_path=session_artifact,
+        backend=backend,
+        runtime=runtime,
+        max_heartbeat_age_s=1.0,
+    )
+
+    assert submitted["start_pose_policy"] == "live_hold"
+    assert result is not None
+    assert result["status"] == "completed"
+    assert result["start_pose_policy"] == "live_hold"
+    assert result["start_pose_guard"] == {
+        "status": "pass",
+        "policy": "live_hold",
+        "expected_q_start": [0.0, 0.3, 0.3],
+        "q_hold": [0.0, 0.3, 0.3],
+        "q_meas": [0.0, 0.3, 0.3],
+        "safe_center": [0.0, 0.3, 0.3],
+        "max_start_error_rad": 0.02,
+        "q_meas_to_q_hold_max_abs_rad": 0.0,
+        "q_hold_to_expected_start_max_abs_rad": 0.0,
+        "q_hold_to_safe_center_max_abs_rad": 0.0,
+        "failed_checks": [],
+    }
+
+
+def test_runtime_queue_rejects_explicit_start_policy_before_preposition(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+
+    with pytest.raises(Exception, match="explicit_q start pose requires runtime q_hold"):
+        submit_trajectory_command(
+            session_artifact_path=session_artifact,
+            owner="recipe",
+            expected_q_start=(0.2, 0.3, 0.3),
+            q_points=[(0.2, 0.3, 0.3), (0.21, 0.3, 0.3)],
+            send_hz=50.0,
+            start_pose_policy="explicit_q",
+            max_start_error_rad=0.02,
+            heartbeat_timeout_s=0.5,
+            max_heartbeat_age_s=1.0,
+        )
+
+
 def test_runtime_queue_holds_final_command_when_readback_lags(
     tmp_path: Path,
 ) -> None:

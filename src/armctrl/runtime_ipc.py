@@ -27,6 +27,7 @@ from armctrl.runtime_session import (
 
 RUNTIME_COMMAND_SCHEMA = "armctrl.arm_runtime_command.v1"
 RUNTIME_COMMAND_RESULT_SCHEMA = "armctrl.arm_runtime_command_result.v1"
+START_POSE_POLICIES = {"live_hold", "safe_center", "explicit_q"}
 
 
 def submit_trajectory_command(
@@ -41,6 +42,7 @@ def submit_trajectory_command(
     heartbeat_timeout_s: float,
     max_heartbeat_age_s: float,
     output_path: Path | None = None,
+    start_pose_policy: str = "live_hold",
 ) -> dict[str, object]:
     if not q_points:
         raise ValueError("at least one --q-point is required")
@@ -57,10 +59,11 @@ def submit_trajectory_command(
         raise ValueError("trajectory_sample_hz must be positive")
 
     session = _read_json_object(session_artifact_path)
-    _ensure_can_queue_command(
+    start_pose_guard = _ensure_can_queue_command(
         session,
         owner=owner,
         expected_q_start=q_start,
+        start_pose_policy=start_pose_policy,
         max_start_error_rad=float(max_start_error_rad),
         heartbeat_timeout_s=float(heartbeat_timeout_s),
     )
@@ -74,7 +77,9 @@ def submit_trajectory_command(
         "kind": "trajectory",
         "owner": str(owner),
         "mode": MotionMode.TRAJECTORY_REPLAY.value,
+        "start_pose_policy": str(start_pose_policy),
         "expected_q_start": q_start,
+        "start_pose_guard": start_pose_guard,
         "max_start_error_rad": float(max_start_error_rad),
         "heartbeat_timeout_s": float(heartbeat_timeout_s),
         "send_hz": float(send_hz),
@@ -95,6 +100,8 @@ def submit_trajectory_command(
         "mode": MotionMode.TRAJECTORY_REPLAY.value,
         "runtime_session_id": session.get("runtime_session_id"),
         "movement_command_sent": False,
+        "start_pose_policy": str(start_pose_policy),
+        "start_pose_guard": start_pose_guard,
         "runtime": {
             "single_motion_owner": True,
             "queue": str(queue_dir),
@@ -121,6 +128,7 @@ def submit_intent_command(
     heartbeat_timeout_s: float,
     max_heartbeat_age_s: float,
     output_path: Path | None = None,
+    start_pose_policy: str = "live_hold",
 ) -> dict[str, object]:
     q_start = _float_list(expected_q_start, name="expected_q_start")
     target = _float_list(q_target, name="q_target")
@@ -131,10 +139,11 @@ def submit_intent_command(
     if send_hz <= 0.0:
         raise ValueError("send_hz must be positive")
     session = _read_json_object(session_artifact_path)
-    _ensure_can_queue_command(
+    start_pose_guard = _ensure_can_queue_command(
         session,
         owner=owner,
         expected_q_start=q_start,
+        start_pose_policy=start_pose_policy,
         max_start_error_rad=float(max_start_error_rad),
         heartbeat_timeout_s=float(heartbeat_timeout_s),
     )
@@ -148,7 +157,9 @@ def submit_intent_command(
         "kind": "intent",
         "owner": str(owner),
         "mode": MotionMode.AGENT_SERVO.value,
+        "start_pose_policy": str(start_pose_policy),
         "expected_q_start": q_start,
+        "start_pose_guard": start_pose_guard,
         "q_target": target,
         "control_period_s": float(control_period_s),
         "max_joint_delta_rad": (
@@ -172,6 +183,8 @@ def submit_intent_command(
         "mode": MotionMode.AGENT_SERVO.value,
         "runtime_session_id": session.get("runtime_session_id"),
         "movement_command_sent": False,
+        "start_pose_policy": str(start_pose_policy),
+        "start_pose_guard": start_pose_guard,
         "runtime": {
             "single_motion_owner": True,
             "queue": str(queue_dir),
@@ -247,6 +260,7 @@ def execute_runtime_command(
             session,
             owner=owner,
             expected_q_start=_object_float_list(command.get("expected_q_start")),
+            start_pose_policy=str(command.get("start_pose_policy", "live_hold")),
             max_start_error_rad=float(command.get("max_start_error_rad", 0.02)),
             heartbeat_timeout_s=float(command.get("heartbeat_timeout_s", 0.5)),
         )
@@ -382,8 +396,10 @@ def execute_runtime_command(
             "command_id": command.get("command_id"),
             "owner": owner,
             "mode": mode,
+            "start_pose_policy": str(command.get("start_pose_policy", "live_hold")),
             "movement_command_sent": False,
             "reason": str(error),
+            "start_pose_guard": _error_start_pose_guard(error),
             "landing_mode": None,
             "timing": {
                 "submitted_wall_time_s": _optional_float(
@@ -609,6 +625,8 @@ def _command_result_payload(
         "mode": command.get("mode"),
         "runtime_session_id": runtime_session_id,
         "movement_command_sent": bool(motion.samples),
+        "start_pose_policy": str(command.get("start_pose_policy", "live_hold")),
+        "start_pose_guard": command.get("start_pose_guard"),
         "landing_mode": landing_mode,
         "reason": reason,
         "timing": timing,
@@ -929,9 +947,10 @@ def _ensure_can_queue_command(
     *,
     owner: str,
     expected_q_start: Sequence[float],
+    start_pose_policy: str,
     max_start_error_rad: float,
     heartbeat_timeout_s: float,
-) -> None:
+) -> dict[str, object]:
     if session.get("owner") is not None:
         raise RuntimeSessionError(
             f"runtime is owned by {session.get('owner')}",
@@ -944,26 +963,114 @@ def _ensure_can_queue_command(
         )
     if heartbeat_timeout_s <= 0.0:
         raise ValueError("heartbeat_timeout_s must be positive")
-    if not _q_close(session.get("q_meas"), expected_q_start, max_start_error_rad):
+    if not owner:
+        raise ValueError("owner must not be empty")
+    start_pose_guard = _start_pose_guard(
+        session,
+        expected_q_start=expected_q_start,
+        start_pose_policy=start_pose_policy,
+        max_start_error_rad=max_start_error_rad,
+    )
+    if start_pose_guard["status"] != "pass":
         error_payload = dict(session)
         error_payload["expected_q_start"] = list(expected_q_start)
         error_payload["max_start_error_rad"] = float(max_start_error_rad)
-        if isinstance(session.get("q_meas"), (list, tuple)):
-            q_meas = [float(value) for value in session["q_meas"]]
-            error_payload["q_start_error_rad"] = [
-                measured - expected
-                for measured, expected in zip(q_meas, expected_q_start, strict=True)
-            ]
-            error_payload["q_start_error_max_abs_rad"] = max(
-                (abs(value) for value in error_payload["q_start_error_rad"]),
-                default=0.0,
-            )
+        error_payload["start_pose_policy"] = start_pose_guard["policy"]
+        error_payload["start_pose_guard"] = start_pose_guard
         raise RuntimeSessionError(
-            "current q_meas is not close to expected start pose",
+            _start_pose_guard_error_message(start_pose_guard),
             error_payload,
         )
-    if not owner:
-        raise ValueError("owner must not be empty")
+    return start_pose_guard
+
+
+def _start_pose_guard(
+    session: dict[str, object],
+    *,
+    expected_q_start: Sequence[float],
+    start_pose_policy: str,
+    max_start_error_rad: float,
+) -> dict[str, object]:
+    policy = str(start_pose_policy)
+    if policy not in START_POSE_POLICIES:
+        raise ValueError(
+            "start_pose_policy must be one of "
+            + ", ".join(sorted(START_POSE_POLICIES))
+        )
+    q_hold = _optional_float_sequence(session.get("q_hold"))
+    q_meas = _optional_float_sequence(session.get("q_meas"))
+    safe_center = _optional_float_sequence(session.get("safe_center"))
+    expected = [float(value) for value in expected_q_start]
+    q_meas_to_q_hold = _max_abs_error(q_meas, q_hold)
+    q_hold_to_expected = _max_abs_error(q_hold, expected)
+    q_hold_to_safe_center = _max_abs_error(q_hold, safe_center)
+    failed_checks: list[str] = []
+    if q_meas_to_q_hold is None or q_meas_to_q_hold > float(max_start_error_rad):
+        failed_checks.append("q_meas_close_to_q_hold")
+    if policy == "live_hold":
+        if q_hold_to_expected is None or q_hold_to_expected > float(max_start_error_rad):
+            failed_checks.append("q_hold_close_to_expected_start")
+    elif policy == "safe_center":
+        if (
+            q_hold_to_safe_center is None
+            or q_hold_to_safe_center > float(max_start_error_rad)
+        ):
+            failed_checks.append("q_hold_close_to_safe_center")
+        if q_hold_to_expected is None or q_hold_to_expected > float(max_start_error_rad):
+            failed_checks.append("expected_start_matches_current_q_hold")
+    elif q_hold_to_expected is None or q_hold_to_expected > float(max_start_error_rad):
+        failed_checks.append("q_hold_close_to_explicit_q")
+    return {
+        "status": "pass" if not failed_checks else "fail",
+        "policy": policy,
+        "expected_q_start": expected,
+        "q_hold": q_hold,
+        "q_meas": q_meas,
+        "safe_center": safe_center,
+        "max_start_error_rad": float(max_start_error_rad),
+        "q_meas_to_q_hold_max_abs_rad": q_meas_to_q_hold,
+        "q_hold_to_expected_start_max_abs_rad": q_hold_to_expected,
+        "q_hold_to_safe_center_max_abs_rad": q_hold_to_safe_center,
+        "failed_checks": failed_checks,
+    }
+
+
+def _start_pose_guard_error_message(start_pose_guard: dict[str, object]) -> str:
+    policy = start_pose_guard.get("policy")
+    failed_checks = start_pose_guard.get("failed_checks")
+    if policy == "explicit_q" and isinstance(failed_checks, list):
+        if "q_hold_close_to_explicit_q" in failed_checks:
+            return "explicit_q start pose requires runtime q_hold to be pre-positioned"
+    if policy == "safe_center" and isinstance(failed_checks, list):
+        if "q_hold_close_to_safe_center" in failed_checks:
+            return "safe_center start pose requires runtime q_hold at SAFE_CENTER"
+    if isinstance(failed_checks, list) and "q_meas_close_to_q_hold" in failed_checks:
+        return "current q_meas is not close to runtime q_hold"
+    return "runtime start pose guard failed"
+
+
+def _optional_float_sequence(values: object) -> list[float] | None:
+    if not isinstance(values, (list, tuple)):
+        return None
+    return [float(value) for value in values]
+
+
+def _max_abs_error(left: Sequence[float] | None, right: Sequence[float] | None) -> float | None:
+    if left is None or right is None or len(left) != len(right):
+        return None
+    return max(
+        (
+            abs(float(left_value) - float(right_value))
+            for left_value, right_value in zip(left, right, strict=True)
+        ),
+        default=0.0,
+    )
+
+
+def _error_start_pose_guard(error: Exception) -> object:
+    if isinstance(error, RuntimeSessionError):
+        return error.payload.get("start_pose_guard")
+    return None
 
 
 def _q_close(left: object, right: Sequence[float], max_error_rad: float) -> bool:
