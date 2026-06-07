@@ -87,6 +87,12 @@ or Recipe. It means the live serving runtime has not recently refreshed active
 hold evidence. Check that terminal 1 is still running, that the arm is not in
 damping, and that `runtime_session.json` is still being updated.
 
+Later Agent/SysID submit commands accept this status artifact only as proof that
+the caller is using the live runtime path. They also read
+`runtime_session.json` at submit time, so the actual start pose and freshness
+come from the still-running serving runtime, not from this historical status
+file.
+
 ## 3. Agent Attach Gate
 
 Generate an Agent contract. This is non-hardware planning:
@@ -227,6 +233,9 @@ uv run armctrl sysid run gravity_sweep \
 ```
 
 The second run must also queue and complete from live `q_hold`. It must not be rejected because `q_hold` no longer exactly equals the historical `SAFE_CENTER`.
+The submit command re-reads `runtime_session.json`, so it should use the current
+live `q_hold` even when `--readiness-artifact "$RUN_DIR/runtime_status.json"`
+points to the earlier status check.
 
 If this returns `blocked` or `rejected`, inspect `runtime_status.json` and the generated SysID plan safety result before retrying.
 
