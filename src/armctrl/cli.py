@@ -733,6 +733,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     sysid_run_parser.add_argument("--output", required=True)
     sysid_run_parser.add_argument("--confirm")
     sysid_run_parser.add_argument("--readiness-artifact")
+    sysid_run_parser.add_argument("--runtime-session-artifact")
     sysid_run_parser.add_argument("--json", action="store_true", dest="as_json")
 
     sysid_postprocess_parser = sysid_subparsers.add_parser("postprocess")
@@ -2487,20 +2488,48 @@ def main(argv: Sequence[str] | None = None) -> int:
         q_center = tuple(args.q_center or [0.0] * args.dof)
         if len(q_center) != args.dof:
             parser.error("--q-center length must match --dof")
-        result = FakeSysIdRunner().run(
-            SysIdPlanRequest(
-                profile_name=args.profile,
-                dof=args.dof,
-                sample_hz=args.sample_hz,
-                duration_s=args.duration,
-                amplitude_rad=args.amplitude,
-                q_center=q_center,
-                urdf_path=args.urdf_path,
-                safe_config_path=args.safe_config,
-                output_dir=Path(args.output),
+        try:
+            result = FakeSysIdRunner().run(
+                SysIdPlanRequest(
+                    profile_name=args.profile,
+                    dof=args.dof,
+                    sample_hz=args.sample_hz,
+                    duration_s=args.duration,
+                    amplitude_rad=args.amplitude,
+                    q_center=q_center,
+                    urdf_path=args.urdf_path,
+                    safe_config_path=args.safe_config,
+                    output_dir=Path(args.output),
+                    runtime_session_artifact_path=(
+                        Path(args.runtime_session_artifact)
+                        if args.runtime_session_artifact
+                        else None
+                    ),
+                )
             )
-        )
+        except RuntimeSessionError as error:
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.sysid_run.v1",
+                "adapter": "fake",
+                "reason": str(error),
+                "movement_allowed": False,
+                "runtime": {
+                    "single_owner_runtime_session": True,
+                    "runtime_session_id": error.payload.get("runtime_session_id"),
+                    "mode": error.payload.get("mode"),
+                    "owner": error.payload.get("owner"),
+                    "readiness": error.payload.get("readiness"),
+                },
+                "next_gate": "release active runtime owner or recover runtime to hold_safe before sysid run",
+            }
+            _emit(payload, as_json=args.as_json)
+            return 3
         payload = {"status": "ok", **result.to_json()}
+        manifest_path = Path(result.artifacts["manifest"])
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if "runtime" in manifest:
+            payload["runtime"] = manifest["runtime"]
         return _emit(payload, as_json=args.as_json)
 
     if args.command == "sysid" and args.sysid_command == "postprocess":

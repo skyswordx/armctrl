@@ -84,6 +84,7 @@ class SysIdPlanRequest:
     candidate_trajectory_path: Path | None = None
     trajectory_command_argv: tuple[str, ...] | None = None
     trajectory_command_timeout_s: float | None = None
+    runtime_session_artifact_path: Path | None = None
 
 
 class SysIdPlanner:

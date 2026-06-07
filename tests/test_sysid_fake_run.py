@@ -12,6 +12,7 @@ from armctrl.sysid_run import (
     SdkSysIdRunner,
     SDK_CONFIRMATION,
 )
+from armctrl.runtime_session import start_fake_runtime_session
 
 
 def _passing_readiness_artifact() -> dict[str, object]:
@@ -242,6 +243,143 @@ def test_cli_sysid_run_fake_writes_raw_samples_and_manifest(tmp_path: Path) -> N
     assert rows[0]["time_s"] == "0.000000"
     assert "tau_meas_6" in rows[0]
     assert len(rows) == 41
+
+
+def test_cli_sysid_run_fake_acquires_runtime_owner_lease(tmp_path: Path) -> None:
+    output_dir = tmp_path / "ident-run"
+    runtime_session_artifact = tmp_path / "runtime-session.json"
+    safe_center = [0.0, 0.3, 0.3, 0.0, 0.0, 0.0]
+    runtime_session_artifact.write_text(
+        json.dumps(
+            start_fake_runtime_session(
+                q_current=safe_center,
+                safe_center=safe_center,
+                send_hz=50.0,
+                hold_hz=50.0,
+                max_joint_step_rad=0.01,
+                max_heartbeat_age_s=5.0,
+            ),
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "sysid",
+            "run",
+            "gravity_sweep",
+            "--adapter",
+            "fake",
+            "--dof",
+            "6",
+            "--sample-hz",
+            "20",
+            "--duration",
+            "2",
+            "--amplitude",
+            "0.1",
+            "--q-center",
+            *[str(value) for value in safe_center],
+            "--runtime-session-artifact",
+            str(runtime_session_artifact),
+            "--output",
+            str(output_dir),
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    released_session = json.loads(runtime_session_artifact.read_text(encoding="utf-8"))
+
+    assert payload["status"] == "ok"
+    assert payload["runtime"]["single_owner_runtime_session"] is True
+    assert payload["runtime"]["owner"] == "sysid"
+    assert payload["runtime"]["mode"] == "trajectory_replay"
+    assert payload["runtime"]["release"]["mode"] == "hold_safe"
+    assert payload["runtime"]["release"]["owner"] is None
+
+    assert manifest["runtime"]["owner_lease"]["owner"] == "sysid"
+    assert manifest["runtime"]["owner_lease"]["mode"] == "trajectory_replay"
+    assert manifest["runtime"]["release"]["readiness"]["agent_sysid_smoke_allowed"] is True
+
+    assert released_session["mode"] == "hold_safe"
+    assert released_session["owner"] is None
+    assert released_session["owner_lease"] is None
+    assert released_session["readiness"]["agent_sysid_smoke_allowed"] is True
+
+
+def test_cli_sysid_run_fake_rejects_busy_runtime_owner(tmp_path: Path) -> None:
+    output_dir = tmp_path / "ident-run"
+    runtime_session_artifact = tmp_path / "runtime-session.json"
+    safe_center = [0.0, 0.3, 0.3, 0.0, 0.0, 0.0]
+    session = start_fake_runtime_session(
+        q_current=safe_center,
+        safe_center=safe_center,
+        send_hz=50.0,
+        hold_hz=50.0,
+        max_joint_step_rad=0.01,
+        max_heartbeat_age_s=5.0,
+    )
+    session["mode"] = "agent_servo"
+    session["owner"] = "agent"
+    session["owner_lease"] = {
+        "schema": "armctrl.arm_runtime_owner_lease.v1",
+        "runtime_session_id": session["runtime_session_id"],
+        "owner": "agent",
+        "mode": "agent_servo",
+        "heartbeat_timeout_s": 1.0,
+    }
+    runtime_session_artifact.write_text(
+        json.dumps(session, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "sysid",
+            "run",
+            "gravity_sweep",
+            "--adapter",
+            "fake",
+            "--dof",
+            "6",
+            "--sample-hz",
+            "20",
+            "--duration",
+            "2",
+            "--amplitude",
+            "0.1",
+            "--q-center",
+            *[str(value) for value in safe_center],
+            "--runtime-session-artifact",
+            str(runtime_session_artifact),
+            "--output",
+            str(output_dir),
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 3
+    payload = json.loads(completed.stdout)
+    assert payload["status"] == "rejected"
+    assert payload["reason"] == "runtime is owned by agent"
+    assert payload["runtime"]["owner"] == "agent"
+    assert not (output_dir / "raw_samples.csv").exists()
+    assert json.loads(runtime_session_artifact.read_text(encoding="utf-8"))["owner"] == "agent"
 
 
 def test_cli_sysid_run_sdk_is_rejected_until_runner_exists(tmp_path: Path) -> None:
