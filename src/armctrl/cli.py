@@ -75,7 +75,7 @@ from armctrl.lerobot_bridge import (
     LeRobotRolloutStageRequest,
     LeRobotRolloutStager,
 )
-from armctrl.motion_runtime import FakeMotionBackend, MotionBackend, MotionMode
+from armctrl.motion_runtime import ArmRuntime, FakeMotionBackend, MotionBackend, MotionMode
 from armctrl.online_id import (
     OnlineAuditRequest,
     OnlineIdentificationAuditor,
@@ -1293,11 +1293,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 artifact_key="runtime_session",
             )
             if args.serve:
+                runtime = _live_runtime_from_session_payload(
+                    backend=backend,
+                    payload=payload,
+                )
                 payload = _serve_runtime_session_until_stopped(
                     session_artifact_path=Path(args.output),
                     heartbeat_period_s=args.heartbeat_period_s,
                     max_heartbeat_age_s=args.max_heartbeat_age_s,
                     backend=backend,
+                    runtime=runtime,
                     hold_tick=_arx5_active_hold_tick(
                         backend=backend,
                         hold_hz=args.hold_hz,
@@ -1328,11 +1333,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 mode=MotionMode.HOLD,
                 monotonic_s=0.0,
             )
+            runtime = _live_runtime_from_session_payload(
+                backend=backend,
+                payload=payload,
+            )
             payload = _serve_runtime_session_until_stopped(
                 session_artifact_path=Path(args.output),
                 heartbeat_period_s=args.heartbeat_period_s,
                 max_heartbeat_age_s=args.max_heartbeat_age_s,
                 backend=backend,
+                runtime=runtime,
             )
         return _emit(payload, as_json=args.as_json)
 
@@ -3632,6 +3642,7 @@ def _serve_runtime_session_until_stopped(
     heartbeat_period_s: float,
     max_heartbeat_age_s: float,
     backend: MotionBackend | None = None,
+    runtime: ArmRuntime | None = None,
     hold_tick: Callable[[dict[str, object]], None] | None = None,
 ) -> dict[str, object]:
     if heartbeat_period_s <= 0.0:
@@ -3644,6 +3655,7 @@ def _serve_runtime_session_until_stopped(
             execute_pending_runtime_commands(
                 session_artifact_path=session_artifact_path,
                 backend=backend,
+                runtime=runtime,
                 max_heartbeat_age_s=max_heartbeat_age_s,
             )
             payload = _read_json_retry(session_artifact_path)
@@ -3663,6 +3675,22 @@ def _serve_runtime_session_until_stopped(
             return latest
         _write_json_atomic(session_artifact_path, payload)
         time.sleep(float(heartbeat_period_s))
+
+
+def _live_runtime_from_session_payload(
+    *,
+    backend: MotionBackend,
+    payload: dict[str, object],
+) -> ArmRuntime:
+    runtime = ArmRuntime(
+        backend=backend,
+        safe_center=tuple(float(value) for value in payload.get("safe_center") or []),
+        runtime_session_id=str(payload.get("runtime_session_id")),
+    )
+    runtime.mark_hold_safe(
+        q_hold=tuple(float(value) for value in payload.get("q_hold") or [])
+    )
+    return runtime
 
 
 def _read_json_retry(path: Path) -> dict[str, object]:

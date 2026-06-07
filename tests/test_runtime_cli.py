@@ -4,12 +4,18 @@ import sys
 import time
 from pathlib import Path
 
-from armctrl.motion_runtime import FakeMotionBackend, JointStateSnapshot
+from armctrl.motion_runtime import (
+    ArmRuntime,
+    FakeMotionBackend,
+    JointStateSnapshot,
+    MotionMode,
+)
 from armctrl.cli import _serve_runtime_session_until_stopped
 from armctrl.runtime_session import heartbeat_runtime_session_payload
 from armctrl.runtime_session import ARX5_RUNTIME_START_CONFIRMATION
 from armctrl.runtime_session import start_fake_runtime_session, stop_runtime_session_from_artifact
 from armctrl.runtime_session import start_arx5_runtime_session
+from armctrl.runtime_ipc import execute_pending_runtime_commands, submit_trajectory_command
 
 
 def _passing_doctor_artifact() -> dict[str, object]:
@@ -805,6 +811,114 @@ def test_cli_runtime_watchdog_timeout_lands_damping(
     assert payload["watchdog"]["landing_mode"] == "damping"
     assert payload["watchdog"]["reason"] == "owner_heartbeat_timeout"
     assert payload["readiness"]["agent_sysid_smoke_allowed"] is False
+
+
+def test_runtime_queue_executes_with_live_arm_runtime(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    backend = FakeMotionBackend()
+    backend.send_joint_command(
+        tuple(float(value) for value in session["q_meas"]),
+        producer="test_bootstrap",
+        mode=MotionMode.HOLD,
+        monotonic_s=0.0,
+    )
+    runtime = ArmRuntime(
+        backend=backend,
+        safe_center=tuple(float(value) for value in session["safe_center"]),
+        runtime_session_id=str(session["runtime_session_id"]),
+    )
+    runtime.mark_hold_safe(q_hold=tuple(float(value) for value in session["q_hold"]))
+    submitted = submit_trajectory_command(
+        session_artifact_path=session_artifact,
+        owner="sysid",
+        expected_q_start=(0.0, 0.3, 0.3),
+        q_points=[(0.0, 0.3, 0.3), (0.02, 0.3, 0.3)],
+        send_hz=50.0,
+        max_start_error_rad=0.02,
+        heartbeat_timeout_s=0.5,
+        max_heartbeat_age_s=1.0,
+    )
+
+    result = execute_pending_runtime_commands(
+        session_artifact_path=session_artifact,
+        backend=backend,
+        runtime=runtime,
+        max_heartbeat_age_s=1.0,
+    )
+    updated_session = json.loads(session_artifact.read_text(encoding="utf-8"))
+
+    assert result is not None
+    assert result["status"] == "completed"
+    assert result["runtime_session_id"] == session["runtime_session_id"]
+    assert result["artifacts"]["session"] == str(session_artifact)
+    assert updated_session["runtime_session_id"] == session["runtime_session_id"]
+    assert updated_session["mode"] == "hold_safe"
+    assert updated_session["owner"] is None
+    assert updated_session["q_hold"] == [0.02, 0.3, 0.3]
+    assert runtime.status()["q_hold"] == (0.02, 0.3, 0.3)
+    assert json.loads(Path(submitted["artifacts"]["result"]).read_text())["status"] == "completed"
+
+
+def test_runtime_queue_writes_owner_active_status_before_motion(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    backend = FakeMotionBackend()
+    backend.send_joint_command(
+        tuple(float(value) for value in session["q_meas"]),
+        producer="test_bootstrap",
+        mode=MotionMode.HOLD,
+        monotonic_s=0.0,
+    )
+    runtime = ArmRuntime(
+        backend=backend,
+        safe_center=tuple(float(value) for value in session["safe_center"]),
+        runtime_session_id=str(session["runtime_session_id"]),
+    )
+    runtime.mark_hold_safe(q_hold=tuple(float(value) for value in session["q_hold"]))
+    submit_trajectory_command(
+        session_artifact_path=session_artifact,
+        owner="sysid",
+        expected_q_start=(0.0, 0.3, 0.3),
+        q_points=[(0.0, 0.3, 0.3), (0.02, 0.3, 0.3)],
+        send_hz=50.0,
+        max_start_error_rad=0.02,
+        heartbeat_timeout_s=0.5,
+        max_heartbeat_age_s=1.0,
+    )
+    observed: dict[str, object] = {}
+    from armctrl.runtime_ipc import _execute_motion_command as original_execute_motion
+
+    def observe_active_status(command: dict[str, object], *, backend):
+        observed.update(json.loads(session_artifact.read_text(encoding="utf-8")))
+        return original_execute_motion(command, backend=backend)
+
+    monkeypatch.setattr(
+        "armctrl.runtime_ipc._execute_motion_command",
+        observe_active_status,
+    )
+
+    result = execute_pending_runtime_commands(
+        session_artifact_path=session_artifact,
+        backend=backend,
+        runtime=runtime,
+        max_heartbeat_age_s=1.0,
+    )
+
+    assert result is not None
+    assert observed["mode"] == "trajectory_replay"
+    assert observed["owner"] == "sysid"
+    assert observed["owner_lease"]["owner"] == "sysid"
+    assert observed["owner_lease"]["mode"] == "trajectory_replay"
+    assert observed["readiness"]["agent_sysid_smoke_allowed"] is False
+    assert "no_owner" in observed["readiness"]["failed_checks"]
 
 
 def test_cli_runtime_serve_executes_queued_trajectory_and_returns_to_hold(

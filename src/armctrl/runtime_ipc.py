@@ -186,6 +186,7 @@ def execute_pending_runtime_commands(
     *,
     session_artifact_path: Path,
     backend: MotionBackend,
+    runtime: ArmRuntime | None = None,
     max_heartbeat_age_s: float,
 ) -> dict[str, object] | None:
     queue_dir = runtime_command_queue_dir(session_artifact_path)
@@ -204,6 +205,7 @@ def execute_pending_runtime_commands(
         command=command,
         session_artifact_path=session_artifact_path,
         backend=backend,
+        runtime=runtime,
         max_heartbeat_age_s=max_heartbeat_age_s,
     )
     result_path = Path(str(command.get("result_artifact") or ""))
@@ -222,6 +224,7 @@ def execute_runtime_command(
     command: dict[str, object],
     session_artifact_path: Path,
     backend: MotionBackend,
+    runtime: ArmRuntime | None = None,
     max_heartbeat_age_s: float,
 ) -> dict[str, object]:
     if command.get("schema") != RUNTIME_COMMAND_SCHEMA:
@@ -237,23 +240,43 @@ def execute_runtime_command(
             max_start_error_rad=float(command.get("max_start_error_rad", 0.02)),
             heartbeat_timeout_s=float(command.get("heartbeat_timeout_s", 0.5)),
         )
-        runtime = ArmRuntime(
-            backend=backend,
-            safe_center=tuple(_object_float_list(session.get("safe_center"))),
-            runtime_session_id=str(session.get("runtime_session_id")),
-        )
-        runtime.mark_hold_safe(q_hold=tuple(_object_float_list(session.get("q_hold"))))
-        lease = runtime.acquire_owner(
+        live_runtime = runtime
+        if live_runtime is None:
+            live_runtime = ArmRuntime(
+                backend=backend,
+                safe_center=tuple(_object_float_list(session.get("safe_center"))),
+                runtime_session_id=str(session.get("runtime_session_id")),
+            )
+            live_runtime.mark_hold_safe(
+                q_hold=tuple(_object_float_list(session.get("q_hold")))
+            )
+        lease = live_runtime.acquire_owner(
             owner=owner,
             mode=MotionMode(mode),
             expected_q_start=tuple(_object_float_list(command.get("expected_q_start"))),
             max_start_error_rad=float(command.get("max_start_error_rad", 0.02)),
             heartbeat_timeout_s=float(command.get("heartbeat_timeout_s", 0.5)),
         )
+        session = _session_from_runtime_status(
+            session,
+            status=live_runtime.status(),
+            max_heartbeat_age_s=max_heartbeat_age_s,
+        )
+        session["owner_lease"] = {
+            "schema": "armctrl.arm_runtime_owner_lease.v1",
+            "runtime_session_id": lease.runtime_session_id,
+            "owner": lease.owner,
+            "mode": lease.mode,
+            "heartbeat_timeout_s": float(command.get("heartbeat_timeout_s", 0.5)),
+            "heartbeat_wall_time_s": time.time(),
+            "landing_policy": "watchdog_to_damping_release_to_hold_safe",
+        }
+        session["readiness"] = runtime_readiness(session)
+        _write_json_atomic(session_artifact_path, session)
         motion = _execute_motion_command(command, backend=backend)
         if motion.status == "completed":
             lease.release()
-            status = runtime.status()
+            status = live_runtime.status()
             session = _session_from_runtime_status(
                 session,
                 status=status,
@@ -268,6 +291,8 @@ def execute_runtime_command(
         _write_json_atomic(session_artifact_path, session)
         return _command_result_payload(
             command=command,
+            runtime_session_id=session.get("runtime_session_id"),
+            session_artifact_path=session_artifact_path,
             status=motion.status,
             landing_mode=motion.landing_mode,
             motion=motion,
@@ -354,6 +379,8 @@ def _session_from_runtime_status(
 def _command_result_payload(
     *,
     command: dict[str, object],
+    runtime_session_id: object,
+    session_artifact_path: Path,
     status: str,
     landing_mode: str,
     motion: MotionExecutionResult,
@@ -365,9 +392,14 @@ def _command_result_payload(
         "command_id": command.get("command_id"),
         "owner": command.get("owner"),
         "mode": command.get("mode"),
+        "runtime_session_id": runtime_session_id,
         "movement_command_sent": bool(motion.samples),
         "landing_mode": landing_mode,
         "reason": reason,
+        "artifacts": {
+            "session": str(session_artifact_path),
+            "result": str(command.get("result_artifact") or ""),
+        },
         "motion": {
             "status": motion.status,
             "producer": motion.producer,
