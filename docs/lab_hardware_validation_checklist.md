@@ -130,6 +130,25 @@ Expected result:
 - A runtime command result artifact should appear under the session command queue.
 - The arm should make only the requested small intent motion, then return to active hold.
 
+Inspect the live runtime result, not only the submit artifact:
+
+```bash
+RESULT=$(ls -t "$RUN_DIR/runtime_session_commands/results"/*.json | head -1)
+python -m json.tool "$RESULT" | sed -n '1,180p'
+```
+
+Expected runtime result checks:
+
+- `status == "completed"`
+- `owner == "agent"`
+- `motion.resampling_policy == "intent_frame_to_runtime_send_hz"`
+- `motion.interpolation_policy == "linear_intent_frame"`
+- `motion.actual_send_hz` is present
+- `motion.send_jitter_ms_p95`, `motion.send_jitter_ms_p99`, and `motion.send_jitter_ms_summary` are present
+- `motion.dt_min_s`, `motion.dt_max_s`, and `motion.dt_avg_s` are present
+- `acceptance.timing_gate.status == "pass"`
+- `acceptance.status_publish_gate.status == "pass"`
+
 If this returns `blocked` or `rejected`, inspect `runtime_status.json` first; readiness must be fresh live hold at `SAFE_CENTER`.
 
 ## 4. SysID Attach Gate
@@ -163,6 +182,51 @@ Expected result:
 - `runtime.mode == "trajectory_replay"`
 - A runtime command result artifact should appear under the session command queue.
 - The arm should execute the safety-reviewed SysID trajectory, then return to active hold.
+
+Inspect the live runtime result:
+
+```bash
+RESULT=$(ls -t "$RUN_DIR/runtime_session_commands/results"/*.json | head -1)
+python -m json.tool "$RESULT" | sed -n '1,220p'
+```
+
+Expected runtime result checks:
+
+- `status == "completed"`
+- `owner == "sysid"`
+- `motion.sample_count == 801` for `--duration 8 --sample-hz 100`
+- `motion.trajectory_sample_hz == 100.0`
+- `motion.runtime_send_hz == 100.0`
+- `motion.resampling_policy == "none_sample_hz_matches_send_hz"`
+- `motion.interpolation_policy == "pre_sampled_joint_positions"`
+- `motion.actual_send_hz`, `motion.send_jitter_ms_p95`, `motion.send_jitter_ms_p99`, and `motion.send_jitter_ms_summary.buckets` are present
+- `motion.dt_min_s`, `motion.dt_max_s`, and `motion.dt_avg_s` are present
+- `timing.queue_latency_s`, `timing.acquire_latency_s`, `timing.first_send_latency_s`, and `timing.execution_elapsed_s` are present
+- `acceptance.timing_gate.status == "pass"`
+- `acceptance.status_publish_gate.status == "pass"`
+
+Run the SysID command a second time with a different output directory:
+
+```bash
+uv run armctrl sysid run gravity_sweep \
+  --adapter sdk \
+  --model X5 \
+  --interface can0 \
+  --dof 6 \
+  --sample-hz 100 \
+  --duration 8 \
+  --amplitude 0.05 \
+  --q-center $SAFE_CENTER \
+  --urdf-path configs/models/X5_camera.urdf \
+  --safe-config configs/x5.safe.yaml \
+  --output "$RUN_DIR/ident-sdk-gravity-smoke-repeat" \
+  --confirm "I UNDERSTAND THIS WILL MOVE THE ARM" \
+  --readiness-artifact "$RUN_DIR/runtime_status.json" \
+  --runtime-session-artifact "$RUN_DIR/runtime_session.json" \
+  --json
+```
+
+The second run must also queue and complete from live `q_hold`. It must not be rejected because `q_hold` no longer exactly equals the historical `SAFE_CENTER`.
 
 If this returns `blocked` or `rejected`, inspect `runtime_status.json` and the generated SysID plan safety result before retrying.
 
