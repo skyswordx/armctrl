@@ -4,6 +4,7 @@ import argparse
 import json
 import math
 import sys
+import time
 from pathlib import Path
 from typing import Sequence
 
@@ -34,6 +35,7 @@ from armctrl.recipe_runtime import (
 from armctrl.runtime_session import (
     RuntimeSessionError,
     acquire_owner_from_artifact,
+    heartbeat_runtime_session_payload,
     recover_runtime_session_from_artifact,
     refresh_runtime_status_payload,
     release_owner_from_artifact,
@@ -175,6 +177,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--max-heartbeat-age-s",
         type=float,
         default=1.0,
+    )
+    runtime_start_parser.add_argument("--serve", action="store_true")
+    runtime_start_parser.add_argument(
+        "--heartbeat-period-s",
+        type=float,
+        default=0.05,
     )
     runtime_start_parser.add_argument("--output", required=True)
     runtime_start_parser.add_argument("--json", action="store_true", dest="as_json")
@@ -1116,6 +1124,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     catalog = RecipeCatalog.default()
 
     if args.command == "runtime" and args.runtime_command == "start":
+        if args.serve and args.output is None:
+            parser.error("runtime start --serve requires --output")
         payload = start_fake_runtime_session(
             q_current=tuple(args.q_current),
             safe_center=tuple(args.safe_center),
@@ -1129,6 +1139,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.output,
             artifact_key="runtime_session",
         )
+        if args.serve:
+            payload = _serve_runtime_session_until_stopped(
+                session_artifact_path=Path(args.output),
+                heartbeat_period_s=args.heartbeat_period_s,
+                max_heartbeat_age_s=args.max_heartbeat_age_s,
+            )
         return _emit(payload, as_json=args.as_json)
 
     if args.command == "runtime" and args.runtime_command == "status":
@@ -3203,6 +3219,29 @@ def _attach_output_artifact(
         encoding="utf-8",
     )
     return payload_with_artifact
+
+
+def _serve_runtime_session_until_stopped(
+    *,
+    session_artifact_path: Path,
+    heartbeat_period_s: float,
+    max_heartbeat_age_s: float,
+) -> dict[str, object]:
+    if heartbeat_period_s <= 0.0:
+        raise ValueError("heartbeat_period_s must be positive")
+    while True:
+        payload = json.loads(session_artifact_path.read_text(encoding="utf-8"))
+        if payload.get("status") == "stopped" or payload.get("mode") == "damping":
+            return payload
+        payload = heartbeat_runtime_session_payload(
+            payload,
+            max_heartbeat_age_s=max_heartbeat_age_s,
+        )
+        session_artifact_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        time.sleep(float(heartbeat_period_s))
 
 
 def _attach_sysid_run_manifest(

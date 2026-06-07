@@ -174,6 +174,26 @@ def stop_runtime_session_from_artifact(
     return stopped
 
 
+def heartbeat_runtime_session_payload(
+    payload: dict[str, object],
+    *,
+    max_heartbeat_age_s: float,
+) -> dict[str, object]:
+    refreshed = dict(payload)
+    refreshed["heartbeat"] = _heartbeat_status(
+        {"wall_time_s": time.time()},
+        max_heartbeat_age_s=float(max_heartbeat_age_s),
+    )
+    refreshed["readiness"] = runtime_readiness(refreshed)
+    if refreshed.get("status") not in {"stopped", "faulted"}:
+        refreshed["status"] = (
+            "ok"
+            if refreshed["readiness"]["agent_sysid_smoke_allowed"] is True
+            else "blocked"
+        )
+    return refreshed
+
+
 def acquire_owner_from_artifact(
     *,
     session_artifact_path: Path,

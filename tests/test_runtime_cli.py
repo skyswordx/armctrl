@@ -93,6 +93,84 @@ def test_cli_runtime_start_fake_recovers_to_hold_safe_session(tmp_path: Path) ->
     assert json.loads(session_artifact.read_text(encoding="utf-8")) == payload
 
 
+def test_cli_runtime_start_fake_serve_refreshes_heartbeat_until_stop(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+
+    server = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "runtime",
+            "start",
+            "--backend",
+            "fake",
+            "--q-current",
+            "0.0",
+            "0.3",
+            "0.3",
+            "--safe-center",
+            "0.0",
+            "0.3",
+            "0.3",
+            "--serve",
+            "--heartbeat-period-s",
+            "0.05",
+            "--max-heartbeat-age-s",
+            "1.0",
+            "--output",
+            str(session_artifact),
+            "--json",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        first_seen = _wait_for_session_artifact(session_artifact)
+        first_wall_time_s = first_seen["heartbeat"]["wall_time_s"]
+        time.sleep(0.15)
+        refreshed = json.loads(session_artifact.read_text(encoding="utf-8"))
+
+        assert refreshed["mode"] == "hold_safe"
+        assert refreshed["owner"] is None
+        assert refreshed["heartbeat"]["wall_time_s"] > first_wall_time_s
+        assert refreshed["readiness"]["agent_sysid_smoke_allowed"] is True
+
+        stop_completed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "armctrl.cli",
+                "runtime",
+                "stop",
+                "--session-artifact",
+                str(session_artifact),
+                "--output",
+                str(session_artifact),
+                "--json",
+            ],
+            capture_output=True,
+            text=True,
+        )
+
+        assert stop_completed.returncode == 3
+        stdout, stderr = server.communicate(timeout=3.0)
+        assert server.returncode == 0
+        served = json.loads(stdout)
+        stopped = json.loads(session_artifact.read_text(encoding="utf-8"))
+        assert stderr == ""
+        assert served["status"] == "stopped"
+        assert served["mode"] == "damping"
+        assert served == stopped
+    finally:
+        if server.poll() is None:
+            server.terminate()
+            server.communicate(timeout=3.0)
+
+
 def test_cli_runtime_status_blocks_stale_heartbeat(tmp_path: Path) -> None:
     session_artifact = tmp_path / "runtime_session.json"
     subprocess.run(
@@ -492,6 +570,15 @@ def _start_fake_hold_session(path: Path) -> None:
         capture_output=True,
         text=True,
     )
+
+
+def _wait_for_session_artifact(path: Path) -> dict[str, object]:
+    deadline = time.time() + 3.0
+    while time.time() < deadline:
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8"))
+        time.sleep(0.02)
+    raise AssertionError(f"runtime session artifact was not written: {path}")
 
 
 def _acquire_owner(
