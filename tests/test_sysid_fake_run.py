@@ -881,6 +881,37 @@ def test_cli_sysid_run_sdk_with_runtime_blocks_until_live_queue_exists(
             raise AssertionError("sdk sysid must not open SDK outside runtime")
 
     monkeypatch.setattr(cli, "Arx5InterfaceCollectionBackend", ForbiddenBackendFactory)
+    submitted_commands: list[dict[str, object]] = []
+
+    def fake_submit_trajectory_command(**kwargs) -> dict[str, object]:
+        submitted_commands.append(kwargs)
+        command_dir = tmp_path / "runtime_session_commands"
+        pending_dir = command_dir / "pending"
+        results_dir = command_dir / "results"
+        pending_dir.mkdir(parents=True, exist_ok=True)
+        results_dir.mkdir(parents=True, exist_ok=True)
+        command_path = pending_dir / f"command-{len(submitted_commands)}.json"
+        result_path = results_dir / f"command-{len(submitted_commands)}.json"
+        command_payload = {
+            "expected_q_start": list(kwargs["expected_q_start"]),
+            "start_pose_policy": kwargs.get("start_pose_policy", "live_hold"),
+            "start_pose_guard": {
+                "policy": kwargs.get("start_pose_policy", "live_hold"),
+                "q_hold": list(kwargs["expected_q_start"]),
+            },
+        }
+        command_path.write_text(
+            json.dumps(command_payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return {
+            "command_id": f"command-{len(submitted_commands)}",
+            "runtime": {"queue": str(command_dir)},
+            "artifacts": {"command": str(command_path), "result": str(result_path)},
+            "start_pose_guard": command_payload["start_pose_guard"],
+        }
+
+    monkeypatch.setattr(cli, "submit_trajectory_command", fake_submit_trajectory_command)
 
     exit_code = cli.main(
         [
@@ -1047,10 +1078,6 @@ def test_cli_sysid_run_sdk_repeated_run_uses_updated_live_hold_pose(
     safe_center = (0.0, 0.3, 0.3, 0.0, 0.0, 0.0)
     first_hold = safe_center
     second_hold = (0.018, 0.302, 0.288, -0.004, -0.002, 0.001)
-    # The CLI path can spend several seconds importing/planning on slow robot
-    # hosts. This fixture window keeps the regression focused on live q_hold
-    # handoff semantics; production submit still enforces its own 1 s guard.
-    max_heartbeat_age_s = 300.0
 
     runtime_payload = start_fake_runtime_session(
         q_current=first_hold,
@@ -1058,17 +1085,17 @@ def test_cli_sysid_run_sdk_repeated_run_uses_updated_live_hold_pose(
         send_hz=50.0,
         hold_hz=50.0,
         max_joint_step_rad=0.01,
-        max_heartbeat_age_s=max_heartbeat_age_s,
+        max_heartbeat_age_s=1.0,
     )
     runtime_payload = record_runtime_hold_tick(
         runtime_payload,
         q_meas=first_hold,
         fault_flags=(),
-        max_heartbeat_age_s=max_heartbeat_age_s,
+        max_heartbeat_age_s=1.0,
     )
     runtime_payload = refresh_runtime_status_payload(
         runtime_payload,
-        max_heartbeat_age_s=max_heartbeat_age_s,
+        max_heartbeat_age_s=1.0,
     )
     runtime_session.write_text(
         json.dumps(runtime_payload, ensure_ascii=False, indent=2),
@@ -1125,11 +1152,11 @@ def test_cli_sysid_run_sdk_repeated_run_uses_updated_live_hold_pose(
         runtime_payload,
         q_meas=second_hold,
         fault_flags=(),
-        max_heartbeat_age_s=max_heartbeat_age_s,
+        max_heartbeat_age_s=1.0,
     )
     runtime_payload = refresh_runtime_status_payload(
         runtime_payload,
-        max_heartbeat_age_s=max_heartbeat_age_s,
+        max_heartbeat_age_s=1.0,
     )
     runtime_session.write_text(
         json.dumps(runtime_payload, ensure_ascii=False, indent=2),
