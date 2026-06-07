@@ -42,6 +42,7 @@ from armctrl.runtime_session import (
     refresh_runtime_status_payload,
     release_owner_from_artifact,
     runtime_status_from_artifact,
+    start_arx5_runtime_session,
     stop_runtime_session_from_artifact,
     start_fake_runtime_session,
     watchdog_tick_from_artifact,
@@ -1148,20 +1149,49 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
                 _emit(payload, as_json=args.as_json)
                 return 3
-            payload = {
-                "status": "blocked",
-                "schema": "armctrl.arm_runtime_session.v1",
-                "backend": "arx5_sdk",
-                "model": args.model,
-                "interface": args.interface,
-                "requires_confirm": ARX5_RUNTIME_START_CONFIRMATION,
-                "hardware_motion": True,
-                "movement_command_sent": False,
-                "sdk_opened": False,
-                "reason": "arx5 runtime start backend is not implemented yet",
-                "fault_landing_mode": "damping",
-                "next_gate": "implement long-lived arx5 SDK runtime using audited SDK backend",
-            }
+            backend = Arx5InterfaceCollectionBackend(
+                model=args.model,
+                interface=args.interface,
+                max_joint_step_rad=args.max_joint_step_rad,
+                shutdown_to_passive=False,
+            )
+            try:
+                payload = start_arx5_runtime_session(
+                    backend=backend,
+                    model=args.model,
+                    interface=args.interface,
+                    safe_center=tuple(args.safe_center),
+                    send_hz=args.send_hz,
+                    hold_hz=args.hold_hz,
+                    max_joint_step_rad=args.max_joint_step_rad,
+                    max_heartbeat_age_s=args.max_heartbeat_age_s,
+                )
+            except Exception as error:
+                try:
+                    backend.damping()
+                except Exception:
+                    pass
+                payload = {
+                    "status": "rejected",
+                    "schema": "armctrl.arm_runtime_session.v1",
+                    "backend": "arx5_sdk",
+                    "model": args.model,
+                    "interface": args.interface,
+                    "requires_confirm": ARX5_RUNTIME_START_CONFIRMATION,
+                    "hardware_motion": True,
+                    "movement_command_sent": "unknown",
+                    "sdk_opened": "unknown",
+                    "reason": f"arx5 runtime start failed: {error}",
+                    "fault_landing_mode": "damping",
+                    "next_gate": "inspect robot state and SDK logs before retrying runtime start",
+                }
+                payload = _attach_output_artifact(
+                    payload,
+                    args.output,
+                    artifact_key="runtime_session",
+                )
+                _emit(payload, as_json=args.as_json)
+                return 3
             payload = _attach_output_artifact(
                 payload,
                 args.output,

@@ -4,7 +4,9 @@ import sys
 import time
 from pathlib import Path
 
+from armctrl.motion_runtime import FakeMotionBackend, JointStateSnapshot
 from armctrl.runtime_session import ARX5_RUNTIME_START_CONFIRMATION
+from armctrl.runtime_session import start_arx5_runtime_session
 
 
 def _passing_doctor_artifact() -> dict[str, object]:
@@ -41,6 +43,64 @@ def _passing_hold_damping_artifact() -> dict[str, object]:
             "failed_checks": [],
         },
     }
+
+
+class FakeArx5RuntimeBackend(FakeMotionBackend):
+    controller_dt_s = 0.002
+
+    def __init__(self, *, q_start: tuple[float, ...]) -> None:
+        super().__init__()
+        self._last_q = q_start
+        self.enter_count = 0
+
+    def enter_hold_or_damping(self) -> None:
+        self.enter_count += 1
+
+    def read_joint_state(self) -> JointStateSnapshot:
+        return JointStateSnapshot(
+            q_meas=self._last_q or (),
+            dq_meas=(0.0,) * len(self._last_q or ()),
+            tau_meas=(0.0,) * len(self._last_q or ()),
+            fault_flags=self.fault_flags,
+        )
+
+
+def test_start_arx5_runtime_session_recovers_and_exports_live_hold_status() -> None:
+    backend = FakeArx5RuntimeBackend(q_start=(0.8, 0.0, 0.0))
+
+    payload = start_arx5_runtime_session(
+        backend=backend,
+        model="X5",
+        interface="can0",
+        safe_center=(0.0, 0.3, 0.3),
+        send_hz=50.0,
+        hold_hz=50.0,
+        max_joint_step_rad=0.01,
+        max_heartbeat_age_s=1.0,
+    )
+
+    assert payload["status"] == "ok"
+    assert payload["schema"] == "armctrl.arm_runtime_session.v1"
+    assert payload["backend"] == "arx5_sdk"
+    assert payload["model"] == "X5"
+    assert payload["interface"] == "can0"
+    assert payload["mode"] == "hold_safe"
+    assert payload["owner"] is None
+    assert payload["q_meas"] == [0.0, 0.3, 0.3]
+    assert payload["q_hold"] == [0.0, 0.3, 0.3]
+    assert payload["safe_center"] == [0.0, 0.3, 0.3]
+    assert payload["controller_dt_s"] == 0.002
+    assert payload["send_hz"] == 50.0
+    assert payload["hold_hz"] == 50.0
+    assert payload["hardware_motion"] is True
+    assert payload["sdk_opened"] is True
+    assert payload["movement_command_sent"] is True
+    assert payload["readiness"]["agent_sysid_smoke_allowed"] is True
+    assert payload["recovery"]["status"] == "completed"
+    assert payload["recovery"]["sample_count"] > 0
+    assert backend.enter_count == 1
+    assert backend.hold_count >= 1
+    assert backend.damping_count == 0
 
 
 def test_cli_runtime_start_fake_recovers_to_hold_safe_session(tmp_path: Path) -> None:

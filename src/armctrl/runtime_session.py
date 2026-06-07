@@ -18,6 +18,7 @@ from armctrl.motion_runtime import (
     ArmRuntime,
     ArmRuntimeMode,
     FakeMotionBackend,
+    MotionBackend,
     MotionMode,
 )
 
@@ -90,6 +91,63 @@ def start_fake_runtime_session(
             "landing_mode": recovery.landing_mode,
         },
     )
+
+
+def start_arx5_runtime_session(
+    *,
+    backend: MotionBackend,
+    model: str,
+    interface: str,
+    safe_center: Sequence[float],
+    send_hz: float,
+    hold_hz: float,
+    max_joint_step_rad: float,
+    max_heartbeat_age_s: float,
+) -> dict[str, object]:
+    enter = getattr(backend, "enter_hold_or_damping", None)
+    if callable(enter):
+        enter()
+    runtime = ArmRuntime(
+        backend=backend,
+        safe_center=_float_tuple(safe_center, name="safe_center"),
+    )
+    recovery = runtime.recover_to_safe(
+        send_hz=float(send_hz),
+        max_joint_step_rad=float(max_joint_step_rad),
+    )
+    status = runtime.status()
+    payload = runtime_status_payload(
+        status=status,
+        schema=RUNTIME_SESSION_SCHEMA,
+        backend="arx5_sdk",
+        send_hz=float(send_hz),
+        hold_hz=float(hold_hz),
+        max_heartbeat_age_s=float(max_heartbeat_age_s),
+        recovery={
+            "status": recovery.status,
+            "producer": recovery.producer,
+            "mode": recovery.mode,
+            "trajectory_sample_hz": recovery.trajectory_sample_hz,
+            "actual_send_hz": recovery.actual_send_hz,
+            "send_jitter_ms_p95": recovery.send_jitter_ms_p95,
+            "send_jitter_ms_p99": recovery.send_jitter_ms_p99,
+            "controller_dt_s": recovery.controller_dt_s,
+            "sample_count": len(recovery.samples),
+            "landing_mode": recovery.landing_mode,
+        },
+    )
+    payload.update(
+        {
+            "model": model,
+            "interface": interface,
+            "hardware_motion": True,
+            "sdk_opened": True,
+            "movement_command_sent": bool(recovery.samples),
+            "requires_confirm": ARX5_RUNTIME_START_CONFIRMATION,
+            "fault_landing_mode": MotionMode.DAMPING.value,
+        }
+    )
+    return payload
 
 
 def runtime_status_from_artifact(
