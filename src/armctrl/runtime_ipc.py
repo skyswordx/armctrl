@@ -274,6 +274,28 @@ def execute_runtime_command(
         session["readiness"] = runtime_readiness(session)
         _write_json_atomic(session_artifact_path, session)
         motion = _execute_motion_command(command, backend=backend)
+        watchdog = _owner_timeout_watchdog(
+            session_artifact_path=session_artifact_path,
+            owner=owner,
+        )
+        if watchdog is not None:
+            backend.damping()
+            session = _fault_session_for_owner_timeout(
+                session=_read_json_object(session_artifact_path),
+                watchdog=watchdog,
+                max_heartbeat_age_s=max_heartbeat_age_s,
+            )
+            _write_json_atomic(session_artifact_path, session)
+            return _command_result_payload(
+                command=command,
+                runtime_session_id=session.get("runtime_session_id"),
+                session_artifact_path=session_artifact_path,
+                status="faulted",
+                landing_mode=MotionMode.DAMPING.value,
+                motion=motion,
+                reason="owner_heartbeat_timeout",
+                watchdog=watchdog,
+            )
         if motion.status == "completed":
             lease.release()
             status = live_runtime.status()
@@ -385,8 +407,9 @@ def _command_result_payload(
     landing_mode: str,
     motion: MotionExecutionResult,
     reason: str | None,
+    watchdog: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    return {
+    payload = {
         "status": status,
         "schema": RUNTIME_COMMAND_RESULT_SCHEMA,
         "command_id": command.get("command_id"),
@@ -414,6 +437,58 @@ def _command_result_payload(
             "error": motion.error,
         },
     }
+    if watchdog is not None:
+        payload["watchdog"] = watchdog
+    return payload
+
+
+def _owner_timeout_watchdog(
+    *,
+    session_artifact_path: Path,
+    owner: str,
+) -> dict[str, object] | None:
+    session = _read_json_object(session_artifact_path)
+    owner_lease = session.get("owner_lease")
+    if session.get("owner") != owner or not isinstance(owner_lease, dict):
+        return None
+    try:
+        heartbeat_wall_time_s = float(owner_lease.get("heartbeat_wall_time_s"))
+        heartbeat_timeout_s = float(owner_lease.get("heartbeat_timeout_s"))
+    except (TypeError, ValueError):
+        return None
+    now_s = time.time()
+    heartbeat_age_s = max(0.0, now_s - heartbeat_wall_time_s)
+    if heartbeat_age_s < heartbeat_timeout_s:
+        return None
+    return {
+        "owner": owner,
+        "landing_mode": MotionMode.DAMPING.value,
+        "reason": "owner_heartbeat_timeout",
+        "heartbeat_age_s": heartbeat_age_s,
+        "heartbeat_timeout_s": heartbeat_timeout_s,
+    }
+
+
+def _fault_session_for_owner_timeout(
+    *,
+    session: dict[str, object],
+    watchdog: dict[str, object],
+    max_heartbeat_age_s: float,
+) -> dict[str, object]:
+    updated = dict(session)
+    updated["status"] = "faulted"
+    updated["mode"] = MotionMode.DAMPING.value
+    updated["owner"] = None
+    updated["owner_lease"] = None
+    updated["watchdog"] = watchdog
+    updated["heartbeat"] = {
+        "wall_time_s": time.time(),
+        "age_s": 0.0,
+        "max_age_s": float(max_heartbeat_age_s),
+        "fresh": True,
+    }
+    updated["readiness"] = runtime_readiness(updated)
+    return updated
 
 
 def _ensure_can_queue_command(

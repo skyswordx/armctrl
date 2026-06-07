@@ -921,6 +921,71 @@ def test_runtime_queue_writes_owner_active_status_before_motion(
     assert "no_owner" in observed["readiness"]["failed_checks"]
 
 
+def test_runtime_queue_owner_heartbeat_timeout_lands_damping(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    backend = FakeMotionBackend()
+    backend.send_joint_command(
+        tuple(float(value) for value in session["q_meas"]),
+        producer="test_bootstrap",
+        mode=MotionMode.HOLD,
+        monotonic_s=0.0,
+    )
+    runtime = ArmRuntime(
+        backend=backend,
+        safe_center=tuple(float(value) for value in session["safe_center"]),
+        runtime_session_id=str(session["runtime_session_id"]),
+    )
+    runtime.mark_hold_safe(q_hold=tuple(float(value) for value in session["q_hold"]))
+    submitted = submit_trajectory_command(
+        session_artifact_path=session_artifact,
+        owner="sysid",
+        expected_q_start=(0.0, 0.3, 0.3),
+        q_points=[(0.0, 0.3, 0.3), (0.02, 0.3, 0.3)],
+        send_hz=50.0,
+        max_start_error_rad=0.02,
+        heartbeat_timeout_s=0.01,
+        max_heartbeat_age_s=1.0,
+    )
+    from armctrl.runtime_ipc import _execute_motion_command as original_execute_motion
+
+    def age_owner_lease(command: dict[str, object], *, backend):
+        motion = original_execute_motion(command, backend=backend)
+        active = json.loads(session_artifact.read_text(encoding="utf-8"))
+        active["owner_lease"]["heartbeat_wall_time_s"] = time.time() - 1.0
+        session_artifact.write_text(json.dumps(active), encoding="utf-8")
+        return motion
+
+    monkeypatch.setattr(
+        "armctrl.runtime_ipc._execute_motion_command",
+        age_owner_lease,
+    )
+
+    result = execute_pending_runtime_commands(
+        session_artifact_path=session_artifact,
+        backend=backend,
+        runtime=runtime,
+        max_heartbeat_age_s=1.0,
+    )
+    updated_session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    result_artifact = json.loads(Path(submitted["artifacts"]["result"]).read_text())
+
+    assert result is not None
+    assert result["status"] == "faulted"
+    assert result["landing_mode"] == "damping"
+    assert result["watchdog"]["reason"] == "owner_heartbeat_timeout"
+    assert result_artifact["status"] == "faulted"
+    assert updated_session["status"] == "faulted"
+    assert updated_session["mode"] == "damping"
+    assert updated_session["owner"] is None
+    assert updated_session["owner_lease"] is None
+    assert backend.damping_count >= 1
+
+
 def test_cli_runtime_serve_executes_queued_trajectory_and_returns_to_hold(
     tmp_path: Path,
 ) -> None:
@@ -1155,7 +1220,9 @@ def _wait_for_session_artifact(path: Path) -> dict[str, object]:
     deadline = time.time() + 3.0
     while time.time() < deadline:
         if path.exists():
-            return json.loads(path.read_text(encoding="utf-8"))
+            payload = _read_json_with_retry(path)
+            if payload is not None:
+                return payload
         time.sleep(0.02)
     raise AssertionError(f"runtime session artifact was not written: {path}")
 
@@ -1164,9 +1231,24 @@ def _wait_for_runtime_command_result(path: Path) -> dict[str, object]:
     deadline = time.time() + 3.0
     while time.time() < deadline:
         if path.exists():
-            return json.loads(path.read_text(encoding="utf-8"))
+            payload = _read_json_with_retry(path)
+            if payload is not None:
+                return payload
         time.sleep(0.02)
     raise AssertionError(f"runtime command result was not written: {path}")
+
+
+def _read_json_with_retry(path: Path) -> dict[str, object] | None:
+    for _ in range(10):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, PermissionError):
+            time.sleep(0.01)
+            continue
+        if not isinstance(payload, dict):
+            raise AssertionError(f"{path} did not contain a JSON object")
+        return payload
+    return None
 
 
 def _acquire_owner(
