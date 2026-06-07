@@ -11,7 +11,11 @@ from armctrl.agent_flow import (
     AgentFlowRealRuntimeSmoker,
 )
 from armctrl.motion_runtime import FakeMotionBackend, JointStateSnapshot
-from armctrl.runtime_session import record_runtime_hold_tick, start_fake_runtime_session
+from armctrl.runtime_session import (
+    record_runtime_hold_tick,
+    refresh_runtime_status_payload,
+    start_fake_runtime_session,
+)
 
 
 class ManualClock:
@@ -846,15 +850,6 @@ def test_cli_agent_flow_runtime_smoke_real_routes_to_gated_smoker(
         ),
         encoding="utf-8",
     )
-    readiness_artifact.write_text(
-        json.dumps(
-            {
-                "schema": "armctrl.sysid_agent_smoke_readiness.v1",
-                "agent_sysid_smoke_allowed": True,
-            }
-        ),
-        encoding="utf-8",
-    )
     runtime_payload = start_fake_runtime_session(
         q_current=(0.0, 0.3),
         safe_center=(0.0, 0.3),
@@ -869,7 +864,15 @@ def test_cli_agent_flow_runtime_smoke_real_routes_to_gated_smoker(
         fault_flags=(),
         max_heartbeat_age_s=1.0,
     )
+    runtime_payload = refresh_runtime_status_payload(
+        runtime_payload,
+        max_heartbeat_age_s=1.0,
+    )
     runtime_session.write_text(
+        json.dumps(runtime_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    readiness_artifact.write_text(
         json.dumps(runtime_payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
@@ -930,6 +933,99 @@ def test_cli_agent_flow_runtime_smoke_real_routes_to_gated_smoker(
     assert saved_payload == payload
 
 
+def test_cli_agent_flow_runtime_smoke_real_rejects_legacy_readiness_with_runtime(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    from armctrl import cli
+
+    contract_path = tmp_path / "agent_flow_plan.json"
+    readiness_artifact = tmp_path / "readiness.json"
+    runtime_session = tmp_path / "runtime-session.json"
+    output_artifact = tmp_path / "agent_real_smoke_legacy_readiness.json"
+    contract_path.write_text(
+        json.dumps(
+            {
+                "schema": "armctrl.agent_flow_plan.v1",
+                "eef": {"plan": {"command": {"control_period_s": 0.1}}},
+                "review": {
+                    "review_status": "completed",
+                    "sim_preview": {"safety": {"allowed": True}},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    readiness_artifact.write_text(
+        json.dumps(
+            {
+                "schema": "armctrl.sysid_agent_smoke_readiness.v1",
+                "agent_sysid_smoke_allowed": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    runtime_payload = start_fake_runtime_session(
+        q_current=(0.0, 0.3),
+        safe_center=(0.0, 0.3),
+        send_hz=50.0,
+        hold_hz=50.0,
+        max_joint_step_rad=0.01,
+        max_heartbeat_age_s=1.0,
+    )
+    runtime_payload = record_runtime_hold_tick(
+        runtime_payload,
+        q_meas=(0.0, 0.3),
+        fault_flags=(),
+        max_heartbeat_age_s=1.0,
+    )
+    runtime_session.write_text(
+        json.dumps(runtime_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    exit_code = cli.main(
+        [
+            "agent-flow",
+            "runtime-smoke-real",
+            "--contract",
+            str(contract_path),
+            "--readiness-artifact",
+            str(readiness_artifact),
+            "--model",
+            "X5",
+            "--interface",
+            "can0",
+            "--q-start",
+            "0",
+            "0.3",
+            "--q-target",
+            "0",
+            "0.302",
+            "--confirm",
+            AGENT_FLOW_REAL_RUNTIME_CONFIRMATION,
+            "--runtime-session-artifact",
+            str(runtime_session),
+            "--output",
+            str(output_artifact),
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 3
+    assert payload["status"] == "rejected"
+    assert payload["reason"] == (
+        "real Agent runtime smoke requires live arm runtime status readiness"
+    )
+    assert payload["movement_command_sent"] is False
+    assert payload["runtime"]["runtime_session_artifact"] == str(runtime_session)
+    assert payload["next_gate"] == (
+        "refresh readiness with armctrl runtime status before Agent runtime queue submit"
+    )
+
+
 def test_cli_agent_flow_runtime_smoke_real_acquires_from_live_hold_pose(
     tmp_path: Path,
     capsys,
@@ -971,12 +1067,16 @@ def test_cli_agent_flow_runtime_smoke_real_acquires_from_live_hold_pose(
         fault_flags=(),
         max_heartbeat_age_s=1.0,
     )
+    runtime_status = refresh_runtime_status_payload(
+        runtime_payload,
+        max_heartbeat_age_s=1.0,
+    )
     runtime_session.write_text(
         json.dumps(runtime_payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
     readiness_artifact.write_text(
-        json.dumps(runtime_payload, ensure_ascii=False, indent=2),
+        json.dumps(runtime_status, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 

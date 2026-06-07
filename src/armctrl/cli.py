@@ -2276,8 +2276,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 3
         try:
             contract = _read_agent_flow_contract_for_runtime(Path(args.contract))
+            readiness_artifact = json.loads(
+                Path(args.readiness_artifact).read_text(encoding="utf-8")
+            )
+            if readiness_artifact.get("schema") != "armctrl.arm_runtime_status.v1":
+                raise RuntimeError(
+                    "real Agent runtime smoke requires live arm runtime status readiness"
+                )
             runtime_status = _runtime_first_sysid_readiness_artifact(
-                json.loads(Path(args.readiness_artifact).read_text(encoding="utf-8")),
+                readiness_artifact,
                 runtime_session_artifact_path=Path(args.runtime_session_artifact),
             )
             readiness = _read_agent_sysid_readiness_from_payload(runtime_status)
@@ -2333,7 +2340,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 },
                 "fault_landing_mode": "damping",
                 "next_gate": (
-                    "complete readiness and live runtime hold_safe before Agent "
+                    "refresh readiness with armctrl runtime status before Agent "
                     "runtime queue submit"
                 ),
             }
@@ -3154,6 +3161,46 @@ def main(argv: Sequence[str] | None = None) -> int:
             readiness_artifact = json.loads(
                 readiness_artifact_path.read_text(encoding="utf-8")
             )
+            if readiness_artifact.get("schema") != "armctrl.arm_runtime_status.v1":
+                payload = {
+                    "status": "rejected",
+                    "schema": "armctrl.sysid_run.v1",
+                    "adapter": args.adapter,
+                    "reason": (
+                        "sdk sysid runner requires live arm runtime status readiness"
+                    ),
+                    "requires_confirm": SDK_CONFIRMATION,
+                    "confirm_received": True,
+                    "movement_allowed": False,
+                    "hardware_motion": False,
+                    "movement_command_sent": False,
+                    "readiness_artifact_path": str(readiness_artifact_path),
+                    "readiness": {
+                        "schema": readiness_artifact.get("schema"),
+                        "agent_sysid_smoke_allowed": readiness_artifact.get(
+                            "agent_sysid_smoke_allowed"
+                        ),
+                    },
+                    "runtime": {
+                        "single_owner_runtime_session": True,
+                        "runtime_session_artifact": (
+                            str(args.runtime_session_artifact)
+                            if args.runtime_session_artifact is not None
+                            else None
+                        ),
+                        "owner": "sysid",
+                        "mode": "trajectory_replay",
+                    },
+                    "fault_landing_mode": "damping",
+                    "recording_starts_after_safe_state": True,
+                    "next_gate": (
+                        "refresh readiness with armctrl runtime status before "
+                        "SysID runtime queue submit"
+                    ),
+                }
+                payload = _attach_sysid_run_manifest(payload, args.output)
+                _emit(payload, as_json=args.as_json)
+                return 3
             readiness_artifact = _runtime_first_sysid_readiness_artifact(
                 readiness_artifact,
                 runtime_session_artifact_path=(
