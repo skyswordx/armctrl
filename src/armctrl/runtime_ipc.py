@@ -682,6 +682,10 @@ def _command_result_payload(
                 motion.samples,
                 expected_period_s=expected_period_s,
             ),
+            "dt_error_ms_summary": _dt_error_summary(
+                motion.samples,
+                expected_period_s=expected_period_s,
+            ),
             "send_period_s": send_period,
             "dt_min_s": send_period["min"],
             "dt_max_s": send_period["max"],
@@ -781,6 +785,61 @@ def _send_jitter_summary(
         "count": len(jitters_ms),
         "buckets": _jitter_buckets(jitters_ms),
     }
+
+
+def _dt_error_summary(
+    samples: Sequence[MotionAuditSample],
+    *,
+    expected_period_s: float | None,
+) -> dict[str, object]:
+    if expected_period_s is None or expected_period_s <= 0.0 or len(samples) < 2:
+        return {"min": None, "max": None, "avg": None, "count": 0}
+    errors_ms = [
+        ((right.sent_monotonic_s - left.sent_monotonic_s) - expected_period_s)
+        * 1000.0
+        for left, right in zip(samples, samples[1:])
+    ]
+    return {
+        "min": min(errors_ms),
+        "max": max(errors_ms),
+        "avg": sum(errors_ms) / len(errors_ms),
+        "count": len(errors_ms),
+        "buckets": _dt_error_buckets(errors_ms),
+    }
+
+
+def _dt_error_buckets(errors_ms: Sequence[float]) -> dict[str, int]:
+    buckets = {
+        "early_gt_5": 0,
+        "early_le_5": 0,
+        "early_le_2": 0,
+        "early_le_1": 0,
+        "on_time_le_0_5": 0,
+        "late_le_1": 0,
+        "late_le_2": 0,
+        "late_le_5": 0,
+        "late_gt_5": 0,
+    }
+    for error_ms in errors_ms:
+        if error_ms < -5.0:
+            buckets["early_gt_5"] += 1
+        elif error_ms < -2.0:
+            buckets["early_le_5"] += 1
+        elif error_ms < -1.0:
+            buckets["early_le_2"] += 1
+        elif error_ms < -0.5:
+            buckets["early_le_1"] += 1
+        elif error_ms <= 0.5:
+            buckets["on_time_le_0_5"] += 1
+        elif error_ms <= 1.0:
+            buckets["late_le_1"] += 1
+        elif error_ms <= 2.0:
+            buckets["late_le_2"] += 1
+        elif error_ms <= 5.0:
+            buckets["late_le_5"] += 1
+        else:
+            buckets["late_gt_5"] += 1
+    return buckets
 
 
 def _jitter_buckets(jitters_ms: Sequence[float]) -> dict[str, int]:

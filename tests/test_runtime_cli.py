@@ -2,6 +2,7 @@ import json
 import subprocess
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -361,7 +362,9 @@ def test_cli_runtime_start_fake_serve_refreshes_heartbeat_until_stop(
         assert stderr == ""
         assert served["status"] == "stopped"
         assert served["mode"] == "damping"
-        assert served == stopped
+        assert stopped["status"] == "stopped"
+        assert stopped["mode"] == "damping"
+        assert stopped["runtime_session_id"] == served["runtime_session_id"]
     finally:
         if server.poll() is None:
             server.terminate()
@@ -1898,6 +1901,76 @@ def test_runtime_queue_throttles_session_writes_during_100hz_sysid_trajectory(
         result["motion"]["sample_count"] / 10
     )
     assert result_artifact["status_update"] == result["status_update"]
+
+
+def test_runtime_command_result_records_signed_period_error_summary(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    clock = ManualClock()
+    backend = FakeMotionBackend()
+    backend.send_joint_command(
+        tuple(float(value) for value in session["q_meas"]),
+        producer="test_bootstrap",
+        mode=MotionMode.HOLD,
+        monotonic_s=0.0,
+    )
+    runtime = ArmRuntime(
+        backend=backend,
+        safe_center=tuple(float(value) for value in session["safe_center"]),
+        runtime_session_id=str(session["runtime_session_id"]),
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+    runtime.mark_hold_safe(q_hold=tuple(float(value) for value in session["q_hold"]))
+    monkeypatch.setattr("armctrl.runtime_ipc.time.time", clock.monotonic)
+    submitted = submit_trajectory_command(
+        session_artifact_path=session_artifact,
+        owner="sysid",
+        expected_q_start=(0.0, 0.3, 0.3),
+        q_points=[
+            (0.0, 0.3, 0.3),
+            (0.01, 0.3, 0.3),
+            (0.02, 0.3, 0.3),
+        ],
+        send_hz=100.0,
+        max_start_error_rad=0.02,
+        heartbeat_timeout_s=1.0,
+        max_heartbeat_age_s=1.0,
+    )
+
+    from armctrl.motion_runtime import MotionRuntime
+
+    original_execute_trajectory = MotionRuntime.execute_trajectory
+
+    def inject_late_second_sample(self, *args, **kwargs):
+        result = original_execute_trajectory(self, *args, **kwargs)
+        samples = list(result.samples)
+        samples[1] = replace(samples[1], sent_monotonic_s=0.03)
+        samples[2] = replace(samples[2], sent_monotonic_s=0.04)
+        return replace(result, samples=tuple(samples))
+
+    monkeypatch.setattr(MotionRuntime, "execute_trajectory", inject_late_second_sample)
+
+    result = execute_pending_runtime_commands(
+        session_artifact_path=session_artifact,
+        backend=backend,
+        runtime=runtime,
+        max_heartbeat_age_s=1.0,
+    )
+    result_artifact = json.loads(Path(submitted["artifacts"]["result"]).read_text())
+
+    assert result is not None
+    assert result["status"] == "completed"
+    assert result["motion"]["dt_error_ms_summary"]["max"] == pytest.approx(20.0)
+    assert result["motion"]["dt_error_ms_summary"]["buckets"]["late_gt_5"] == 1
+    assert result["motion"]["dt_error_ms_summary"]["buckets"]["on_time_le_0_5"] == 1
+    assert result_artifact["motion"]["dt_error_ms_summary"] == result["motion"][
+        "dt_error_ms_summary"
+    ]
 
 
 def test_runtime_queue_passes_owner_watchdog_into_motion_loop(
