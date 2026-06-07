@@ -37,6 +37,21 @@ def _passing_readiness_artifact() -> dict[str, object]:
     }
 
 
+def _write_fake_runtime_session(path: Path) -> None:
+    payload = start_fake_runtime_session(
+        q_current=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
+        safe_center=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
+        send_hz=50.0,
+        hold_hz=50.0,
+        max_joint_step_rad=0.01,
+        max_heartbeat_age_s=1.0,
+    )
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
 class RecordingBackend:
     def __init__(self) -> None:
         self.events: list[str] = []
@@ -818,6 +833,7 @@ def test_cli_sysid_run_sdk_with_runtime_blocks_until_live_queue_exists(
         json.dumps(_passing_readiness_artifact()),
         encoding="utf-8",
     )
+    _write_fake_runtime_session(runtime_session)
 
     class ForbiddenBackendFactory:
         def __init__(self, **kwargs) -> None:
@@ -862,21 +878,17 @@ def test_cli_sysid_run_sdk_with_runtime_blocks_until_live_queue_exists(
     payload = json.loads(capsys.readouterr().out)
     manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
 
-    assert exit_code == 3
-    assert payload["status"] == "blocked"
-    assert payload["reason"] == (
-        "sdk sysid execution must be submitted through live MotionRuntime IPC; "
-        "direct SDK collection is disabled"
-    )
+    assert exit_code == 0
+    assert payload["status"] == "queued"
     assert payload["runtime"]["single_owner_runtime_session"] is True
     assert payload["runtime"]["runtime_session_artifact"] == str(runtime_session)
     assert payload["runtime"]["owner"] == "sysid"
     assert payload["runtime"]["mode"] == "trajectory_replay"
-    assert payload["movement_allowed"] is False
+    assert payload["movement_allowed"] is True
     assert payload["movement_command_sent"] is False
-    assert payload["next_gate"] == (
-        "implement live MotionRuntime command queue for SysID trajectory execution"
-    )
+    assert payload["runtime_command"]["status"] == "queued"
+    assert Path(payload["runtime_command"]["artifacts"]["command"]).exists()
+    assert payload["next_gate"] == "wait for live runtime command result artifact"
     assert manifest == payload
 
 
@@ -894,6 +906,7 @@ def test_cli_sysid_run_sdk_with_runtime_does_not_report_fake_acceptance(
         json.dumps(_passing_readiness_artifact()),
         encoding="utf-8",
     )
+    _write_fake_runtime_session(runtime_session)
 
     class ForbiddenBackendFactory:
         def __init__(self, **kwargs) -> None:
@@ -938,8 +951,8 @@ def test_cli_sysid_run_sdk_with_runtime_does_not_report_fake_acceptance(
     payload = json.loads(capsys.readouterr().out)
     manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
 
-    assert exit_code == 3
-    assert payload["status"] == "blocked"
+    assert exit_code == 0
+    assert payload["status"] == "queued"
     assert "acceptance" not in payload
     assert payload["movement_command_sent"] is False
     assert manifest == payload
@@ -959,6 +972,7 @@ def test_cli_sysid_run_sdk_with_runtime_does_not_report_fake_faults(
         json.dumps(_passing_readiness_artifact()),
         encoding="utf-8",
     )
+    _write_fake_runtime_session(runtime_session)
 
     class ForbiddenBackendFactory:
         def __init__(self, **kwargs) -> None:
@@ -1003,8 +1017,8 @@ def test_cli_sysid_run_sdk_with_runtime_does_not_report_fake_faults(
     payload = json.loads(capsys.readouterr().out)
     manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
 
-    assert exit_code == 3
-    assert payload["status"] == "blocked"
+    assert exit_code == 0
+    assert payload["status"] == "queued"
     assert "run_status" not in payload
     assert "motion_runtime" not in payload
     assert payload["movement_command_sent"] is False

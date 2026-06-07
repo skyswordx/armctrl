@@ -746,6 +746,208 @@ def test_cli_runtime_watchdog_timeout_lands_damping(
     assert payload["readiness"]["agent_sysid_smoke_allowed"] is False
 
 
+def test_cli_runtime_serve_executes_queued_trajectory_and_returns_to_hold(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+
+    server = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "runtime",
+            "start",
+            "--backend",
+            "fake",
+            "--q-current",
+            "0.0",
+            "0.3",
+            "0.3",
+            "--safe-center",
+            "0.0",
+            "0.3",
+            "0.3",
+            "--serve",
+            "--heartbeat-period-s",
+            "0.02",
+            "--max-heartbeat-age-s",
+            "1.0",
+            "--output",
+            str(session_artifact),
+            "--json",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        _wait_for_session_artifact(session_artifact)
+        submit = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "armctrl.cli",
+                "runtime",
+                "submit-trajectory",
+                "--session-artifact",
+                str(session_artifact),
+                "--owner",
+                "sysid",
+                "--expected-q-start",
+                "0.0",
+                "0.3",
+                "0.3",
+                "--send-hz",
+                "50",
+                "--q-point",
+                "0.00",
+                "0.30",
+                "0.30",
+                "--q-point",
+                "0.01",
+                "0.30",
+                "0.30",
+                "--output",
+                str(tmp_path / "submit.json"),
+                "--json",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        submitted = json.loads(submit.stdout)
+
+        assert submitted["status"] == "queued"
+        assert submitted["owner"] == "sysid"
+        result = _wait_for_runtime_command_result(
+            Path(submitted["artifacts"]["result"])
+        )
+        session = json.loads(session_artifact.read_text(encoding="utf-8"))
+
+        assert result["status"] == "completed"
+        assert result["owner"] == "sysid"
+        assert result["mode"] == "trajectory_replay"
+        assert result["motion"]["status"] == "completed"
+        assert result["motion"]["sample_count"] == 2
+        assert result["landing_mode"] == "hold"
+        assert session["mode"] == "hold_safe"
+        assert session["owner"] is None
+        assert session["q_hold"] == [0.01, 0.3, 0.3]
+        assert session["q_meas"] == [0.01, 0.3, 0.3]
+        assert session["readiness"]["agent_sysid_smoke_allowed"] is True
+
+        subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "armctrl.cli",
+                "runtime",
+                "stop",
+                "--session-artifact",
+                str(session_artifact),
+                "--output",
+                str(session_artifact),
+                "--json",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        stdout, stderr = server.communicate(timeout=3.0)
+        assert server.returncode == 0
+        assert stderr == ""
+        assert json.loads(stdout)["status"] == "stopped"
+    finally:
+        if server.poll() is None:
+            server.terminate()
+            server.communicate(timeout=3.0)
+
+
+def test_cli_runtime_submit_trajectory_rejects_busy_owner(tmp_path: Path) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    _acquire_owner(session_artifact, owner="agent", mode="agent_servo")
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "runtime",
+            "submit-trajectory",
+            "--session-artifact",
+            str(session_artifact),
+            "--owner",
+            "sysid",
+            "--expected-q-start",
+            "0.0",
+            "0.3",
+            "0.3",
+            "--q-point",
+            "0.0",
+            "0.3",
+            "0.3",
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(completed.stdout)
+
+    assert completed.returncode == 3
+    assert payload["status"] == "rejected"
+    assert payload["reason"] == "runtime is owned by agent"
+    assert payload["movement_command_sent"] is False
+
+
+def test_cli_runtime_submit_intent_queues_agent_servo_command(tmp_path: Path) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "runtime",
+            "submit-intent",
+            "--session-artifact",
+            str(session_artifact),
+            "--owner",
+            "agent",
+            "--expected-q-start",
+            "0.0",
+            "0.3",
+            "0.3",
+            "--q-target",
+            "0.005",
+            "0.3",
+            "0.3",
+            "--control-period-s",
+            "0.1",
+            "--send-hz",
+            "50",
+            "--max-joint-delta-rad",
+            "0.01",
+            "--output",
+            str(tmp_path / "intent_submit.json"),
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(completed.stdout)
+    command = json.loads(Path(payload["artifacts"]["command"]).read_text(encoding="utf-8"))
+
+    assert payload["status"] == "queued"
+    assert payload["owner"] == "agent"
+    assert payload["mode"] == "agent_servo"
+    assert payload["movement_command_sent"] is False
+    assert command["kind"] == "intent"
+    assert command["q_target"] == [0.005, 0.3, 0.3]
+
+
 def _start_fake_hold_session(path: Path) -> None:
     subprocess.run(
         [
@@ -781,6 +983,15 @@ def _wait_for_session_artifact(path: Path) -> dict[str, object]:
             return json.loads(path.read_text(encoding="utf-8"))
         time.sleep(0.02)
     raise AssertionError(f"runtime session artifact was not written: {path}")
+
+
+def _wait_for_runtime_command_result(path: Path) -> dict[str, object]:
+    deadline = time.time() + 3.0
+    while time.time() < deadline:
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8"))
+        time.sleep(0.02)
+    raise AssertionError(f"runtime command result was not written: {path}")
 
 
 def _acquire_owner(

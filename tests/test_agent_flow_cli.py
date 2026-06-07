@@ -11,6 +11,7 @@ from armctrl.agent_flow import (
     AgentFlowRealRuntimeSmoker,
 )
 from armctrl.motion_runtime import FakeMotionBackend, JointStateSnapshot
+from armctrl.runtime_session import start_fake_runtime_session
 
 
 class ManualClock:
@@ -818,7 +819,22 @@ def test_cli_agent_flow_runtime_smoke_real_routes_to_gated_smoker(
     runtime_session = tmp_path / "runtime-session.json"
     output_artifact = tmp_path / "agent_real_smoke.json"
     contract_path.write_text(
-        json.dumps({"schema": "armctrl.agent_flow_plan.v1"}),
+        json.dumps(
+            {
+                "schema": "armctrl.agent_flow_plan.v1",
+                "eef": {
+                    "plan": {
+                        "command": {
+                            "control_period_s": 0.1,
+                        }
+                    }
+                },
+                "review": {
+                    "review_status": "completed",
+                    "sim_preview": {"safety": {"allowed": True}},
+                },
+            }
+        ),
         encoding="utf-8",
     )
     readiness_artifact.write_text(
@@ -828,6 +844,18 @@ def test_cli_agent_flow_runtime_smoke_real_routes_to_gated_smoker(
                 "agent_sysid_smoke_allowed": True,
             }
         ),
+        encoding="utf-8",
+    )
+    runtime_payload = start_fake_runtime_session(
+        q_current=(0.0, 0.3),
+        safe_center=(0.0, 0.3),
+        send_hz=50.0,
+        hold_hz=50.0,
+        max_joint_step_rad=0.01,
+        max_heartbeat_age_s=1.0,
+    )
+    runtime_session.write_text(
+        json.dumps(runtime_payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
     calls: list[AgentFlowRealRuntimeSmokeRequest] = []
@@ -869,18 +897,18 @@ def test_cli_agent_flow_runtime_smoke_real_routes_to_gated_smoker(
 
     payload = json.loads(capsys.readouterr().out)
 
-    assert exit_code == 3
+    assert exit_code == 0
     assert calls == []
-    assert payload["status"] == "blocked"
+    assert payload["status"] == "queued"
     assert payload["schema"] == "armctrl.agent_flow_runtime_smoke_real.v1"
-    assert payload["hardware_motion"] is False
+    assert payload["hardware_motion"] is True
     assert payload["movement_command_sent"] is False
     assert payload["runtime"]["single_owner_runtime_session"] is True
     assert payload["runtime"]["runtime_session_artifact"] == str(runtime_session)
-    assert payload["reason"] == (
-        "real Agent execution must be submitted through live MotionRuntime IPC; "
-        "direct SDK execution is disabled"
-    )
+    assert payload["runtime"]["owner"] == "agent"
+    assert payload["runtime"]["mode"] == "agent_servo"
+    assert payload["runtime_command"]["status"] == "queued"
+    assert Path(payload["runtime_command"]["artifacts"]["command"]).exists()
     assert payload["artifacts"]["runtime_log"] == str(output_artifact)
 
     saved_payload = json.loads(output_artifact.read_text(encoding="utf-8"))

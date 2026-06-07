@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import math
 import sys
 import time
 from pathlib import Path
 from typing import Callable, Sequence
+from uuid import uuid4
 
 from armctrl.acceptance import build_real_motion_acceptance
 from armctrl.agent_flow import (
@@ -48,6 +50,11 @@ from armctrl.runtime_session import (
     start_fake_runtime_session,
     watchdog_tick_from_artifact,
 )
+from armctrl.runtime_ipc import (
+    execute_pending_runtime_commands,
+    submit_intent_command,
+    submit_trajectory_command,
+)
 from armctrl.release_status import release_notes, release_status
 from armctrl.lerobot_bridge import (
     LeRobotAgentRuntimeHelperPlanRequest,
@@ -68,6 +75,7 @@ from armctrl.lerobot_bridge import (
     LeRobotRolloutStageRequest,
     LeRobotRolloutStager,
 )
+from armctrl.motion_runtime import FakeMotionBackend, MotionBackend, MotionMode
 from armctrl.online_id import (
     OnlineAuditRequest,
     OnlineIdentificationAuditor,
@@ -292,6 +300,91 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     runtime_watchdog_parser.add_argument("--output")
     runtime_watchdog_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    runtime_submit_trajectory_parser = runtime_subparsers.add_parser(
+        "submit-trajectory"
+    )
+    runtime_submit_trajectory_parser.add_argument("--session-artifact", required=True)
+    runtime_submit_trajectory_parser.add_argument("--owner", required=True)
+    runtime_submit_trajectory_parser.add_argument(
+        "--expected-q-start",
+        nargs="+",
+        type=float,
+        required=True,
+    )
+    runtime_submit_trajectory_parser.add_argument(
+        "--q-point",
+        nargs="+",
+        type=float,
+        action="append",
+        required=True,
+    )
+    runtime_submit_trajectory_parser.add_argument("--send-hz", type=float, default=50.0)
+    runtime_submit_trajectory_parser.add_argument(
+        "--max-start-error-rad",
+        type=float,
+        default=0.02,
+    )
+    runtime_submit_trajectory_parser.add_argument(
+        "--heartbeat-timeout-s",
+        type=float,
+        default=0.5,
+    )
+    runtime_submit_trajectory_parser.add_argument(
+        "--max-heartbeat-age-s",
+        type=float,
+        default=1.0,
+    )
+    runtime_submit_trajectory_parser.add_argument("--output")
+    runtime_submit_trajectory_parser.add_argument(
+        "--json", action="store_true", dest="as_json"
+    )
+
+    runtime_submit_intent_parser = runtime_subparsers.add_parser("submit-intent")
+    runtime_submit_intent_parser.add_argument("--session-artifact", required=True)
+    runtime_submit_intent_parser.add_argument("--owner", default="agent")
+    runtime_submit_intent_parser.add_argument(
+        "--expected-q-start",
+        nargs="+",
+        type=float,
+        required=True,
+    )
+    runtime_submit_intent_parser.add_argument(
+        "--q-target",
+        nargs="+",
+        type=float,
+        required=True,
+    )
+    runtime_submit_intent_parser.add_argument(
+        "--control-period-s",
+        type=float,
+        default=0.1,
+    )
+    runtime_submit_intent_parser.add_argument("--send-hz", type=float, default=50.0)
+    runtime_submit_intent_parser.add_argument(
+        "--max-joint-delta-rad",
+        type=float,
+        default=0.005,
+    )
+    runtime_submit_intent_parser.add_argument(
+        "--max-start-error-rad",
+        type=float,
+        default=0.02,
+    )
+    runtime_submit_intent_parser.add_argument(
+        "--heartbeat-timeout-s",
+        type=float,
+        default=0.5,
+    )
+    runtime_submit_intent_parser.add_argument(
+        "--max-heartbeat-age-s",
+        type=float,
+        default=1.0,
+    )
+    runtime_submit_intent_parser.add_argument("--output")
+    runtime_submit_intent_parser.add_argument(
+        "--json", action="store_true", dest="as_json"
+    )
 
     recipe_parser = subparsers.add_parser("recipe")
     recipe_subparsers = recipe_parser.add_subparsers(dest="recipe_command", required=True)
@@ -1204,6 +1297,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     session_artifact_path=Path(args.output),
                     heartbeat_period_s=args.heartbeat_period_s,
                     max_heartbeat_age_s=args.max_heartbeat_age_s,
+                    backend=backend,
                     hold_tick=_arx5_active_hold_tick(
                         backend=backend,
                         hold_hz=args.hold_hz,
@@ -1227,10 +1321,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             artifact_key="runtime_session",
         )
         if args.serve:
+            backend = FakeMotionBackend()
+            backend.send_joint_command(
+                tuple(float(value) for value in payload.get("q_meas") or []),
+                producer="runtime_serve_bootstrap",
+                mode=MotionMode.HOLD,
+                monotonic_s=0.0,
+            )
             payload = _serve_runtime_session_until_stopped(
                 session_artifact_path=Path(args.output),
                 heartbeat_period_s=args.heartbeat_period_s,
                 max_heartbeat_age_s=args.max_heartbeat_age_s,
+                backend=backend,
             )
         return _emit(payload, as_json=args.as_json)
 
@@ -1349,6 +1451,60 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         _emit(payload, as_json=args.as_json)
         return 0 if payload.get("status") == "ok" else 3
+
+    if args.command == "runtime" and args.runtime_command == "submit-trajectory":
+        try:
+            payload = submit_trajectory_command(
+                session_artifact_path=Path(args.session_artifact),
+                owner=args.owner,
+                expected_q_start=tuple(args.expected_q_start),
+                q_points=tuple(tuple(point) for point in args.q_point),
+                send_hz=args.send_hz,
+                max_start_error_rad=args.max_start_error_rad,
+                heartbeat_timeout_s=args.heartbeat_timeout_s,
+                max_heartbeat_age_s=args.max_heartbeat_age_s,
+                output_path=Path(args.output) if args.output else None,
+            )
+        except RuntimeSessionError as error:
+            payload = {
+                **error.payload,
+                "status": "rejected",
+                "schema": "armctrl.arm_runtime_submit.v1",
+                "reason": str(error),
+                "movement_command_sent": False,
+            }
+            _emit(payload, as_json=args.as_json)
+            return 3
+        _emit(payload, as_json=args.as_json)
+        return 0
+
+    if args.command == "runtime" and args.runtime_command == "submit-intent":
+        try:
+            payload = submit_intent_command(
+                session_artifact_path=Path(args.session_artifact),
+                owner=args.owner,
+                expected_q_start=tuple(args.expected_q_start),
+                q_target=tuple(args.q_target),
+                control_period_s=args.control_period_s,
+                send_hz=args.send_hz,
+                max_joint_delta_rad=args.max_joint_delta_rad,
+                max_start_error_rad=args.max_start_error_rad,
+                heartbeat_timeout_s=args.heartbeat_timeout_s,
+                max_heartbeat_age_s=args.max_heartbeat_age_s,
+                output_path=Path(args.output) if args.output else None,
+            )
+        except RuntimeSessionError as error:
+            payload = {
+                **error.payload,
+                "status": "rejected",
+                "schema": "armctrl.arm_runtime_submit.v1",
+                "reason": str(error),
+                "movement_command_sent": False,
+            }
+            _emit(payload, as_json=args.as_json)
+            return 3
+        _emit(payload, as_json=args.as_json)
+        return 0
 
     if args.command == "recipe" and args.recipe_command == "list":
         payload = {
@@ -1787,140 +1943,93 @@ def main(argv: Sequence[str] | None = None) -> int:
             payload = _attach_output_artifact(payload, args.output)
             _emit(payload, as_json=args.as_json)
             return 3
+        try:
+            contract = _read_agent_flow_contract_for_runtime(Path(args.contract))
+            readiness = _read_agent_sysid_readiness(Path(args.readiness_artifact))
+            control_period_s = _agent_flow_contract_control_period_s(contract)
+            queued = submit_intent_command(
+                session_artifact_path=Path(args.runtime_session_artifact),
+                owner="agent",
+                expected_q_start=tuple(args.q_start),
+                q_target=tuple(args.q_target),
+                control_period_s=control_period_s,
+                send_hz=args.send_hz,
+                max_joint_delta_rad=args.max_joint_delta_rad,
+                max_start_error_rad=0.02,
+                heartbeat_timeout_s=0.5,
+                max_heartbeat_age_s=1.0,
+            )
+        except (RuntimeSessionError, RuntimeError, ValueError) as error:
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.agent_flow_runtime_smoke_real.v1",
+                "movement_allowed": False,
+                "hardware_motion": False,
+                "movement_command_sent": False,
+                "producer": "agent",
+                "backend": "arx5_sdk",
+                "reason": str(error),
+                "contract_path": str(args.contract),
+                "readiness_artifact_path": str(args.readiness_artifact),
+                "runtime": {
+                    "single_owner_runtime_session": True,
+                    "runtime_session_artifact": str(args.runtime_session_artifact),
+                    "owner": "agent",
+                    "mode": "agent_servo",
+                },
+                "fault_landing_mode": "damping",
+                "next_gate": (
+                    "complete readiness and live runtime hold_safe before Agent "
+                    "runtime queue submit"
+                ),
+            }
+            payload = _attach_output_artifact(payload, args.output)
+            _emit(payload, as_json=args.as_json)
+            return 3
         payload = {
-            "status": "blocked",
+            "status": "queued",
             "schema": "armctrl.agent_flow_runtime_smoke_real.v1",
-            "movement_allowed": False,
-            "hardware_motion": False,
+            "movement_allowed": True,
+            "hardware_motion": True,
             "movement_command_sent": False,
             "producer": "agent",
             "backend": "arx5_sdk",
-            "reason": (
-                "real Agent execution must be submitted through live MotionRuntime "
-                "IPC; direct SDK execution is disabled"
-            ),
             "contract_path": str(args.contract),
             "readiness_artifact_path": str(args.readiness_artifact),
+            "requires_confirm": AGENT_FLOW_REAL_RUNTIME_CONFIRMATION,
             "runtime": {
                 "single_owner_runtime_session": True,
                 "runtime_session_artifact": str(args.runtime_session_artifact),
                 "owner": "agent",
                 "mode": "agent_servo",
+                "queue": queued["runtime"]["queue"],
+            },
+            "readiness": {
+                "agent_sysid_smoke_allowed": readiness.get(
+                    "agent_sysid_smoke_allowed"
+                ),
+                "prerequisites": readiness.get("prerequisites"),
+                "tiny_motion": readiness.get("tiny_motion"),
+            },
+            "intent": {
+                "q_start": list(args.q_start),
+                "q_target": list(args.q_target),
+                "control_period_s": control_period_s,
+                "agent_intent_hz": 1.0 / control_period_s,
+                "backend_send_hz": args.send_hz,
+                "max_joint_delta_rad": args.max_joint_delta_rad,
+            },
+            "runtime_command": {
+                "command_id": queued["command_id"],
+                "status": "queued",
+                "artifacts": queued["artifacts"],
             },
             "fault_landing_mode": "damping",
-            "next_gate": "implement live MotionRuntime command queue for Agent owner execution",
+            "next_gate": "wait for live runtime command result artifact",
         }
         payload = _attach_output_artifact(payload, args.output)
         _emit(payload, as_json=args.as_json)
-        return 3
-        request = AgentFlowRealRuntimeSmokeRequest(
-            contract_path=Path(args.contract),
-            readiness_artifact_path=Path(args.readiness_artifact),
-            model=args.model,
-            interface=args.interface,
-            q_start=tuple(args.q_start),
-            q_target=tuple(args.q_target),
-            confirm=args.confirm,
-            send_hz=args.send_hz,
-            max_joint_delta_rad=args.max_joint_delta_rad,
-        )
-        try:
-            payload = {"status": "ok", **AgentFlowRealRuntimeSmoker().run(request)}
-        except PermissionError as error:
-            payload = {
-                "status": "rejected",
-                "schema": "armctrl.agent_flow_runtime_smoke_real.v1",
-                "movement_allowed": False,
-                "hardware_motion": False,
-                "movement_command_sent": False,
-                "producer": "agent",
-                "backend": "arx5_sdk",
-                "reason": str(error),
-                "requires_confirm": args.confirm,
-                "contract_path": str(args.contract),
-                "readiness_artifact_path": str(args.readiness_artifact),
-                "fault_landing_mode": "damping",
-                "next_gate": (
-                    "provide the exact Agent real runtime confirmation string after "
-                    "all prerequisite gates pass"
-                ),
-            }
-            payload = _attach_output_artifact(payload, args.output)
-            _emit(payload, as_json=args.as_json)
-            return 3
-        except ModuleNotFoundError as error:
-            if error.name != "arx5_interface":
-                raise
-            payload = {
-                "status": "rejected",
-                "schema": "armctrl.agent_flow_runtime_smoke_real.v1",
-                "movement_allowed": False,
-                "hardware_motion": False,
-                "movement_command_sent": False,
-                "producer": "agent",
-                "backend": "arx5_sdk",
-                "reason": "arx5_interface is not importable in this environment",
-                "contract_path": str(args.contract),
-                "readiness_artifact_path": str(args.readiness_artifact),
-                "fault_landing_mode": "damping",
-                "next_gate": (
-                    "install arx5_interface on the target Linux host and rerun "
-                    "readiness before Agent real smoke"
-                ),
-            }
-            payload = _attach_output_artifact(payload, args.output)
-            _emit(payload, as_json=args.as_json)
-            return 3
-        except (ValueError, RuntimeError) as error:
-            pre_motion_failure = isinstance(error, ValueError) or any(
-                marker in str(error)
-                for marker in (
-                    "contract review is not complete",
-                    "readiness is not passed",
-                )
-            )
-            payload = {
-                "status": "rejected",
-                "schema": "armctrl.agent_flow_runtime_smoke_real.v1",
-                "movement_allowed": False,
-                "hardware_motion": False if pre_motion_failure else "unknown",
-                "movement_command_sent": False if pre_motion_failure else "unknown",
-                "producer": "agent",
-                "backend": "arx5_sdk",
-                "reason": str(error),
-                "contract_path": str(args.contract),
-                "readiness_artifact_path": str(args.readiness_artifact),
-                "intent": {
-                    "q_start": list(args.q_start),
-                    "q_target": list(args.q_target),
-                    "backend_send_hz": args.send_hz,
-                    "max_joint_delta_rad": args.max_joint_delta_rad,
-                },
-                "fault_landing_mode": "damping",
-                "next_gate": (
-                    "complete sdk-agent-sysid-smoke-readiness before Agent real smoke"
-                    if pre_motion_failure
-                    else "inspect robot state and MotionRuntime logs before retrying Agent real smoke"
-                ),
-            }
-            payload = _attach_output_artifact(payload, args.output)
-            _emit(payload, as_json=args.as_json)
-            return 3
-        run_status = payload.get("run_status")
-        if run_status is not None and run_status != "completed":
-            payload["status"] = str(run_status)
-            payload = _attach_output_artifact(payload, args.output)
-            _emit(payload, as_json=args.as_json)
-            return 3
-        acceptance_status = _nonpassing_acceptance_status(payload)
-        if acceptance_status is not None:
-            payload["status"] = str(acceptance_status)
-            payload = _attach_output_artifact(payload, args.output)
-            _emit(payload, as_json=args.as_json)
-            return 3
-        payload = _attach_output_artifact(payload, args.output)
-        return _emit(payload, as_json=args.as_json)
-
+        return 0
     if args.command == "lerobot" and args.lerobot_command == "review-rollout":
         result = LeRobotRolloutReviewer().review(
             LeRobotRolloutReviewRequest(
@@ -2645,11 +2754,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                             if args.candidate_trajectory is not None
                             else None
                         ),
-                        trajectory_command_argv=(
-                            tuple(args.trajectory_command)
-                            if args.trajectory_command is not None
-                            else None
-                        ),
                     )
                 )
             except TrajectoryCommandError as exc:
@@ -2731,30 +2835,119 @@ def main(argv: Sequence[str] | None = None) -> int:
                 payload = _attach_sysid_run_manifest(payload, args.output)
                 _emit(payload, as_json=args.as_json)
                 return 3
+            try:
+                plan = SysIdPlanner.default().write_plan(
+                    SysIdPlanRequest(
+                        profile_name=args.profile,
+                        dof=args.dof,
+                        sample_hz=args.sample_hz,
+                        duration_s=args.duration,
+                        amplitude_rad=args.amplitude,
+                        q_center=q_center,
+                        urdf_path=args.urdf_path,
+                        safe_config_path=args.safe_config,
+                        output_dir=Path(args.output),
+                        candidate_trajectory_path=(
+                            Path(args.candidate_trajectory)
+                            if args.candidate_trajectory is not None
+                            else None
+                        ),
+                    )
+                )
+                if not plan.safety.allowed:
+                    payload = {
+                        "status": "rejected",
+                        "schema": "armctrl.sysid_run.v1",
+                        "adapter": args.adapter,
+                        "reason": plan.safety.reason,
+                        "movement_allowed": False,
+                        "hardware_motion": False,
+                        "movement_command_sent": False,
+                        "safety": plan.safety.to_json(),
+                        "runtime": {
+                            "single_owner_runtime_session": True,
+                            "runtime_session_artifact": str(
+                                args.runtime_session_artifact
+                            ),
+                            "owner": "sysid",
+                            "mode": "trajectory_replay",
+                        },
+                        "fault_landing_mode": "damping",
+                        "recording_starts_after_safe_state": True,
+                    }
+                    payload = _attach_sysid_run_manifest(payload, args.output)
+                    _emit(payload, as_json=args.as_json)
+                    return 3
+                q_points = _read_sysid_execution_q_points(
+                    Path(plan.artifacts["execution_trajectory"]),
+                    dof=args.dof,
+                )
+                queued = submit_trajectory_command(
+                    session_artifact_path=Path(args.runtime_session_artifact),
+                    owner="sysid",
+                    expected_q_start=q_center,
+                    q_points=q_points,
+                    send_hz=args.sample_hz,
+                    max_start_error_rad=0.02,
+                    heartbeat_timeout_s=max(0.5, float(args.duration) + 1.0),
+                    max_heartbeat_age_s=1.0,
+                )
+            except (RuntimeSessionError, RuntimeError, ValueError) as error:
+                payload = {
+                    "status": "rejected",
+                    "schema": "armctrl.sysid_run.v1",
+                    "adapter": args.adapter,
+                    "reason": str(error),
+                    "movement_allowed": False,
+                    "hardware_motion": False,
+                    "movement_command_sent": False,
+                    "runtime": {
+                        "single_owner_runtime_session": True,
+                        "runtime_session_artifact": str(args.runtime_session_artifact),
+                        "owner": "sysid",
+                        "mode": "trajectory_replay",
+                    },
+                    "fault_landing_mode": "damping",
+                    "recording_starts_after_safe_state": True,
+                    "next_gate": (
+                        "complete readiness and live runtime hold_safe before SysID "
+                        "runtime queue submit"
+                    ),
+                }
+                payload = _attach_sysid_run_manifest(payload, args.output)
+                _emit(payload, as_json=args.as_json)
+                return 3
             payload = {
-                "status": "blocked",
+                "status": "queued",
                 "schema": "armctrl.sysid_run.v1",
                 "adapter": args.adapter,
-                "reason": (
-                    "sdk sysid execution must be submitted through live MotionRuntime "
-                    "IPC; direct SDK collection is disabled"
-                ),
-                "movement_allowed": False,
-                "hardware_motion": False,
+                "profile": args.profile,
+                "movement_allowed": True,
+                "hardware_motion": True,
                 "movement_command_sent": False,
+                "safety": plan.safety.to_json(),
                 "runtime": {
                     "single_owner_runtime_session": True,
                     "runtime_session_artifact": str(args.runtime_session_artifact),
                     "owner": "sysid",
                     "mode": "trajectory_replay",
+                    "queue": queued["runtime"]["queue"],
                 },
+                "runtime_command": {
+                    "command_id": queued["command_id"],
+                    "status": "queued",
+                    "artifacts": queued["artifacts"],
+                    "sample_count": len(q_points),
+                    "send_hz": args.sample_hz,
+                },
+                "artifacts": plan.artifacts,
                 "fault_landing_mode": "damping",
                 "recording_starts_after_safe_state": True,
-                "next_gate": "implement live MotionRuntime command queue for SysID trajectory execution",
+                "next_gate": "wait for live runtime command result artifact",
             }
             payload = _attach_sysid_run_manifest(payload, args.output)
             _emit(payload, as_json=args.as_json)
-            return 3
+            return 0
             request = SysIdPlanRequest(
                 profile_name=args.profile,
                 dof=args.dof,
@@ -3429,10 +3622,7 @@ def _attach_output_artifact(
     artifacts[artifact_key] = str(output_path)
     payload_with_artifact["artifacts"] = artifacts
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(
-        json.dumps(payload_with_artifact, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    _write_json_atomic(output_path, payload_with_artifact)
     return payload_with_artifact
 
 
@@ -3441,28 +3631,114 @@ def _serve_runtime_session_until_stopped(
     session_artifact_path: Path,
     heartbeat_period_s: float,
     max_heartbeat_age_s: float,
+    backend: MotionBackend | None = None,
     hold_tick: Callable[[dict[str, object]], None] | None = None,
 ) -> dict[str, object]:
     if heartbeat_period_s <= 0.0:
         raise ValueError("heartbeat_period_s must be positive")
     while True:
-        payload = json.loads(session_artifact_path.read_text(encoding="utf-8"))
+        payload = _read_json_retry(session_artifact_path)
         if payload.get("status") == "stopped" or payload.get("mode") == "damping":
             return payload
+        if backend is not None:
+            execute_pending_runtime_commands(
+                session_artifact_path=session_artifact_path,
+                backend=backend,
+                max_heartbeat_age_s=max_heartbeat_age_s,
+            )
+            payload = _read_json_retry(session_artifact_path)
+            if payload.get("status") == "stopped" or payload.get("mode") == "damping":
+                return payload
         if hold_tick is not None and payload.get("mode") == "hold_safe":
             hold_tick(payload)
-            payload = json.loads(session_artifact_path.read_text(encoding="utf-8"))
+            payload = _read_json_retry(session_artifact_path)
             if payload.get("status") == "stopped" or payload.get("mode") == "damping":
                 return payload
         payload = heartbeat_runtime_session_payload(
             payload,
             max_heartbeat_age_s=max_heartbeat_age_s,
         )
-        session_artifact_path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        _write_json_atomic(session_artifact_path, payload)
         time.sleep(float(heartbeat_period_s))
+
+
+def _read_json_retry(path: Path) -> dict[str, object]:
+    last_error: json.JSONDecodeError | None = None
+    for _ in range(10):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as error:
+            last_error = error
+            time.sleep(0.005)
+            continue
+        if not isinstance(payload, dict):
+            raise ValueError(f"{path} does not contain a JSON object")
+        return payload
+    assert last_error is not None
+    raise last_error
+
+
+def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
+    tmp_path = path.with_name(f"{path.name}.{uuid4().hex}.tmp")
+    tmp_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    tmp_path.replace(path)
+
+
+def _read_agent_flow_contract_for_runtime(path: Path) -> dict[str, object]:
+    contract = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(contract, dict):
+        raise ValueError("agent flow contract file must contain a JSON object")
+    if contract.get("schema") != "armctrl.agent_flow_plan.v1":
+        raise ValueError("agent flow contract file must use schema armctrl.agent_flow_plan.v1")
+    review = contract.get("review")
+    if not isinstance(review, dict) or review.get("review_status") != "completed":
+        raise RuntimeError("agent flow contract review is not complete")
+    sim_preview = review.get("sim_preview")
+    safety = sim_preview.get("safety") if isinstance(sim_preview, dict) else None
+    if not isinstance(safety, dict) or safety.get("allowed") is not True:
+        raise RuntimeError("agent flow contract review is not complete")
+    return contract
+
+
+def _read_agent_sysid_readiness(path: Path) -> dict[str, object]:
+    readiness = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(readiness, dict):
+        raise ValueError("readiness artifact must contain a JSON object")
+    if (
+        readiness.get("schema") != "armctrl.sysid_agent_smoke_readiness.v1"
+        or readiness.get("agent_sysid_smoke_allowed") is not True
+    ):
+        raise RuntimeError("agent/sysid smoke readiness is not passed")
+    return readiness
+
+
+def _agent_flow_contract_control_period_s(contract: dict[str, object]) -> float:
+    eef = contract.get("eef")
+    plan = eef.get("plan") if isinstance(eef, dict) else None
+    command = plan.get("command") if isinstance(plan, dict) else None
+    if not isinstance(command, dict):
+        raise ValueError("agent flow contract is missing eef command")
+    control_period_s = float(command["control_period_s"])
+    if control_period_s <= 0.0:
+        raise ValueError("agent flow control_period_s must be positive")
+    return control_period_s
+
+
+def _read_sysid_execution_q_points(path: Path, *, dof: int) -> list[tuple[float, ...]]:
+    with path.open(newline="", encoding="utf-8") as file:
+        reader = csv.DictReader(file)
+        rows = list(reader)
+    if not rows:
+        raise ValueError(f"execution trajectory has no rows: {path}")
+    q_points: list[tuple[float, ...]] = []
+    for row in rows:
+        q_points.append(
+            tuple(float(row[f"q_cmd_{joint_index + 1}"]) for joint_index in range(dof))
+        )
+    return q_points
 
 
 def _arx5_active_hold_tick(
