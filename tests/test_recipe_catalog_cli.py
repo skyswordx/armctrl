@@ -595,10 +595,108 @@ def test_cli_recipe_runtime_submit_queues_live_runtime_owner(
     assert payload["runtime"]["mode"] == "trajectory_replay"
     assert payload["runtime_command"]["sample_count"] == 6
     assert payload["runtime_command"]["send_hz"] == 50.0
+    assert payload["start_pose_policy"] == "live_hold"
     assert command["owner"] == "recipe"
     assert command["kind"] == "trajectory"
+    assert command["start_pose_policy"] == "live_hold"
     assert command["q_points"][0] == safe_center
     assert written == payload
+
+
+def test_cli_recipe_runtime_submit_explicit_q_requires_preposition(
+    tmp_path: Path,
+) -> None:
+    plan_dir = tmp_path / "recipe-runtime-submit-explicit-plan"
+    runtime_session_artifact = tmp_path / "runtime-session.json"
+    safe_center = [0.0, 0.3, 0.3, 0.0, 0.0, 0.0]
+    explicit_start = [0.1, 0.3, 0.3, 0.0, 0.0, 0.0]
+    runtime_session_artifact.write_text(
+        json.dumps(
+            start_fake_runtime_session(
+                q_current=safe_center,
+                safe_center=safe_center,
+                send_hz=50.0,
+                hold_hz=50.0,
+                max_joint_step_rad=0.01,
+                max_heartbeat_age_s=5.0,
+            ),
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "recipe",
+            "plan",
+            "home",
+            "--sample-hz",
+            "50",
+            "--duration",
+            "0.1",
+            "--output",
+            str(plan_dir),
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    manifest_path = plan_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["request"]["start_joints"] = explicit_start
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    trajectory_path = plan_dir / "planned_trajectory.csv"
+    lines = trajectory_path.read_text(encoding="utf-8").splitlines()
+    header = lines[0]
+    rows = lines[1:]
+    patched_rows = []
+    for row in rows:
+        values = row.split(",")
+        patched_rows.append(
+            ",".join([values[0], *[f"{value:.9f}" for value in explicit_start]])
+        )
+    trajectory_path.write_text(
+        "\n".join([header, *patched_rows]) + "\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "recipe",
+            "runtime-submit",
+            "--plan-dir",
+            str(plan_dir),
+            "--runtime-session-artifact",
+            str(runtime_session_artifact),
+            "--start-pose-policy",
+            "explicit_q",
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+
+    assert completed.returncode == 3
+    assert payload["status"] == "rejected"
+    assert payload["schema"] == "armctrl.recipe_runtime_submit.v1"
+    assert payload["start_pose_policy"] == "explicit_q"
+    assert payload["reason"] == (
+        "explicit_q start pose requires runtime q_hold to be pre-positioned"
+    )
+    assert payload["start_pose_guard"]["policy"] == "explicit_q"
+    assert payload["start_pose_guard"]["failed_checks"] == ["q_hold_close_to_explicit_q"]
 
 
 def test_cli_recipe_runtime_submit_rejects_busy_runtime_owner(

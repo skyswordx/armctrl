@@ -456,6 +456,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=float,
         default=1.0,
     )
+    recipe_runtime_submit_parser.add_argument(
+        "--start-pose-policy",
+        choices=["live_hold", "safe_center", "explicit_q"],
+        default="live_hold",
+    )
     recipe_runtime_submit_parser.add_argument("--output")
     recipe_runtime_submit_parser.add_argument(
         "--json", action="store_true", dest="as_json"
@@ -1813,6 +1818,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     else max(1.0, len(q_points) / sample_hz + 1.0)
                 ),
                 max_heartbeat_age_s=args.max_heartbeat_age_s,
+                start_pose_policy=args.start_pose_policy,
             )
         except FileNotFoundError as error:
             payload = {
@@ -1837,6 +1843,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "movement_command_sent": False,
                 "reason": str(error),
                 "plan_dir": str(plan_dir),
+                "start_pose_policy": args.start_pose_policy,
+                "start_pose_guard": _runtime_session_error_payload(error).get(
+                    "start_pose_guard"
+                ),
                 "runtime": {
                     "single_owner_runtime_session": True,
                     "runtime_session_artifact": str(args.runtime_session_artifact),
@@ -1857,6 +1867,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             "recipe_plan_dir": str(plan_dir),
             "recipe": manifest["recipe"],
             "safety": safety,
+            "start_pose_policy": args.start_pose_policy,
+            "start_pose_guard": queued.get("start_pose_guard"),
             "runtime": {
                 "single_owner_runtime_session": True,
                 "runtime_session_artifact": str(args.runtime_session_artifact),
@@ -3145,6 +3157,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     max_start_error_rad=0.02,
                     heartbeat_timeout_s=max(0.5, float(args.duration) + 1.0),
                     max_heartbeat_age_s=1.0,
+                    start_pose_policy="live_hold",
                 )
             except (RuntimeSessionError, RuntimeError, ValueError) as error:
                 payload = {
@@ -3188,6 +3201,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "queue": queued["runtime"]["queue"],
                 },
                 "runtime_start_pose": start_pose,
+                "start_pose_policy": "live_hold",
+                "start_pose_guard": queued.get("start_pose_guard"),
                 "requested_q_center": list(requested_q_center),
                 "effective_q_center": list(q_center),
                 "runtime_command": {
@@ -4037,6 +4052,12 @@ def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
         encoding="utf-8",
     )
     tmp_path.replace(path)
+
+
+def _runtime_session_error_payload(error: Exception) -> dict[str, object]:
+    if isinstance(error, RuntimeSessionError):
+        return error.payload
+    return {}
 
 
 def _read_agent_flow_contract_for_runtime(path: Path) -> dict[str, object]:

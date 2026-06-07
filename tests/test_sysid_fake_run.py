@@ -1010,10 +1010,14 @@ def test_cli_sysid_run_sdk_with_runtime_acquires_from_live_hold_pose(
     assert exit_code == 0
     assert payload["status"] == "queued"
     assert payload["runtime_start_pose"]["policy"] == "live_hold"
+    assert payload["start_pose_policy"] == "live_hold"
+    assert payload["start_pose_guard"]["policy"] == "live_hold"
     assert payload["runtime_start_pose"]["q_hold"] == list(live_hold)
     command_artifact = Path(payload["runtime_command"]["artifacts"]["command"])
     command = json.loads(command_artifact.read_text(encoding="utf-8"))
     assert command["expected_q_start"] == list(live_hold)
+    assert command["start_pose_policy"] == "live_hold"
+    assert command["start_pose_guard"]["policy"] == "live_hold"
 
 
 def test_cli_sysid_run_sdk_with_runtime_does_not_report_fake_acceptance(
