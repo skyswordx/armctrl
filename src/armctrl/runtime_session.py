@@ -619,25 +619,36 @@ def refresh_runtime_status_payload(
 def runtime_readiness(payload: dict[str, object]) -> dict[str, object]:
     heartbeat = payload.get("heartbeat")
     failed_checks: list[str] = []
+    safe_center_failed_checks: list[str] = []
     if payload.get("schema") not in {RUNTIME_SESSION_SCHEMA, RUNTIME_STATUS_SCHEMA}:
         failed_checks.append("schema")
+        safe_center_failed_checks.append("schema")
     if payload.get("mode") != ArmRuntimeMode.HOLD_SAFE.value:
         failed_checks.append("mode_hold_safe")
+        safe_center_failed_checks.append("mode_hold_safe")
     if payload.get("owner") is not None:
         failed_checks.append("no_owner")
+        safe_center_failed_checks.append("no_owner")
     if not _q_close(payload.get("q_meas"), payload.get("q_hold"), max_error_rad=0.02):
         failed_checks.append("q_meas_close_to_hold")
+        safe_center_failed_checks.append("q_meas_close_to_hold")
     if not _q_close(payload.get("q_hold"), payload.get("safe_center"), max_error_rad=0.02):
-        failed_checks.append("q_hold_close_to_safe_center")
+        safe_center_failed_checks.append("q_hold_close_to_safe_center")
     if not isinstance(heartbeat, dict) or heartbeat.get("fresh") is not True:
         failed_checks.append("heartbeat_fresh")
+        safe_center_failed_checks.append("heartbeat_fresh")
     if payload.get("hold_fresh") is not True:
         failed_checks.append("hold_fresh")
+        safe_center_failed_checks.append("hold_fresh")
     if payload.get("fault_flags") not in ([], ()):
         failed_checks.append("no_fault_flags")
+        safe_center_failed_checks.append("no_fault_flags")
     return {
         "agent_sysid_smoke_allowed": not failed_checks,
+        "live_hold_allowed": not failed_checks,
+        "safe_center_allowed": not safe_center_failed_checks,
         "failed_checks": failed_checks,
+        "safe_center_failed_checks": safe_center_failed_checks,
     }
 
 

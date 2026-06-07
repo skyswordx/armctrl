@@ -912,12 +912,19 @@ def test_cli_sysid_run_sdk_with_runtime_blocks_until_live_queue_exists(
             str(readiness_artifact),
             "--runtime-session-artifact",
             str(runtime_session),
+            "--max-tracking-error-rad",
+            "0.04",
+            "--max-tau-abs",
+            "2.0",
             "--json",
         ]
     )
 
     payload = json.loads(capsys.readouterr().out)
     manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    command = json.loads(
+        Path(payload["runtime_command"]["artifacts"]["command"]).read_text(encoding="utf-8")
+    )
 
     assert exit_code == 0
     assert payload["status"] == "queued"
@@ -928,6 +935,8 @@ def test_cli_sysid_run_sdk_with_runtime_blocks_until_live_queue_exists(
     assert payload["movement_allowed"] is True
     assert payload["movement_command_sent"] is False
     assert payload["runtime_command"]["status"] == "queued"
+    assert command["max_tracking_error_rad"] == 0.04
+    assert command["max_tau_abs"] == 2.0
     assert Path(payload["runtime_command"]["artifacts"]["command"]).exists()
     assert payload["next_gate"] == "wait for live runtime command result artifact"
     assert manifest == payload

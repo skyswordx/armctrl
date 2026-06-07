@@ -24,6 +24,7 @@ from armctrl.runtime_session import start_arx5_runtime_session
 from armctrl.runtime_session import watchdog_tick_from_artifact
 from armctrl.runtime_ipc import (
     execute_pending_runtime_commands,
+    runtime_command_queue_dir,
     submit_intent_command,
     submit_trajectory_command,
 )
@@ -95,6 +96,20 @@ class LaggingReadbackBackend(FakeMotionBackend):
             q_meas=self._lagging_q,
             dq_meas=(0.0,) * len(self._lagging_q),
             tau_meas=(0.0,) * len(self._lagging_q),
+            fault_flags=(),
+        )
+
+
+class TorqueReadbackBackend(FakeMotionBackend):
+    def __init__(self, *, tau_meas: tuple[float, ...]) -> None:
+        super().__init__()
+        self._tau_meas = tau_meas
+
+    def read_joint_state(self) -> JointStateSnapshot:
+        return JointStateSnapshot(
+            q_meas=self._last_q or (),
+            dq_meas=(0.0,) * len(self._last_q or ()),
+            tau_meas=self._tau_meas,
             fault_flags=(),
         )
 
@@ -381,6 +396,12 @@ def test_runtime_serve_loop_streams_active_hold_until_stop(tmp_path: Path) -> No
         max_joint_step_rad=0.01,
         max_heartbeat_age_s=1.0,
     )
+    payload = record_runtime_hold_tick(
+        payload,
+        q_meas=(0.0, 0.3, 0.3),
+        fault_flags=(),
+        max_heartbeat_age_s=1.0,
+    )
     session_artifact.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -420,6 +441,57 @@ def test_runtime_serve_loop_streams_active_hold_until_stop(tmp_path: Path) -> No
     assert result["mode"] == "damping"
 
 
+def test_runtime_serve_loop_lands_damping_on_keyboard_interrupt(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    payload = start_fake_runtime_session(
+        q_current=(0.0, 0.3, 0.3),
+        safe_center=(0.0, 0.3, 0.3),
+        send_hz=50.0,
+        hold_hz=50.0,
+        max_joint_step_rad=0.01,
+        max_heartbeat_age_s=1.0,
+    )
+    payload = record_runtime_hold_tick(
+        payload,
+        q_meas=(0.0, 0.3, 0.3),
+        fault_flags=(),
+        max_heartbeat_age_s=1.0,
+    )
+    session_artifact.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    backend = FakeMotionBackend()
+    backend.send_joint_command(
+        (0.0, 0.3, 0.3),
+        producer="test_bootstrap",
+        mode=MotionMode.HOLD,
+        monotonic_s=0.0,
+    )
+
+    def interrupt(_duration_s: float) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("armctrl.cli.time.sleep", interrupt)
+
+    result = _serve_runtime_session_until_stopped(
+        session_artifact_path=session_artifact,
+        heartbeat_period_s=0.01,
+        max_heartbeat_age_s=1.0,
+        backend=backend,
+    )
+    served = json.loads(session_artifact.read_text(encoding="utf-8"))
+
+    assert result["status"] == "interrupted"
+    assert result["mode"] == "damping"
+    assert result["reason"] == "keyboard_interrupt"
+    assert served == result
+    assert backend.damping_count >= 1
+
+
 def test_runtime_status_blocks_when_hold_evidence_is_stale() -> None:
     payload = start_fake_runtime_session(
         q_current=(0.0, 0.3, 0.3),
@@ -452,6 +524,12 @@ def test_runtime_serve_loop_does_not_overwrite_concurrent_stop(
         send_hz=50.0,
         hold_hz=50.0,
         max_joint_step_rad=0.01,
+        max_heartbeat_age_s=1.0,
+    )
+    payload = record_runtime_hold_tick(
+        payload,
+        q_meas=(0.0, 0.3, 0.3),
+        fault_flags=(),
         max_heartbeat_age_s=1.0,
     )
     session_artifact.write_text(
@@ -815,6 +893,30 @@ def test_cli_runtime_recover_fake_returns_session_to_hold_safe(
     assert payload["readiness"]["agent_sysid_smoke_allowed"] is False
     assert payload["readiness"]["failed_checks"] == ["hold_fresh"]
     assert json.loads(session_artifact.read_text(encoding="utf-8")) == payload
+
+
+def test_runtime_readiness_accepts_live_hold_away_from_safe_center(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    session["q_hold"] = [0.08, 0.3, 0.3]
+    session["q_meas"] = [0.08, 0.3, 0.3]
+    session["last_hold_wall_time_s"] = time.time()
+    session["hold_fresh"] = True
+
+    refreshed = refresh_runtime_status_payload(
+        session,
+        max_heartbeat_age_s=1.0,
+    )
+
+    assert refreshed["status"] == "ok"
+    assert refreshed["readiness"]["agent_sysid_smoke_allowed"] is True
+    assert refreshed["readiness"]["live_hold_allowed"] is True
+    assert refreshed["readiness"]["safe_center_allowed"] is False
+    assert "q_hold_close_to_safe_center" in refreshed["readiness"]["safe_center_failed_checks"]
+    assert "q_hold_close_to_safe_center" not in refreshed["readiness"]["failed_checks"]
 
 
 def test_cli_runtime_stop_fake_lands_damping_and_clears_owner(
@@ -1227,6 +1329,19 @@ def test_runtime_queue_executes_with_live_arm_runtime(
         "le_5": 0,
         "gt_5": 0,
     }
+    assert result["acceptance"]["status"] == "pass"
+    assert result["acceptance"]["timing_gate"]["status"] == "pass"
+    assert result["acceptance"]["timing_gate"]["checks"] == {
+        "actual_send_hz_present": True,
+        "actual_send_hz_close_to_runtime_send_hz": True,
+        "send_jitter_p99_within_limit": True,
+        "dt_range_within_limit": True,
+        "queue_latency_present": True,
+        "sample_count_matches_expected": True,
+    }
+    assert result["acceptance"]["timing_gate"]["metrics"]["runtime_send_hz"] == 50.0
+    assert result["acceptance"]["timing_gate"]["metrics"]["sample_count"] == 2
+    assert result["acceptance"]["timing_gate"]["metrics"]["expected_sample_count"] == 2
     assert updated_session["runtime_session_id"] == session["runtime_session_id"]
     assert updated_session["mode"] == "hold_safe"
     assert updated_session["owner"] is None
@@ -1238,6 +1353,229 @@ def test_runtime_queue_executes_with_live_arm_runtime(
         sample["sent_monotonic_s"]
         for sample in result_artifact["motion"]["samples"]
     ] == [0.0, 0.02]
+
+
+def test_runtime_command_result_records_tracking_error_summary(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    clock = ManualClock()
+    backend = LaggingReadbackBackend(lagging_q=(0.0, 0.3, 0.3))
+    backend.send_joint_command(
+        tuple(float(value) for value in session["q_meas"]),
+        producer="test_bootstrap",
+        mode=MotionMode.HOLD,
+        monotonic_s=0.0,
+    )
+    runtime = ArmRuntime(
+        backend=backend,
+        safe_center=tuple(float(value) for value in session["safe_center"]),
+        runtime_session_id=str(session["runtime_session_id"]),
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+    runtime.mark_hold_safe(q_hold=tuple(float(value) for value in session["q_hold"]))
+    submitted = submit_trajectory_command(
+        session_artifact_path=session_artifact,
+        owner="sysid",
+        expected_q_start=(0.0, 0.3, 0.3),
+        q_points=[(0.0, 0.3, 0.3), (0.01, 0.3, 0.3)],
+        send_hz=50.0,
+        max_start_error_rad=0.02,
+        heartbeat_timeout_s=0.5,
+        max_heartbeat_age_s=1.0,
+    )
+
+    result = execute_pending_runtime_commands(
+        session_artifact_path=session_artifact,
+        backend=backend,
+        runtime=runtime,
+        max_heartbeat_age_s=1.0,
+    )
+    result_artifact = json.loads(Path(submitted["artifacts"]["result"]).read_text())
+
+    assert result is not None
+    assert result["status"] == "completed"
+    tracking = result["motion"]["tracking_error"]
+    assert tracking["sample_count"] == 2
+    assert tracking["max_abs_rad"] == pytest.approx(0.01)
+    assert tracking["final_abs_rad"] == pytest.approx(0.01)
+    assert tracking["per_joint_max_abs_rad"] == [0.01, 0.0, 0.0]
+    assert tracking["final_error_rad"] == [-0.01, 0.0, 0.0]
+    assert result_artifact["motion"]["tracking_error"] == tracking
+
+
+def test_runtime_command_tracking_error_limit_lands_damping(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    clock = ManualClock()
+    backend = LaggingReadbackBackend(lagging_q=(0.0, 0.3, 0.3))
+    backend.send_joint_command(
+        tuple(float(value) for value in session["q_meas"]),
+        producer="test_bootstrap",
+        mode=MotionMode.HOLD,
+        monotonic_s=0.0,
+    )
+    runtime = ArmRuntime(
+        backend=backend,
+        safe_center=tuple(float(value) for value in session["safe_center"]),
+        runtime_session_id=str(session["runtime_session_id"]),
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+    runtime.mark_hold_safe(q_hold=tuple(float(value) for value in session["q_hold"]))
+    submitted = submit_trajectory_command(
+        session_artifact_path=session_artifact,
+        owner="sysid",
+        expected_q_start=(0.0, 0.3, 0.3),
+        q_points=[(0.0, 0.3, 0.3), (0.01, 0.3, 0.3)],
+        send_hz=50.0,
+        max_start_error_rad=0.02,
+        heartbeat_timeout_s=0.5,
+        max_heartbeat_age_s=1.0,
+    )
+    command_path = Path(submitted["artifacts"]["command"])
+    command = json.loads(command_path.read_text(encoding="utf-8"))
+    command["max_tracking_error_rad"] = 0.005
+    command_path.write_text(json.dumps(command), encoding="utf-8")
+
+    result = execute_pending_runtime_commands(
+        session_artifact_path=session_artifact,
+        backend=backend,
+        runtime=runtime,
+        max_heartbeat_age_s=1.0,
+    )
+    result_artifact = json.loads(Path(submitted["artifacts"]["result"]).read_text())
+    updated_session = json.loads(session_artifact.read_text(encoding="utf-8"))
+
+    assert result is not None
+    assert result["status"] == "faulted"
+    assert result["landing_mode"] == "damping"
+    assert result["motion"]["error"] == {
+        "type": "tracking_error",
+        "message": "max tracking error exceeded",
+    }
+    assert result["motion"]["tracking_error"]["max_abs_rad"] == pytest.approx(0.01)
+    assert result_artifact["status"] == "faulted"
+    assert updated_session["mode"] == "damping"
+    assert backend.damping_count >= 1
+
+
+def test_runtime_command_result_records_tau_summary(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    clock = ManualClock()
+    backend = TorqueReadbackBackend(tau_meas=(0.5, -1.25, 0.25))
+    backend.send_joint_command(
+        tuple(float(value) for value in session["q_meas"]),
+        producer="test_bootstrap",
+        mode=MotionMode.HOLD,
+        monotonic_s=0.0,
+    )
+    runtime = ArmRuntime(
+        backend=backend,
+        safe_center=tuple(float(value) for value in session["safe_center"]),
+        runtime_session_id=str(session["runtime_session_id"]),
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+    runtime.mark_hold_safe(q_hold=tuple(float(value) for value in session["q_hold"]))
+    submitted = submit_trajectory_command(
+        session_artifact_path=session_artifact,
+        owner="sysid",
+        expected_q_start=(0.0, 0.3, 0.3),
+        q_points=[(0.0, 0.3, 0.3), (0.01, 0.3, 0.3)],
+        send_hz=50.0,
+        max_start_error_rad=0.02,
+        heartbeat_timeout_s=0.5,
+        max_heartbeat_age_s=1.0,
+    )
+
+    result = execute_pending_runtime_commands(
+        session_artifact_path=session_artifact,
+        backend=backend,
+        runtime=runtime,
+        max_heartbeat_age_s=1.0,
+    )
+    result_artifact = json.loads(Path(submitted["artifacts"]["result"]).read_text())
+
+    assert result is not None
+    assert result["status"] == "completed"
+    tau = result["motion"]["tau_meas"]
+    assert tau["sample_count"] == 2
+    assert tau["max_abs"] == pytest.approx(1.25)
+    assert tau["final_abs"] == pytest.approx(1.25)
+    assert tau["per_joint_max_abs"] == [0.5, 1.25, 0.25]
+    assert tau["final_tau"] == [0.5, -1.25, 0.25]
+    assert result_artifact["motion"]["tau_meas"] == tau
+
+
+def test_runtime_command_tau_limit_lands_damping(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    clock = ManualClock()
+    backend = TorqueReadbackBackend(tau_meas=(0.5, -1.25, 0.25))
+    backend.send_joint_command(
+        tuple(float(value) for value in session["q_meas"]),
+        producer="test_bootstrap",
+        mode=MotionMode.HOLD,
+        monotonic_s=0.0,
+    )
+    runtime = ArmRuntime(
+        backend=backend,
+        safe_center=tuple(float(value) for value in session["safe_center"]),
+        runtime_session_id=str(session["runtime_session_id"]),
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+    runtime.mark_hold_safe(q_hold=tuple(float(value) for value in session["q_hold"]))
+    submitted = submit_trajectory_command(
+        session_artifact_path=session_artifact,
+        owner="sysid",
+        expected_q_start=(0.0, 0.3, 0.3),
+        q_points=[(0.0, 0.3, 0.3), (0.01, 0.3, 0.3)],
+        send_hz=50.0,
+        max_start_error_rad=0.02,
+        heartbeat_timeout_s=0.5,
+        max_heartbeat_age_s=1.0,
+    )
+    command_path = Path(submitted["artifacts"]["command"])
+    command = json.loads(command_path.read_text(encoding="utf-8"))
+    command["max_tau_abs"] = 1.0
+    command_path.write_text(json.dumps(command), encoding="utf-8")
+
+    result = execute_pending_runtime_commands(
+        session_artifact_path=session_artifact,
+        backend=backend,
+        runtime=runtime,
+        max_heartbeat_age_s=1.0,
+    )
+    result_artifact = json.loads(Path(submitted["artifacts"]["result"]).read_text())
+    updated_session = json.loads(session_artifact.read_text(encoding="utf-8"))
+
+    assert result is not None
+    assert result["status"] == "faulted"
+    assert result["landing_mode"] == "damping"
+    assert result["motion"]["error"] == {
+        "type": "torque_limit",
+        "message": "max absolute tau exceeded",
+    }
+    assert result["motion"]["tau_meas"]["max_abs"] == pytest.approx(1.25)
+    assert result["motion"]["max_tau_abs"] == pytest.approx(1.0)
+    assert result_artifact["status"] == "faulted"
+    assert updated_session["mode"] == "damping"
+    assert backend.damping_count >= 1
 
 
 def test_runtime_queue_records_live_hold_start_pose_policy(
@@ -1540,6 +1878,78 @@ def test_runtime_queue_allows_repeated_trajectory_from_live_hold(
     assert second_result["motion"]["samples"][-1]["q_cmd"] == [0.03, 0.3, 0.3]
 
 
+def test_runtime_queue_executes_pending_commands_by_submit_time_not_filename(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    clock = ManualClock()
+    backend = FakeMotionBackend()
+    backend.send_joint_command(
+        tuple(float(value) for value in session["q_meas"]),
+        producer="test_bootstrap",
+        mode=MotionMode.HOLD,
+        monotonic_s=0.0,
+    )
+    runtime = ArmRuntime(
+        backend=backend,
+        safe_center=tuple(float(value) for value in session["safe_center"]),
+        runtime_session_id=str(session["runtime_session_id"]),
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+    runtime.mark_hold_safe(q_hold=tuple(float(value) for value in session["q_hold"]))
+    queue_dir = runtime_command_queue_dir(session_artifact)
+    pending_dir = queue_dir / "pending"
+    result_dir = queue_dir / "results"
+    pending_dir.mkdir(parents=True)
+    result_dir.mkdir(parents=True)
+
+    early_command = {
+        "schema": "armctrl.arm_runtime_command.v1",
+        "command_id": "z-earlier",
+        "kind": "trajectory",
+        "owner": "sysid",
+        "mode": "trajectory_replay",
+        "submitted_wall_time_s": 10.0,
+        "send_hz": 50.0,
+        "trajectory_sample_hz": 50.0,
+        "expected_q_start": [0.0, 0.3, 0.3],
+        "q_points": [[0.0, 0.3, 0.3], [0.01, 0.3, 0.3]],
+        "max_start_error_rad": 0.02,
+        "heartbeat_timeout_s": 0.5,
+        "start_pose_policy": "live_hold",
+        "result_artifact": str(result_dir / "z-earlier.json"),
+    }
+    late_command = {
+        **early_command,
+        "command_id": "a-later",
+        "submitted_wall_time_s": 20.0,
+        "q_points": [[0.0, 0.3, 0.3], [0.02, 0.3, 0.3]],
+        "result_artifact": str(result_dir / "a-later.json"),
+    }
+    (pending_dir / "a-later.json").write_text(
+        json.dumps(late_command),
+        encoding="utf-8",
+    )
+    (pending_dir / "z-earlier.json").write_text(
+        json.dumps(early_command),
+        encoding="utf-8",
+    )
+
+    result = execute_pending_runtime_commands(
+        session_artifact_path=session_artifact,
+        backend=backend,
+        runtime=runtime,
+        max_heartbeat_age_s=1.0,
+    )
+
+    assert result is not None
+    assert result["command_id"] == "z-earlier"
+    assert result["motion"]["samples"][-1]["q_cmd"] == [0.01, 0.3, 0.3]
+
+
 def test_runtime_queue_resamples_trajectory_when_runtime_send_hz_differs(
     tmp_path: Path,
 ) -> None:
@@ -1722,7 +2132,7 @@ def test_runtime_queue_writes_owner_active_status_before_motion(
     assert "no_owner" in observed["readiness"]["failed_checks"]
 
 
-def test_runtime_queue_owner_heartbeat_timeout_lands_damping(
+def test_runtime_queue_uses_executor_progress_over_stale_owner_deadman_after_motion(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1758,6 +2168,7 @@ def test_runtime_queue_owner_heartbeat_timeout_lands_damping(
         motion = original_execute_motion(command, runtime=runtime, **kwargs)
         active = json.loads(session_artifact.read_text(encoding="utf-8"))
         active["owner_lease"]["heartbeat_wall_time_s"] = time.time() - 1.0
+        active["owner_lease"]["executor_progress_wall_time_s"] = time.time() - 1.0
         session_artifact.write_text(json.dumps(active), encoding="utf-8")
         return motion
 
@@ -1776,15 +2187,15 @@ def test_runtime_queue_owner_heartbeat_timeout_lands_damping(
     result_artifact = json.loads(Path(submitted["artifacts"]["result"]).read_text())
 
     assert result is not None
-    assert result["status"] == "faulted"
-    assert result["landing_mode"] == "damping"
-    assert result["watchdog"]["reason"] == "owner_heartbeat_timeout"
-    assert result_artifact["status"] == "faulted"
-    assert updated_session["status"] == "faulted"
-    assert updated_session["mode"] == "damping"
+    assert result["status"] == "completed"
+    assert result["landing_mode"] == "hold"
+    assert "watchdog" not in result
+    assert result_artifact["status"] == "completed"
+    assert updated_session["status"] == "ok"
+    assert updated_session["mode"] == "hold_safe"
     assert updated_session["owner"] is None
     assert updated_session["owner_lease"] is None
-    assert backend.damping_count >= 1
+    assert backend.damping_count == 0
 
 
 def test_runtime_queue_refreshes_owner_heartbeat_during_long_trajectory(
@@ -1840,6 +2251,11 @@ def test_runtime_queue_refreshes_owner_heartbeat_during_long_trajectory(
     assert result["status"] == "completed"
     assert result["landing_mode"] == "hold"
     assert "watchdog" not in result
+    assert result["status_update"]["min_period_s"] == pytest.approx(0.05)
+    assert result["status_update"]["target_status_hz"] == pytest.approx(20.0)
+    assert result["status_update"]["send_loop_write_policy"] == (
+        "deferred_publish_outside_send_loop"
+    )
     assert result_artifact["status"] == "completed"
     assert updated_session["mode"] == "hold_safe"
     assert updated_session["owner"] is None
@@ -1900,7 +2316,170 @@ def test_runtime_queue_throttles_session_writes_during_100hz_sysid_trajectory(
     assert result["status_update"]["session_write_count"] < (
         result["motion"]["sample_count"] / 10
     )
+    status_publish_gate = result["acceptance"]["status_publish_gate"]
+    assert status_publish_gate["status"] == "pass"
+    assert status_publish_gate["checks"] == {
+        "status_update_present": True,
+        "session_writes_below_sample_count": True,
+        "session_writes_below_10_percent_samples": True,
+        "send_loop_write_policy_deferred": True,
+        "target_status_hz_within_limit": True,
+    }
+    assert status_publish_gate["metrics"]["sample_count"] == 801
+    assert status_publish_gate["metrics"]["session_write_count"] == (
+        result["status_update"]["session_write_count"]
+    )
+    assert status_publish_gate["metrics"]["session_write_ratio"] == pytest.approx(
+        result["status_update"]["session_write_count"] / 801
+    )
+    assert status_publish_gate["metrics"]["target_status_hz"] == pytest.approx(20.0)
+    assert status_publish_gate["metrics"]["min_period_s"] == pytest.approx(0.05)
+    assert status_publish_gate["metrics"]["send_loop_write_policy"] == (
+        "deferred_publish_outside_send_loop"
+    )
     assert result_artifact["status_update"] == result["status_update"]
+    assert (
+        result_artifact["acceptance"]["status_publish_gate"]
+        == result["acceptance"]["status_publish_gate"]
+    )
+
+
+def test_runtime_send_loop_does_not_write_session_artifact_per_sample(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    clock = ManualClock()
+    backend = FakeMotionBackend()
+    backend.send_joint_command(
+        tuple(float(value) for value in session["q_meas"]),
+        producer="test_bootstrap",
+        mode=MotionMode.HOLD,
+        monotonic_s=0.0,
+    )
+    runtime = ArmRuntime(
+        backend=backend,
+        safe_center=tuple(float(value) for value in session["safe_center"]),
+        runtime_session_id=str(session["runtime_session_id"]),
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+    runtime.mark_hold_safe(q_hold=tuple(float(value) for value in session["q_hold"]))
+    monkeypatch.setattr("armctrl.runtime_ipc.time.time", clock.monotonic)
+    submitted = submit_trajectory_command(
+        session_artifact_path=session_artifact,
+        owner="sysid",
+        expected_q_start=(0.0, 0.3, 0.3),
+        q_points=[(0.001 * index, 0.3, 0.3) for index in range(101)],
+        send_hz=100.0,
+        max_start_error_rad=0.02,
+        heartbeat_timeout_s=1.0,
+        max_heartbeat_age_s=1.0,
+    )
+    from armctrl import runtime_ipc
+    from armctrl.motion_runtime import MotionRuntime
+
+    in_motion = False
+    session_writes_during_motion = 0
+    original_write_json_atomic = runtime_ipc._write_json_atomic
+    original_execute_trajectory = MotionRuntime.execute_trajectory
+
+    def capture_writes(path: Path, payload: dict[str, object]) -> None:
+        nonlocal session_writes_during_motion
+        if in_motion and Path(path) == session_artifact:
+            session_writes_during_motion += 1
+        original_write_json_atomic(path, payload)
+
+    def mark_motion_window(self, *args, **kwargs):
+        nonlocal in_motion
+        in_motion = True
+        try:
+            return original_execute_trajectory(self, *args, **kwargs)
+        finally:
+            in_motion = False
+
+    monkeypatch.setattr(runtime_ipc, "_write_json_atomic", capture_writes)
+    monkeypatch.setattr(MotionRuntime, "execute_trajectory", mark_motion_window)
+
+    result = execute_pending_runtime_commands(
+        session_artifact_path=session_artifact,
+        backend=backend,
+        runtime=runtime,
+        max_heartbeat_age_s=1.0,
+    )
+
+    assert result is not None
+    assert result["status"] == "completed"
+    assert result["motion"]["sample_count"] == 101
+    assert session_writes_during_motion == 0
+    result_artifact = json.loads(Path(submitted["artifacts"]["result"]).read_text())
+    assert result_artifact["status_update"]["session_write_count"] == 1
+    assert result_artifact["status_update"]["policy"] == (
+        "deferred_throttled_active_owner_status"
+    )
+    assert result_artifact["acceptance"]["status_publish_gate"]["status"] == "pass"
+    assert result_artifact["acceptance"]["status_publish_gate"]["checks"][
+        "session_writes_below_sample_count"
+    ] is True
+
+
+def test_active_owner_status_publish_does_not_refresh_owner_deadman(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    owner_heartbeat_wall_time_s = 123.0
+    session["mode"] = "trajectory_replay"
+    session["owner"] = "sysid"
+    session["owner_lease"] = {
+        "schema": "armctrl.arm_runtime_owner_lease.v1",
+        "runtime_session_id": session["runtime_session_id"],
+        "owner": "sysid",
+        "mode": "trajectory_replay",
+        "heartbeat_timeout_s": 10.0,
+        "heartbeat_wall_time_s": owner_heartbeat_wall_time_s,
+        "acquired_wall_time_s": 100.0,
+        "landing_policy": "watchdog_to_damping_release_to_hold_safe",
+    }
+    session_artifact.write_text(json.dumps(session), encoding="utf-8")
+    backend = FakeMotionBackend()
+    backend.send_joint_command(
+        tuple(float(value) for value in session["q_meas"]),
+        producer="test_bootstrap",
+        mode=MotionMode.HOLD,
+        monotonic_s=0.0,
+    )
+    runtime = ArmRuntime(
+        backend=backend,
+        safe_center=tuple(float(value) for value in session["safe_center"]),
+        runtime_session_id=str(session["runtime_session_id"]),
+    )
+    runtime.mark_hold_safe(q_hold=tuple(float(value) for value in session["q_hold"]))
+    from armctrl import runtime_ipc
+
+    monkeypatch.setattr("armctrl.runtime_ipc.time.time", lambda: 456.0)
+
+    runtime_ipc._refresh_active_owner_session(
+        session_artifact_path=session_artifact,
+        runtime=runtime,
+        owner="sysid",
+        mode="trajectory_replay",
+        heartbeat_timeout_s=10.0,
+        max_heartbeat_age_s=1.0,
+    )
+    updated = json.loads(session_artifact.read_text(encoding="utf-8"))
+
+    assert updated["owner_lease"]["heartbeat_wall_time_s"] == owner_heartbeat_wall_time_s
+    assert updated["owner_lease"]["executor_progress_wall_time_s"] == 456.0
+    assert updated["owner_deadman"]["heartbeat_wall_time_s"] == owner_heartbeat_wall_time_s
+    assert updated["status_publish"]["wall_time_s"] == 456.0
+    assert updated["status_publish"]["policy"] == (
+        "throttled_observation_not_owner_heartbeat"
+    )
 
 
 def test_runtime_command_result_records_signed_period_error_summary(
@@ -2239,6 +2818,89 @@ def test_cli_runtime_serve_executes_queued_trajectory_and_returns_to_hold(
             server.communicate(timeout=3.0)
 
 
+def test_runtime_serve_loop_drains_ready_queue_before_sleep(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    payload = start_fake_runtime_session(
+        q_current=(0.0, 0.3, 0.3),
+        safe_center=(0.0, 0.3, 0.3),
+        send_hz=50.0,
+        hold_hz=50.0,
+        max_joint_step_rad=0.01,
+        max_heartbeat_age_s=1.0,
+    )
+    payload = record_runtime_hold_tick(
+        payload,
+        q_meas=(0.0, 0.3, 0.3),
+        fault_flags=(),
+        max_heartbeat_age_s=1.0,
+    )
+    session_artifact.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    backend = FakeMotionBackend()
+    backend.send_joint_command(
+        (0.0, 0.3, 0.3),
+        producer="runtime_serve_bootstrap",
+        mode=MotionMode.HOLD,
+        monotonic_s=0.0,
+    )
+    runtime = ArmRuntime(
+        backend=backend,
+        safe_center=(0.0, 0.3, 0.3),
+    )
+    runtime.mark_hold_safe(q_hold=(0.0, 0.3, 0.3))
+    first = submit_trajectory_command(
+        session_artifact_path=session_artifact,
+        owner="sysid",
+        expected_q_start=(0.0, 0.3, 0.3),
+        q_points=[(0.0, 0.3, 0.3), (0.0, 0.3, 0.3)],
+        send_hz=50.0,
+        max_start_error_rad=0.02,
+        heartbeat_timeout_s=0.5,
+        max_heartbeat_age_s=1.0,
+    )
+    second = submit_trajectory_command(
+        session_artifact_path=session_artifact,
+        owner="recipe",
+        expected_q_start=(0.0, 0.3, 0.3),
+        q_points=[(0.0, 0.3, 0.3), (0.0, 0.3, 0.3)],
+        send_hz=50.0,
+        max_start_error_rad=0.02,
+        heartbeat_timeout_s=0.5,
+        max_heartbeat_age_s=1.0,
+    )
+
+    def request_stop_instead_of_sleep(_duration_s: float) -> None:
+        _runtime_stop_request_path(session_artifact).write_text(
+            "stop\n",
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr("armctrl.cli.time.sleep", request_stop_instead_of_sleep)
+
+    stopped = _serve_runtime_session_until_stopped(
+        session_artifact_path=session_artifact,
+        heartbeat_period_s=0.5,
+        max_heartbeat_age_s=1.0,
+        backend=backend,
+        runtime=runtime,
+    )
+
+    assert stopped["status"] == "stopped"
+    assert Path(first["artifacts"]["result"]).exists()
+    assert Path(second["artifacts"]["result"]).exists()
+    assert json.loads(Path(first["artifacts"]["result"]).read_text())["status"] == (
+        "completed"
+    )
+    assert json.loads(Path(second["artifacts"]["result"]).read_text())["status"] == (
+        "completed"
+    )
+
+
 def test_cli_runtime_submit_trajectory_rejects_busy_owner(tmp_path: Path) -> None:
     session_artifact = tmp_path / "runtime_session.json"
     _start_fake_hold_session(session_artifact)
@@ -2276,6 +2938,92 @@ def test_cli_runtime_submit_trajectory_rejects_busy_owner(tmp_path: Path) -> Non
     assert payload["movement_command_sent"] is False
 
 
+def test_cli_runtime_submit_trajectory_records_tracking_limit(tmp_path: Path) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "runtime",
+            "submit-trajectory",
+            "--session-artifact",
+            str(session_artifact),
+            "--owner",
+            "sysid",
+            "--expected-q-start",
+            "0.0",
+            "0.3",
+            "0.3",
+            "--send-hz",
+            "100",
+            "--max-tracking-error-rad",
+            "0.04",
+            "--max-tau-abs",
+            "2.5",
+            "--q-point",
+            "0.0",
+            "0.3",
+            "0.3",
+            "--q-point",
+            "0.01",
+            "0.3",
+            "0.3",
+            "--output",
+            str(tmp_path / "trajectory_submit.json"),
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(completed.stdout)
+    command = json.loads(Path(payload["artifacts"]["command"]).read_text(encoding="utf-8"))
+
+    assert payload["status"] == "queued"
+    assert command["kind"] == "trajectory"
+    assert command["max_tracking_error_rad"] == 0.04
+    assert command["max_tau_abs"] == 2.5
+
+
+def test_runtime_submit_retries_transient_session_read_race(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from armctrl import runtime_ipc
+
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    original_read_text = Path.read_text
+    attempts = 0
+
+    def flaky_read_text(path: Path, *args, **kwargs):
+        nonlocal attempts
+        if path == session_artifact and attempts == 0:
+            attempts += 1
+            raise FileNotFoundError(path)
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(runtime_ipc.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(Path, "read_text", flaky_read_text)
+
+    payload = submit_trajectory_command(
+        session_artifact_path=session_artifact,
+        owner="sysid",
+        expected_q_start=(0.0, 0.3, 0.3),
+        q_points=[(0.0, 0.3, 0.3), (0.01, 0.3, 0.3)],
+        send_hz=50.0,
+        max_start_error_rad=0.02,
+        heartbeat_timeout_s=0.5,
+        max_heartbeat_age_s=1.0,
+    )
+
+    assert attempts == 1
+    assert payload["status"] == "queued"
+
+
 def test_cli_runtime_submit_intent_queues_agent_servo_command(tmp_path: Path) -> None:
     session_artifact = tmp_path / "runtime_session.json"
     _start_fake_hold_session(session_artifact)
@@ -2305,6 +3053,10 @@ def test_cli_runtime_submit_intent_queues_agent_servo_command(tmp_path: Path) ->
             "50",
             "--max-joint-delta-rad",
             "0.01",
+            "--max-tracking-error-rad",
+            "0.03",
+            "--max-tau-abs",
+            "1.5",
             "--output",
             str(tmp_path / "intent_submit.json"),
             "--json",
@@ -2322,6 +3074,8 @@ def test_cli_runtime_submit_intent_queues_agent_servo_command(tmp_path: Path) ->
     assert payload["movement_command_sent"] is False
     assert command["kind"] == "intent"
     assert command["q_target"] == [0.005, 0.3, 0.3]
+    assert command["max_tracking_error_rad"] == 0.03
+    assert command["max_tau_abs"] == 1.5
 
 
 def _start_fake_hold_session(path: Path) -> None:

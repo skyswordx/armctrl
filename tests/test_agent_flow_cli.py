@@ -907,6 +907,8 @@ def test_cli_agent_flow_runtime_smoke_real_routes_to_gated_smoker(
             AGENT_FLOW_REAL_RUNTIME_CONFIRMATION,
             "--runtime-session-artifact",
             str(runtime_session),
+            "--max-tau-abs",
+            "1.7",
             "--output",
             str(output_artifact),
             "--json",
@@ -1006,6 +1008,8 @@ def test_cli_agent_flow_runtime_smoke_real_rejects_legacy_readiness_with_runtime
             AGENT_FLOW_REAL_RUNTIME_CONFIRMATION,
             "--runtime-session-artifact",
             str(runtime_session),
+            "--max-tau-abs",
+            "1.7",
             "--output",
             str(output_artifact),
             "--json",
@@ -1105,6 +1109,8 @@ def test_cli_agent_flow_runtime_smoke_real_acquires_from_live_hold_pose(
             AGENT_FLOW_REAL_RUNTIME_CONFIRMATION,
             "--runtime-session-artifact",
             str(runtime_session),
+            "--max-tau-abs",
+            "1.7",
             "--output",
             str(output_artifact),
             "--json",
@@ -1120,6 +1126,7 @@ def test_cli_agent_flow_runtime_smoke_real_acquires_from_live_hold_pose(
     command_artifact = Path(payload["runtime_command"]["artifacts"]["command"])
     command = json.loads(command_artifact.read_text(encoding="utf-8"))
     assert command["expected_q_start"] == list(live_hold)
+    assert command["max_tau_abs"] == 1.7
 
 
 def test_cli_agent_flow_runtime_smoke_real_requires_runtime_session_artifact(

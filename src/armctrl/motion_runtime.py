@@ -203,6 +203,8 @@ class MotionRuntime:
         hold_after: bool = False,
         watchdog: Callable[[], dict[str, object] | None] | None = None,
         on_sample: Callable[[MotionAuditSample], None] | None = None,
+        max_tracking_error_rad: float | None = None,
+        max_tau_abs: float | None = None,
     ) -> MotionExecutionResult:
         points = list(trajectory)
         _validate_trajectory_inputs(
@@ -275,6 +277,37 @@ class MotionRuntime:
                         samples=samples,
                         landing_mode=MotionMode.DAMPING.value,
                     )
+                if _tracking_error_exceeded(
+                    sample,
+                    max_tracking_error_rad=max_tracking_error_rad,
+                ):
+                    self._damping()
+                    return _motion_execution_result(
+                        status="faulted",
+                        producer=producer,
+                        mode=MotionMode.TRAJECTORY_REPLAY,
+                        trajectory_sample_hz=float(trajectory_sample_hz),
+                        sent_times=sent_times,
+                        expected_period_s=1.0 / float(trajectory_sample_hz),
+                        controller_dt_s=getattr(self._backend, "controller_dt_s", None),
+                        samples=samples,
+                        landing_mode=MotionMode.DAMPING.value,
+                        error=_tracking_error_limit_error(),
+                    )
+                if _tau_limit_exceeded(sample, max_tau_abs=max_tau_abs):
+                    self._damping()
+                    return _motion_execution_result(
+                        status="faulted",
+                        producer=producer,
+                        mode=MotionMode.TRAJECTORY_REPLAY,
+                        trajectory_sample_hz=float(trajectory_sample_hz),
+                        sent_times=sent_times,
+                        expected_period_s=1.0 / float(trajectory_sample_hz),
+                        controller_dt_s=getattr(self._backend, "controller_dt_s", None),
+                        samples=samples,
+                        landing_mode=MotionMode.DAMPING.value,
+                        error=_tau_limit_error(),
+                    )
                 watchdog_event = watchdog() if watchdog is not None else None
                 if watchdog_event is not None:
                     self._damping()
@@ -332,6 +365,8 @@ class MotionRuntime:
         hold_after: bool = False,
         watchdog: Callable[[], dict[str, object] | None] | None = None,
         on_sample: Callable[[MotionAuditSample], None] | None = None,
+        max_tracking_error_rad: float | None = None,
+        max_tau_abs: float | None = None,
     ) -> MotionExecutionResult:
         if send_hz <= 0.0:
             raise ValueError("send_hz must be positive")
@@ -403,6 +438,37 @@ class MotionRuntime:
                         controller_dt_s=getattr(self._backend, "controller_dt_s", None),
                         samples=samples,
                         landing_mode=MotionMode.DAMPING.value,
+                    )
+                if _tracking_error_exceeded(
+                    sample,
+                    max_tracking_error_rad=max_tracking_error_rad,
+                ):
+                    self._damping()
+                    return _motion_execution_result(
+                        status="faulted",
+                        producer=producer,
+                        mode=MotionMode.AGENT_SERVO,
+                        trajectory_sample_hz=float(send_hz),
+                        sent_times=sent_times,
+                        expected_period_s=1.0 / float(send_hz),
+                        controller_dt_s=getattr(self._backend, "controller_dt_s", None),
+                        samples=samples,
+                        landing_mode=MotionMode.DAMPING.value,
+                        error=_tracking_error_limit_error(),
+                    )
+                if _tau_limit_exceeded(sample, max_tau_abs=max_tau_abs):
+                    self._damping()
+                    return _motion_execution_result(
+                        status="faulted",
+                        producer=producer,
+                        mode=MotionMode.AGENT_SERVO,
+                        trajectory_sample_hz=float(send_hz),
+                        sent_times=sent_times,
+                        expected_period_s=1.0 / float(send_hz),
+                        controller_dt_s=getattr(self._backend, "controller_dt_s", None),
+                        samples=samples,
+                        landing_mode=MotionMode.DAMPING.value,
+                        error=_tau_limit_error(),
                     )
                 watchdog_event = watchdog() if watchdog is not None else None
                 if watchdog_event is not None:
@@ -690,6 +756,8 @@ class ArmRuntime:
         trajectory_sample_hz: float,
         watchdog: Callable[[], dict[str, object] | None] | None = None,
         on_sample: Callable[[MotionAuditSample], None] | None = None,
+        max_tracking_error_rad: float | None = None,
+        max_tau_abs: float | None = None,
     ) -> MotionExecutionResult:
         self._raise_if_not_owned(owner=owner, mode=MotionMode.TRAJECTORY_REPLAY)
         motion = MotionRuntime(
@@ -704,6 +772,8 @@ class ArmRuntime:
             hold_after=False,
             watchdog=watchdog,
             on_sample=on_sample,
+            max_tracking_error_rad=max_tracking_error_rad,
+            max_tau_abs=max_tau_abs,
         )
         return self._finish_owner_motion(owner=owner, result=result)
 
@@ -715,6 +785,8 @@ class ArmRuntime:
         send_hz: float,
         watchdog: Callable[[], dict[str, object] | None] | None = None,
         on_sample: Callable[[MotionAuditSample], None] | None = None,
+        max_tracking_error_rad: float | None = None,
+        max_tau_abs: float | None = None,
     ) -> MotionExecutionResult:
         self._raise_if_not_owned(owner=owner, mode=MotionMode.AGENT_SERVO)
         motion = MotionRuntime(
@@ -729,6 +801,8 @@ class ArmRuntime:
             hold_after=False,
             watchdog=watchdog,
             on_sample=on_sample,
+            max_tracking_error_rad=max_tracking_error_rad,
+            max_tau_abs=max_tau_abs,
         )
         return self._finish_owner_motion(owner=owner, result=result)
 
@@ -890,6 +964,44 @@ def _motion_error(exc: Exception) -> dict[str, str]:
 def _watchdog_error(event: dict[str, object]) -> dict[str, str]:
     reason = str(event.get("reason") or "watchdog_timeout")
     return {"type": "watchdog", "message": reason}
+
+
+def _tracking_error_limit_error() -> dict[str, str]:
+    return {"type": "tracking_error", "message": "max tracking error exceeded"}
+
+
+def _tau_limit_error() -> dict[str, str]:
+    return {"type": "torque_limit", "message": "max absolute tau exceeded"}
+
+
+def _tracking_error_exceeded(
+    sample: MotionAuditSample,
+    *,
+    max_tracking_error_rad: float | None,
+) -> bool:
+    if max_tracking_error_rad is None:
+        return False
+    threshold = float(max_tracking_error_rad)
+    if threshold <= 0.0:
+        return False
+    errors = (
+        abs(float(measured) - float(commanded))
+        for commanded, measured in zip(sample.q_cmd, sample.q_meas, strict=False)
+    )
+    return any(error > threshold for error in errors)
+
+
+def _tau_limit_exceeded(
+    sample: MotionAuditSample,
+    *,
+    max_tau_abs: float | None,
+) -> bool:
+    if max_tau_abs is None:
+        return False
+    threshold = float(max_tau_abs)
+    if threshold <= 0.0:
+        return False
+    return any(abs(float(value)) > threshold for value in sample.tau_meas)
 
 
 def _validate_trajectory_inputs(

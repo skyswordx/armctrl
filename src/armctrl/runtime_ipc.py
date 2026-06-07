@@ -43,6 +43,8 @@ def submit_trajectory_command(
     max_heartbeat_age_s: float,
     output_path: Path | None = None,
     start_pose_policy: str = "live_hold",
+    max_tracking_error_rad: float | None = None,
+    max_tau_abs: float | None = None,
 ) -> dict[str, object]:
     if not q_points:
         raise ValueError("at least one --q-point is required")
@@ -90,6 +92,10 @@ def submit_trajectory_command(
         "session_artifact": str(session_artifact_path),
         "result_artifact": str(result_path),
     }
+    if max_tracking_error_rad is not None:
+        command["max_tracking_error_rad"] = float(max_tracking_error_rad)
+    if max_tau_abs is not None:
+        command["max_tau_abs"] = float(max_tau_abs)
     pending_path.parent.mkdir(parents=True, exist_ok=True)
     result_path.parent.mkdir(parents=True, exist_ok=True)
     _write_json_atomic(pending_path, command)
@@ -130,6 +136,8 @@ def submit_intent_command(
     max_heartbeat_age_s: float,
     output_path: Path | None = None,
     start_pose_policy: str = "live_hold",
+    max_tracking_error_rad: float | None = None,
+    max_tau_abs: float | None = None,
 ) -> dict[str, object]:
     q_start = _float_list(expected_q_start, name="expected_q_start")
     target = _float_list(q_target, name="q_target")
@@ -174,6 +182,10 @@ def submit_intent_command(
         "session_artifact": str(session_artifact_path),
         "result_artifact": str(result_path),
     }
+    if max_tracking_error_rad is not None:
+        command["max_tracking_error_rad"] = float(max_tracking_error_rad)
+    if max_tau_abs is not None:
+        command["max_tau_abs"] = float(max_tau_abs)
     pending_path.parent.mkdir(parents=True, exist_ok=True)
     result_path.parent.mkdir(parents=True, exist_ok=True)
     _write_json_atomic(pending_path, command)
@@ -218,7 +230,7 @@ def execute_pending_runtime_commands(
     command_paths = sorted(pending_dir.glob("*.json"))
     if not command_paths:
         return None
-    command_path = command_paths[0]
+    command_path = _next_pending_command_path(command_paths)
     running_path = queue_dir / "running" / command_path.name
     running_path.parent.mkdir(parents=True, exist_ok=True)
     command_path.replace(running_path)
@@ -313,17 +325,14 @@ def execute_runtime_command(
         }
         session["readiness"] = runtime_readiness(session)
         _write_json_atomic(session_artifact_path, session)
-        progress = _active_owner_session_progress_throttle(
+        progress = _active_owner_status_progress(
             session_artifact_path=session_artifact_path,
             runtime=live_runtime,
             owner=owner,
             mode=mode,
             heartbeat_timeout_s=float(command.get("heartbeat_timeout_s", 0.5)),
             max_heartbeat_age_s=max_heartbeat_age_s,
-            min_period_s=min(
-                0.2,
-                max(0.001, float(command.get("heartbeat_timeout_s", 0.5)) / 2.0),
-            ),
+            min_period_s=0.05,
         )
         status_update = progress.stats
         first_send_wall_time_s: float | None = None
@@ -340,12 +349,14 @@ def execute_runtime_command(
             watchdog=lambda: _owner_timeout_watchdog(
                 session_artifact_path=session_artifact_path,
                 owner=owner,
+                executor_progress_wall_time_s=progress.executor_progress_wall_time_s(),
             ),
             on_sample=on_motion_sample,
         )
         watchdog = _owner_timeout_watchdog(
             session_artifact_path=session_artifact_path,
             owner=owner,
+            executor_progress_wall_time_s=progress.executor_progress_wall_time_s(),
         )
         if watchdog is not None:
             backend.damping()
@@ -370,6 +381,7 @@ def execute_runtime_command(
                 status_update=status_update,
             )
         if motion.status == "completed":
+            progress.publish()
             status = live_runtime.status()
             session = _session_from_runtime_status(
                 session,
@@ -381,7 +393,13 @@ def execute_runtime_command(
                 session["last_hold_wall_time_s"] = time.time()
                 session["hold_age_s"] = 0.0
                 session["readiness"] = runtime_readiness(session)
+                session["status"] = (
+                    "ok"
+                    if session["readiness"]["agent_sysid_smoke_allowed"] is True
+                    else "blocked"
+                )
         else:
+            progress.publish()
             session["status"] = "faulted"
             session["mode"] = motion.landing_mode
             session["owner"] = None
@@ -442,6 +460,19 @@ def execute_runtime_command(
         }
 
 
+def _next_pending_command_path(command_paths: Sequence[Path]) -> Path:
+    return min(command_paths, key=_pending_command_sort_key)
+
+
+def _pending_command_sort_key(command_path: Path) -> tuple[float, str]:
+    try:
+        command = _read_json_object(command_path)
+        submitted_wall_time_s = float(command.get("submitted_wall_time_s"))
+    except (OSError, ValueError, TypeError):
+        submitted_wall_time_s = float("inf")
+    return submitted_wall_time_s, command_path.name
+
+
 def _execute_motion_command(
     command: dict[str, object],
     *,
@@ -468,6 +499,10 @@ def _execute_motion_command(
             trajectory_sample_hz=send_hz,
             watchdog=watchdog,
             on_sample=on_sample,
+            max_tracking_error_rad=_optional_float(
+                command.get("max_tracking_error_rad")
+            ),
+            max_tau_abs=_optional_float(command.get("max_tau_abs")),
         )
     if kind == "intent":
         return runtime.execute_owner_intent_frame(
@@ -485,6 +520,10 @@ def _execute_motion_command(
             send_hz=send_hz,
             watchdog=watchdog,
             on_sample=on_sample,
+            max_tracking_error_rad=_optional_float(
+                command.get("max_tracking_error_rad")
+            ),
+            max_tau_abs=_optional_float(command.get("max_tau_abs")),
         )
     raise ValueError(f"unsupported runtime command kind: {kind}")
 
@@ -514,7 +553,7 @@ def _session_from_runtime_status(
     return updated
 
 
-def _active_owner_session_progress_throttle(
+def _active_owner_status_progress(
     *,
     session_artifact_path: Path,
     runtime: ArmRuntime,
@@ -524,23 +563,37 @@ def _active_owner_session_progress_throttle(
     max_heartbeat_age_s: float,
     min_period_s: float,
 ):
-    last_write_monotonic_s: float | None = None
+    last_due_monotonic_s: float | None = None
+    executor_progress_wall_time_s: float | None = None
+    pending_publish = False
     stats: dict[str, object] = {
-        "policy": "throttled_active_owner_status",
+        "policy": "deferred_throttled_active_owner_status",
+        "send_loop_write_policy": "deferred_publish_outside_send_loop",
         "sample_count": 0,
         "session_write_count": 0,
         "min_period_s": float(min_period_s),
+        "target_status_hz": 1.0 / float(min_period_s),
+        "deferred_publish_count": 0,
     }
 
     def on_sample(sample: MotionAuditSample) -> None:
-        nonlocal last_write_monotonic_s
+        nonlocal last_due_monotonic_s, pending_publish, executor_progress_wall_time_s
         stats["sample_count"] = int(stats["sample_count"]) + 1
+        executor_progress_wall_time_s = time.time()
         if (
-            last_write_monotonic_s is not None
-            and sample.sent_monotonic_s - last_write_monotonic_s < min_period_s
+            last_due_monotonic_s is not None
+            and sample.sent_monotonic_s - last_due_monotonic_s < min_period_s
         ):
             return
-        last_write_monotonic_s = sample.sent_monotonic_s
+        last_due_monotonic_s = sample.sent_monotonic_s
+        pending_publish = True
+        stats["deferred_publish_count"] = int(stats["deferred_publish_count"]) + 1
+
+    def publish() -> None:
+        nonlocal pending_publish
+        if not pending_publish:
+            return
+        pending_publish = False
         _refresh_active_owner_session(
             session_artifact_path=session_artifact_path,
             runtime=runtime,
@@ -548,10 +601,16 @@ def _active_owner_session_progress_throttle(
             mode=mode,
             heartbeat_timeout_s=heartbeat_timeout_s,
             max_heartbeat_age_s=max_heartbeat_age_s,
+            executor_progress_wall_time_s=executor_progress_wall_time_s,
         )
         stats["session_write_count"] = int(stats["session_write_count"]) + 1
 
+    def executor_progress_wall_time() -> float | None:
+        return executor_progress_wall_time_s
+
     on_sample.stats = stats
+    on_sample.publish = publish
+    on_sample.executor_progress_wall_time_s = executor_progress_wall_time
     return on_sample
 
 
@@ -563,6 +622,7 @@ def _refresh_active_owner_session(
     mode: str,
     heartbeat_timeout_s: float,
     max_heartbeat_age_s: float,
+    executor_progress_wall_time_s: float | None = None,
 ) -> None:
     session = _read_json_object(session_artifact_path)
     if session.get("owner") != owner:
@@ -570,6 +630,11 @@ def _refresh_active_owner_session(
     owner_lease = session.get("owner_lease")
     acquired_wall_time_s = (
         owner_lease.get("acquired_wall_time_s")
+        if isinstance(owner_lease, dict)
+        else None
+    )
+    owner_heartbeat_wall_time_s = (
+        owner_lease.get("heartbeat_wall_time_s")
         if isinstance(owner_lease, dict)
         else None
     )
@@ -587,7 +652,8 @@ def _refresh_active_owner_session(
         "owner": owner,
         "mode": mode,
         "heartbeat_timeout_s": float(heartbeat_timeout_s),
-        "heartbeat_wall_time_s": time.time(),
+        "heartbeat_wall_time_s": owner_heartbeat_wall_time_s,
+        "executor_progress_wall_time_s": executor_progress_wall_time_s or time.time(),
         "acquired_wall_time_s": acquired_wall_time_s,
         "landing_policy": "watchdog_to_damping_release_to_hold_safe",
     }
@@ -601,13 +667,21 @@ def _refresh_active_owner_session(
         ):
             if key in owner_lease:
                 updated["owner_lease"][key] = owner_lease[key]
+    owner_heartbeat_age_s = _wall_age_s(owner_heartbeat_wall_time_s)
     updated["owner_deadman"] = {
         "owner": owner,
         "mode": mode,
-        "heartbeat_wall_time_s": updated["owner_lease"]["heartbeat_wall_time_s"],
-        "heartbeat_age_s": 0.0,
+        "heartbeat_wall_time_s": owner_heartbeat_wall_time_s,
+        "heartbeat_age_s": owner_heartbeat_age_s,
         "heartbeat_timeout_s": float(heartbeat_timeout_s),
-        "fresh": True,
+        "fresh": (
+            owner_heartbeat_age_s is not None
+            and owner_heartbeat_age_s < float(heartbeat_timeout_s)
+        ),
+    }
+    updated["status_publish"] = {
+        "policy": "throttled_observation_not_owner_heartbeat",
+        "wall_time_s": time.time(),
     }
     updated["readiness"] = runtime_readiness(updated)
     _write_json_atomic(session_artifact_path, updated)
@@ -650,6 +724,42 @@ def _command_result_payload(
         resampling_policy=resampling_policy,
         kind=str(command.get("kind")),
     )
+    motion_payload = {
+        "status": motion.status,
+        "producer": motion.producer,
+        "mode": motion.mode,
+        "trajectory_sample_hz": trajectory_sample_hz,
+        "runtime_send_hz": runtime_send_hz,
+        "resampling_policy": resampling_policy,
+        "interpolation_policy": interpolation_policy,
+        "actual_send_hz": motion.actual_send_hz,
+        "send_jitter_ms_p95": motion.send_jitter_ms_p95,
+        "send_jitter_ms_p99": motion.send_jitter_ms_p99,
+        "send_jitter_ms_summary": _send_jitter_summary(
+            motion.samples,
+            expected_period_s=expected_period_s,
+        ),
+        "dt_error_ms_summary": _dt_error_summary(
+            motion.samples,
+            expected_period_s=expected_period_s,
+        ),
+        "send_period_s": send_period,
+        "dt_min_s": send_period["min"],
+        "dt_max_s": send_period["max"],
+        "dt_avg_s": send_period["avg"],
+        "tracking_error": _tracking_error_summary(motion.samples),
+        "max_tracking_error_rad": _optional_float(
+            command.get("max_tracking_error_rad")
+        ),
+        "tau_meas": _tau_summary(motion.samples),
+        "max_tau_abs": _optional_float(command.get("max_tau_abs")),
+        "controller_dt_s": motion.controller_dt_s,
+        "sample_count": len(motion.samples),
+        "samples": [_motion_sample_manifest(sample) for sample in motion.samples],
+        "landing_mode": motion.landing_mode,
+        "error": motion.error,
+    }
+    status_update_payload = dict(status_update) if status_update is not None else None
     payload = {
         "status": status,
         "schema": RUNTIME_COMMAND_RESULT_SCHEMA,
@@ -667,38 +777,17 @@ def _command_result_payload(
             "session": str(session_artifact_path),
             "result": str(command.get("result_artifact") or ""),
         },
-        "motion": {
-            "status": motion.status,
-            "producer": motion.producer,
-            "mode": motion.mode,
-            "trajectory_sample_hz": trajectory_sample_hz,
-            "runtime_send_hz": runtime_send_hz,
-            "resampling_policy": resampling_policy,
-            "interpolation_policy": interpolation_policy,
-            "actual_send_hz": motion.actual_send_hz,
-            "send_jitter_ms_p95": motion.send_jitter_ms_p95,
-            "send_jitter_ms_p99": motion.send_jitter_ms_p99,
-            "send_jitter_ms_summary": _send_jitter_summary(
-                motion.samples,
-                expected_period_s=expected_period_s,
-            ),
-            "dt_error_ms_summary": _dt_error_summary(
-                motion.samples,
-                expected_period_s=expected_period_s,
-            ),
-            "send_period_s": send_period,
-            "dt_min_s": send_period["min"],
-            "dt_max_s": send_period["max"],
-            "dt_avg_s": send_period["avg"],
-            "controller_dt_s": motion.controller_dt_s,
-            "sample_count": len(motion.samples),
-            "samples": [_motion_sample_manifest(sample) for sample in motion.samples],
-            "landing_mode": motion.landing_mode,
-            "error": motion.error,
-        },
+        "motion": motion_payload,
+        "acceptance": _command_acceptance_summary(
+            status=status,
+            command=command,
+            timing=timing,
+            motion=motion_payload,
+            status_update=status_update_payload,
+        ),
     }
-    if status_update is not None:
-        payload["status_update"] = dict(status_update)
+    if status_update_payload is not None:
+        payload["status_update"] = status_update_payload
     if command.get("kind") == "intent":
         payload["motion"].update(_intent_motion_contract(command))
     if watchdog is not None:
@@ -749,6 +838,202 @@ def _command_timing_summary(
         "execution_elapsed_s": execution_elapsed_s,
         "total_wall_latency_s": _duration_s(completed_wall_time_s, submitted_wall_time_s),
     }
+
+
+def _command_acceptance_summary(
+    *,
+    status: str,
+    command: dict[str, object],
+    timing: dict[str, object],
+    motion: dict[str, object],
+    status_update: dict[str, object] | None,
+) -> dict[str, object]:
+    timing_gate = _timing_gate_summary(
+        command=command,
+        timing=timing,
+        motion=motion,
+    )
+    status_publish_gate = _status_publish_gate_summary(status_update)
+    checks = {
+        "command_completed": status == "completed",
+        "motion_completed": motion.get("status") == "completed",
+        "timing_gate": timing_gate["status"] == "pass",
+        "status_publish_gate": status_publish_gate["status"] == "pass",
+    }
+    return {
+        "status": "pass" if all(checks.values()) else "fail",
+        "checks": checks,
+        "timing_gate": timing_gate,
+        "status_publish_gate": status_publish_gate,
+    }
+
+
+def _status_publish_gate_summary(
+    status_update: dict[str, object] | None,
+) -> dict[str, object]:
+    sample_count = _optional_int(
+        status_update.get("sample_count") if status_update is not None else None
+    )
+    session_write_count = _optional_int(
+        status_update.get("session_write_count") if status_update is not None else None
+    )
+    target_status_hz = _optional_float(
+        status_update.get("target_status_hz") if status_update is not None else None
+    )
+    min_period_s = _optional_float(
+        status_update.get("min_period_s") if status_update is not None else None
+    )
+    send_loop_write_policy = (
+        status_update.get("send_loop_write_policy")
+        if status_update is not None
+        else None
+    )
+    session_write_ratio = (
+        None
+        if sample_count is None or sample_count <= 0 or session_write_count is None
+        else session_write_count / sample_count
+    )
+    enough_samples_for_ratio_gate = sample_count is not None and sample_count >= 10
+    checks = {
+        "status_update_present": status_update is not None,
+        "session_writes_below_sample_count": (
+            sample_count is not None
+            and session_write_count is not None
+            and (
+                session_write_count < sample_count
+                or not enough_samples_for_ratio_gate
+            )
+        ),
+        "session_writes_below_10_percent_samples": (
+            (session_write_ratio is not None and session_write_ratio < 0.1)
+            or not enough_samples_for_ratio_gate
+        ),
+        "send_loop_write_policy_deferred": (
+            send_loop_write_policy == "deferred_publish_outside_send_loop"
+        ),
+        "target_status_hz_within_limit": (
+            target_status_hz is not None and target_status_hz <= 20.0
+        ),
+    }
+    return {
+        "status": "pass" if all(checks.values()) else "fail",
+        "checks": checks,
+        "limits": {
+            "session_write_ratio_max": 0.1,
+            "target_status_hz_max": 20.0,
+        },
+        "metrics": {
+            "sample_count": sample_count,
+            "session_write_count": session_write_count,
+            "session_write_ratio": session_write_ratio,
+            "ratio_gate_min_sample_count": 10,
+            "target_status_hz": target_status_hz,
+            "min_period_s": min_period_s,
+            "send_loop_write_policy": send_loop_write_policy,
+        },
+    }
+
+
+def _timing_gate_summary(
+    *,
+    command: dict[str, object],
+    timing: dict[str, object],
+    motion: dict[str, object],
+) -> dict[str, object]:
+    runtime_send_hz = _optional_float(motion.get("runtime_send_hz"))
+    actual_send_hz = _optional_float(motion.get("actual_send_hz"))
+    dt_min_s = _optional_float(motion.get("dt_min_s"))
+    dt_max_s = _optional_float(motion.get("dt_max_s"))
+    sample_count = int(motion.get("sample_count") or 0)
+    expected_sample_count = _expected_runtime_sample_count(command)
+    queue_latency_s = _optional_float(timing.get("queue_latency_s"))
+    expected_period_s = 1.0 / runtime_send_hz if runtime_send_hz else None
+    send_hz_error_ratio = (
+        None
+        if runtime_send_hz is None or actual_send_hz is None or runtime_send_hz <= 0.0
+        else abs(actual_send_hz - runtime_send_hz) / runtime_send_hz
+    )
+    dt_range_error_ms = (
+        None
+        if expected_period_s is None or dt_min_s is None or dt_max_s is None
+        else max(abs(dt_min_s - expected_period_s), abs(dt_max_s - expected_period_s))
+        * 1000.0
+    )
+    p99_jitter_ms = _optional_float(motion.get("send_jitter_ms_p99"))
+    if p99_jitter_ms is None:
+        jitter_summary = motion.get("send_jitter_ms_summary")
+        if isinstance(jitter_summary, dict):
+            p99_jitter_ms = _optional_float(jitter_summary.get("max"))
+    checks = {
+        "actual_send_hz_present": actual_send_hz is not None,
+        "actual_send_hz_close_to_runtime_send_hz": (
+            send_hz_error_ratio is not None and send_hz_error_ratio <= 0.05
+        ),
+        "send_jitter_p99_within_limit": (
+            p99_jitter_ms is not None and p99_jitter_ms <= 5.0
+        ),
+        "dt_range_within_limit": (
+            dt_range_error_ms is not None and dt_range_error_ms <= 5.0
+        ),
+        "queue_latency_present": queue_latency_s is not None,
+        "sample_count_matches_expected": (
+            expected_sample_count is not None and sample_count == expected_sample_count
+        ),
+    }
+    return {
+        "status": "pass" if all(checks.values()) else "fail",
+        "checks": checks,
+        "limits": {
+            "actual_send_hz_error_ratio_max": 0.05,
+            "send_jitter_p99_ms_max": 5.0,
+            "dt_range_error_ms_max": 5.0,
+        },
+        "metrics": {
+            "runtime_send_hz": runtime_send_hz,
+            "actual_send_hz": actual_send_hz,
+            "actual_send_hz_error_ratio": send_hz_error_ratio,
+            "send_jitter_ms_p99": p99_jitter_ms,
+            "dt_min_s": dt_min_s,
+            "dt_max_s": dt_max_s,
+            "dt_range_error_ms": dt_range_error_ms,
+            "queue_latency_s": queue_latency_s,
+            "sample_count": sample_count,
+            "expected_sample_count": expected_sample_count,
+        },
+    }
+
+
+def _expected_runtime_sample_count(command: dict[str, object]) -> int | None:
+    kind = command.get("kind")
+    if kind == "trajectory":
+        q_points = command.get("q_points")
+        if not isinstance(q_points, list) or not q_points:
+            return None
+        if len(q_points) == 1:
+            return 1
+        trajectory_sample_hz = _optional_float(command.get("trajectory_sample_hz"))
+        runtime_send_hz = _optional_float(command.get("send_hz"))
+        if (
+            trajectory_sample_hz is None
+            or runtime_send_hz is None
+            or trajectory_sample_hz <= 0.0
+            or runtime_send_hz <= 0.0
+        ):
+            return len(q_points)
+        duration_s = (len(q_points) - 1) / trajectory_sample_hz
+        return max(2, int(round(duration_s * runtime_send_hz)) + 1)
+    if kind == "intent":
+        control_period_s = _optional_float(command.get("control_period_s"))
+        send_hz = _optional_float(command.get("send_hz"))
+        if (
+            control_period_s is None
+            or send_hz is None
+            or control_period_s <= 0.0
+            or send_hz <= 0.0
+        ):
+            return None
+        return max(1, int(round(control_period_s * send_hz))) + 1
+    return None
 
 
 def _send_period_summary(samples: Sequence[MotionAuditSample]) -> dict[str, object]:
@@ -856,6 +1141,71 @@ def _jitter_buckets(jitters_ms: Sequence[float]) -> dict[str, int]:
         else:
             buckets["gt_5"] += 1
     return buckets
+
+
+def _tracking_error_summary(samples: Sequence[MotionAuditSample]) -> dict[str, object]:
+    if not samples:
+        return {
+            "sample_count": 0,
+            "max_abs_rad": None,
+            "final_abs_rad": None,
+            "per_joint_max_abs_rad": [],
+            "final_error_rad": [],
+        }
+    max_dof = max(
+        len(sample.q_cmd)
+        for sample in samples
+    )
+    per_joint_max_abs = [0.0] * max_dof
+    max_abs = 0.0
+    final_error: list[float] = []
+    for sample in samples:
+        errors = [
+            float(measured) - float(commanded)
+            for commanded, measured in zip(sample.q_cmd, sample.q_meas, strict=False)
+        ]
+        if sample is samples[-1]:
+            final_error = errors
+        for index, error in enumerate(errors):
+            abs_error = abs(error)
+            per_joint_max_abs[index] = max(per_joint_max_abs[index], abs_error)
+            max_abs = max(max_abs, abs_error)
+    final_abs = max((abs(error) for error in final_error), default=None)
+    return {
+        "sample_count": len(samples),
+        "max_abs_rad": max_abs,
+        "final_abs_rad": final_abs,
+        "per_joint_max_abs_rad": per_joint_max_abs,
+        "final_error_rad": final_error,
+    }
+
+
+def _tau_summary(samples: Sequence[MotionAuditSample]) -> dict[str, object]:
+    if not samples:
+        return {
+            "sample_count": 0,
+            "max_abs": None,
+            "final_abs": None,
+            "per_joint_max_abs": [],
+            "final_tau": [],
+        }
+    max_dof = max((len(sample.tau_meas) for sample in samples), default=0)
+    per_joint_max_abs = [0.0] * max_dof
+    max_abs = 0.0
+    final_tau = [float(value) for value in samples[-1].tau_meas]
+    for sample in samples:
+        for index, tau in enumerate(sample.tau_meas):
+            abs_tau = abs(float(tau))
+            per_joint_max_abs[index] = max(per_joint_max_abs[index], abs_tau)
+            max_abs = max(max_abs, abs_tau)
+    final_abs = max((abs(value) for value in final_tau), default=None)
+    return {
+        "sample_count": len(samples),
+        "max_abs": max_abs,
+        "final_abs": final_abs,
+        "per_joint_max_abs": per_joint_max_abs,
+        "final_tau": final_tau,
+    }
 
 
 def _runtime_trajectory_points(
@@ -979,6 +1329,13 @@ def _optional_float(value: object) -> float | None:
         return None
 
 
+def _optional_int(value: object) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _duration_s(later: float | None, earlier: float | None) -> float | None:
     if later is None or earlier is None:
         return None
@@ -1002,13 +1359,18 @@ def _owner_timeout_watchdog(
     *,
     session_artifact_path: Path,
     owner: str,
+    executor_progress_wall_time_s: float | None = None,
 ) -> dict[str, object] | None:
     session = _read_json_object(session_artifact_path)
     owner_lease = session.get("owner_lease")
     if session.get("owner") != owner or not isinstance(owner_lease, dict):
         return None
     try:
-        heartbeat_wall_time_s = float(owner_lease.get("heartbeat_wall_time_s"))
+        heartbeat_wall_time_s = float(
+            executor_progress_wall_time_s
+            or owner_lease.get("executor_progress_wall_time_s")
+            or owner_lease.get("heartbeat_wall_time_s")
+        )
         heartbeat_timeout_s = float(owner_lease.get("heartbeat_timeout_s"))
     except (TypeError, ValueError):
         return None
@@ -1022,6 +1384,14 @@ def _owner_timeout_watchdog(
         "reason": "owner_heartbeat_timeout",
         "heartbeat_age_s": heartbeat_age_s,
         "heartbeat_timeout_s": heartbeat_timeout_s,
+        "heartbeat_source": (
+            "executor_progress"
+            if (
+                executor_progress_wall_time_s is not None
+                or owner_lease.get("executor_progress_wall_time_s") is not None
+            )
+            else "owner_deadman"
+        ),
     }
 
 
@@ -1267,7 +1637,16 @@ def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
 
 
 def _read_json_object(path: Path) -> dict[str, object]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        raise ValueError(f"{path} does not contain a JSON object")
-    return payload
+    last_error: Exception | None = None
+    for _ in range(50):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError(f"{path} does not contain a JSON object")
+            return payload
+        except (FileNotFoundError, json.JSONDecodeError) as error:
+            last_error = error
+            time.sleep(0.01)
+    if last_error is not None:
+        raise last_error
+    raise FileNotFoundError(path)

@@ -370,6 +370,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     runtime_submit_trajectory_parser.add_argument("--send-hz", type=float, default=50.0)
     runtime_submit_trajectory_parser.add_argument(
+        "--max-tracking-error-rad",
+        type=float,
+    )
+    runtime_submit_trajectory_parser.add_argument(
+        "--max-tau-abs",
+        type=float,
+    )
+    runtime_submit_trajectory_parser.add_argument(
         "--max-start-error-rad",
         type=float,
         default=0.02,
@@ -410,6 +418,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=0.1,
     )
     runtime_submit_intent_parser.add_argument("--send-hz", type=float, default=50.0)
+    runtime_submit_intent_parser.add_argument(
+        "--max-tracking-error-rad",
+        type=float,
+    )
+    runtime_submit_intent_parser.add_argument(
+        "--max-tau-abs",
+        type=float,
+    )
     runtime_submit_intent_parser.add_argument(
         "--max-joint-delta-rad",
         type=float,
@@ -488,6 +504,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--max-heartbeat-age-s",
         type=float,
         default=1.0,
+    )
+    recipe_runtime_submit_parser.add_argument(
+        "--max-tracking-error-rad",
+        type=float,
+    )
+    recipe_runtime_submit_parser.add_argument(
+        "--max-tau-abs",
+        type=float,
     )
     recipe_runtime_submit_parser.add_argument(
         "--start-pose-policy",
@@ -719,6 +743,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--max-joint-delta-rad",
         type=float,
         default=0.005,
+    )
+    agent_flow_real_runtime_smoke_parser.add_argument(
+        "--max-tracking-error-rad",
+        type=float,
+    )
+    agent_flow_real_runtime_smoke_parser.add_argument(
+        "--max-tau-abs",
+        type=float,
     )
     agent_flow_real_runtime_smoke_parser.add_argument("--runtime-session-artifact")
     agent_flow_real_runtime_smoke_parser.add_argument("--confirm", required=True)
@@ -958,6 +990,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     sysid_run_parser.add_argument("--confirm")
     sysid_run_parser.add_argument("--readiness-artifact")
     sysid_run_parser.add_argument("--runtime-session-artifact")
+    sysid_run_parser.add_argument("--max-tracking-error-rad", type=float)
+    sysid_run_parser.add_argument("--max-tau-abs", type=float)
     sysid_run_parser.add_argument("--json", action="store_true", dest="as_json")
 
     sysid_postprocess_parser = sysid_subparsers.add_parser("postprocess")
@@ -1652,6 +1686,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 heartbeat_timeout_s=args.heartbeat_timeout_s,
                 max_heartbeat_age_s=args.max_heartbeat_age_s,
                 output_path=Path(args.output) if args.output else None,
+                max_tracking_error_rad=args.max_tracking_error_rad,
+                max_tau_abs=args.max_tau_abs,
             )
         except RuntimeSessionError as error:
             payload = {
@@ -1680,6 +1716,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 heartbeat_timeout_s=args.heartbeat_timeout_s,
                 max_heartbeat_age_s=args.max_heartbeat_age_s,
                 output_path=Path(args.output) if args.output else None,
+                max_tracking_error_rad=args.max_tracking_error_rad,
+                max_tau_abs=args.max_tau_abs,
             )
         except RuntimeSessionError as error:
             payload = {
@@ -1929,6 +1967,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ),
                 max_heartbeat_age_s=args.max_heartbeat_age_s,
                 start_pose_policy=args.start_pose_policy,
+                max_tracking_error_rad=args.max_tracking_error_rad,
+                max_tau_abs=args.max_tau_abs,
             )
         except FileNotFoundError as error:
             payload = {
@@ -2319,6 +2359,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 max_start_error_rad=0.02,
                 heartbeat_timeout_s=0.5,
                 max_heartbeat_age_s=1.0,
+                max_tracking_error_rad=args.max_tracking_error_rad,
+                max_tau_abs=args.max_tau_abs,
             )
         except (RuntimeSessionError, RuntimeError, ValueError) as error:
             payload = {
@@ -3315,6 +3357,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     heartbeat_timeout_s=max(0.5, float(args.duration) + 1.0),
                     max_heartbeat_age_s=1.0,
                     start_pose_policy="live_hold",
+                    max_tracking_error_rad=args.max_tracking_error_rad,
+                    max_tau_abs=args.max_tau_abs,
                 )
             except (RuntimeSessionError, RuntimeError, ValueError) as error:
                 payload = {
@@ -4066,88 +4110,127 @@ def _serve_runtime_session_until_stopped(
 ) -> dict[str, object]:
     if heartbeat_period_s <= 0.0:
         raise ValueError("heartbeat_period_s must be positive")
-    while True:
-        payload = _read_json_retry(session_artifact_path)
-        if _runtime_stop_requested(session_artifact_path):
-            stopped = stop_runtime_session_from_artifact(
-                session_artifact_path=session_artifact_path,
-                max_heartbeat_age_s=max_heartbeat_age_s,
-            )
-            _write_json_atomic(session_artifact_path, stopped)
-            _clear_runtime_stop_request(session_artifact_path)
-            return stopped
-        if payload.get("status") == "stopped" or payload.get("mode") == "damping":
-            return payload
-        payload = watchdog_tick_from_artifact(
-            session_artifact_path=session_artifact_path,
-            max_heartbeat_age_s=max_heartbeat_age_s,
-        )
-        latest = _read_json_retry(session_artifact_path)
-        if latest.get("status") == "stopped" or latest.get("mode") == "damping":
-            return latest
-        if payload.get("status") == "faulted" or payload.get("mode") == "damping":
-            _write_json_atomic(session_artifact_path, payload)
-            return payload
-        if backend is not None:
-            execute_pending_runtime_commands(
-                session_artifact_path=session_artifact_path,
-                backend=backend,
-                runtime=runtime,
-                max_heartbeat_age_s=max_heartbeat_age_s,
-            )
+    try:
+        while True:
             payload = _read_json_retry(session_artifact_path)
+            if _runtime_stop_requested(session_artifact_path):
+                stopped = stop_runtime_session_from_artifact(
+                    session_artifact_path=session_artifact_path,
+                    max_heartbeat_age_s=max_heartbeat_age_s,
+                )
+                _write_json_atomic(session_artifact_path, stopped)
+                _clear_runtime_stop_request(session_artifact_path)
+                return stopped
             if payload.get("status") == "stopped" or payload.get("mode") == "damping":
                 return payload
-        if payload.get("mode") == "hold_safe":
-            if hold_tick is not None:
-                hold_tick(payload)
+            payload = watchdog_tick_from_artifact(
+                session_artifact_path=session_artifact_path,
+                max_heartbeat_age_s=max_heartbeat_age_s,
+            )
+            latest = _read_json_retry(session_artifact_path)
+            if latest.get("status") == "stopped" or latest.get("mode") == "damping":
+                return latest
+            if payload.get("status") == "faulted" or payload.get("mode") == "damping":
+                _write_json_atomic(session_artifact_path, payload)
+                return payload
             if backend is not None:
-                latest = _read_json_retry(session_artifact_path)
-                if latest.get("status") == "stopped" or latest.get("mode") == "damping":
-                    return latest
-                if latest.get("mode") == "hold_safe":
-                    try:
-                        state = backend.read_joint_state()
-                    except Exception as error:
-                        try:
-                            backend.damping()
-                        except Exception:
-                            pass
-                        faulted = dict(latest)
-                        faulted["status"] = "faulted"
-                        faulted["mode"] = "damping"
-                        faulted["owner"] = None
-                        faulted["owner_lease"] = None
-                        faulted["owner_deadman"] = None
-                        faulted["landing_mode"] = "damping"
-                        faulted["fault_landing_mode"] = "damping"
-                        faulted["error"] = {
-                            "type": type(error).__name__,
-                            "message": str(error),
-                        }
-                        faulted["readiness"] = runtime_readiness(faulted)
-                        _write_json_atomic(session_artifact_path, faulted)
-                        return faulted
-                    payload = record_runtime_hold_tick(
-                        latest,
-                        q_meas=state.q_meas,
-                        fault_flags=state.fault_flags,
+                for _ in range(16):
+                    executed = execute_pending_runtime_commands(
+                        session_artifact_path=session_artifact_path,
+                        backend=backend,
+                        runtime=runtime,
                         max_heartbeat_age_s=max_heartbeat_age_s,
                     )
-                    _write_json_atomic(session_artifact_path, payload)
-            else:
+                    payload = _read_json_retry(session_artifact_path)
+                    if payload.get("status") == "stopped" or payload.get("mode") == "damping":
+                        return payload
+                    if executed is None:
+                        break
                 payload = _read_json_retry(session_artifact_path)
                 if payload.get("status") == "stopped" or payload.get("mode") == "damping":
                     return payload
-        payload = heartbeat_runtime_session_payload(
-            payload,
-            max_heartbeat_age_s=max_heartbeat_age_s,
+            if payload.get("mode") == "hold_safe":
+                if hold_tick is not None:
+                    hold_tick(payload)
+                    if _runtime_stop_requested(session_artifact_path):
+                        continue
+                if backend is not None:
+                    latest = _read_json_retry(session_artifact_path)
+                    if latest.get("status") == "stopped" or latest.get("mode") == "damping":
+                        return latest
+                    if latest.get("mode") == "hold_safe":
+                        try:
+                            state = backend.read_joint_state()
+                        except Exception as error:
+                            try:
+                                backend.damping()
+                            except Exception:
+                                pass
+                            faulted = dict(latest)
+                            faulted["status"] = "faulted"
+                            faulted["mode"] = "damping"
+                            faulted["owner"] = None
+                            faulted["owner_lease"] = None
+                            faulted["owner_deadman"] = None
+                            faulted["landing_mode"] = "damping"
+                            faulted["fault_landing_mode"] = "damping"
+                            faulted["error"] = {
+                                "type": type(error).__name__,
+                                "message": str(error),
+                            }
+                            faulted["readiness"] = runtime_readiness(faulted)
+                            _write_json_atomic(session_artifact_path, faulted)
+                            return faulted
+                        payload = record_runtime_hold_tick(
+                            latest,
+                            q_meas=state.q_meas,
+                            fault_flags=state.fault_flags,
+                            max_heartbeat_age_s=max_heartbeat_age_s,
+                        )
+                        _write_json_atomic(session_artifact_path, payload)
+                else:
+                    payload = _read_json_retry(session_artifact_path)
+                    if payload.get("status") == "stopped" or payload.get("mode") == "damping":
+                        return payload
+            payload = heartbeat_runtime_session_payload(
+                payload,
+                max_heartbeat_age_s=max_heartbeat_age_s,
+            )
+            latest = _read_json_retry(session_artifact_path)
+            if latest.get("status") == "stopped" or latest.get("mode") == "damping":
+                return latest
+            _write_json_atomic(session_artifact_path, payload)
+            time.sleep(float(heartbeat_period_s))
+    except KeyboardInterrupt:
+        return _interrupt_runtime_session(
+            session_artifact_path=session_artifact_path,
+            backend=backend,
         )
-        latest = _read_json_retry(session_artifact_path)
-        if latest.get("status") == "stopped" or latest.get("mode") == "damping":
-            return latest
-        _write_json_atomic(session_artifact_path, payload)
-        time.sleep(float(heartbeat_period_s))
+
+
+def _interrupt_runtime_session(
+    *,
+    session_artifact_path: Path,
+    backend: MotionBackend | None,
+) -> dict[str, object]:
+    if backend is not None:
+        try:
+            backend.damping()
+        except Exception:
+            pass
+    payload = _read_json_retry(session_artifact_path)
+    interrupted = dict(payload)
+    interrupted["status"] = "interrupted"
+    interrupted["mode"] = "damping"
+    interrupted["owner"] = None
+    interrupted["owner_lease"] = None
+    interrupted["owner_deadman"] = None
+    interrupted["landing_mode"] = "damping"
+    interrupted["fault_landing_mode"] = "damping"
+    interrupted["reason"] = "keyboard_interrupt"
+    interrupted["readiness"] = runtime_readiness(interrupted)
+    _write_json_atomic(session_artifact_path, interrupted)
+    return interrupted
 
 
 def _runtime_stop_request_path(session_artifact_path: Path) -> Path:
