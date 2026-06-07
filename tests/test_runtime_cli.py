@@ -224,3 +224,217 @@ def test_cli_sysid_readiness_accepts_fresh_live_runtime_status(
     assert payload["prerequisites"]["runtime_status"] == "pass"
     assert payload["runtime_status"]["mode"] == "hold_safe"
     assert payload["runtime_status"]["runtime_session_id"] == "runtime-test"
+
+
+def test_cli_runtime_owner_lease_rejects_competing_owner(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+
+    first = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "runtime",
+            "acquire-owner",
+            "--session-artifact",
+            str(session_artifact),
+            "--owner",
+            "agent",
+            "--mode",
+            "agent_servo",
+            "--expected-q-start",
+            "0.0",
+            "0.3",
+            "0.3",
+            "--heartbeat-timeout-s",
+            "0.5",
+            "--output",
+            str(session_artifact),
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    first_payload = json.loads(first.stdout)
+
+    assert first_payload["status"] == "ok"
+    assert first_payload["mode"] == "agent_servo"
+    assert first_payload["owner"] == "agent"
+    assert first_payload["owner_lease"]["owner"] == "agent"
+
+    competing = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "runtime",
+            "acquire-owner",
+            "--session-artifact",
+            str(session_artifact),
+            "--owner",
+            "sysid",
+            "--mode",
+            "trajectory_replay",
+            "--expected-q-start",
+            "0.0",
+            "0.3",
+            "0.3",
+            "--heartbeat-timeout-s",
+            "0.5",
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    competing_payload = json.loads(competing.stdout)
+
+    assert competing.returncode == 3
+    assert competing_payload["status"] == "rejected"
+    assert competing_payload["reason"] == "runtime is owned by agent"
+    assert competing_payload["owner"] == "agent"
+
+
+def test_cli_runtime_release_owner_returns_to_hold_safe(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    _acquire_owner(session_artifact, owner="sysid", mode="trajectory_replay")
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "runtime",
+            "release-owner",
+            "--session-artifact",
+            str(session_artifact),
+            "--owner",
+            "sysid",
+            "--output",
+            str(session_artifact),
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(completed.stdout)
+
+    assert payload["status"] == "ok"
+    assert payload["mode"] == "hold_safe"
+    assert payload["owner"] is None
+    assert payload["readiness"]["agent_sysid_smoke_allowed"] is True
+    assert payload["owner_lease"] is None
+    assert json.loads(session_artifact.read_text(encoding="utf-8")) == payload
+
+
+def test_cli_runtime_watchdog_timeout_lands_damping(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    _acquire_owner(
+        session_artifact,
+        owner="xbox",
+        mode="agent_servo",
+        heartbeat_timeout_s=0.1,
+    )
+    session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    session["owner_lease"]["heartbeat_wall_time_s"] = time.time() - 1.0
+    session_artifact.write_text(json.dumps(session), encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "runtime",
+            "watchdog-tick",
+            "--session-artifact",
+            str(session_artifact),
+            "--output",
+            str(session_artifact),
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(completed.stdout)
+
+    assert completed.returncode == 3
+    assert payload["status"] == "faulted"
+    assert payload["mode"] == "damping"
+    assert payload["owner"] is None
+    assert payload["watchdog"]["landing_mode"] == "damping"
+    assert payload["watchdog"]["reason"] == "owner_heartbeat_timeout"
+    assert payload["readiness"]["agent_sysid_smoke_allowed"] is False
+
+
+def _start_fake_hold_session(path: Path) -> None:
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "runtime",
+            "start",
+            "--backend",
+            "fake",
+            "--q-current",
+            "0.0",
+            "0.3",
+            "0.3",
+            "--safe-center",
+            "0.0",
+            "0.3",
+            "0.3",
+            "--output",
+            str(path),
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _acquire_owner(
+    path: Path,
+    *,
+    owner: str,
+    mode: str,
+    heartbeat_timeout_s: float = 0.5,
+) -> None:
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "runtime",
+            "acquire-owner",
+            "--session-artifact",
+            str(path),
+            "--owner",
+            owner,
+            "--mode",
+            mode,
+            "--expected-q-start",
+            "0.0",
+            "0.3",
+            "0.3",
+            "--heartbeat-timeout-s",
+            str(heartbeat_timeout_s),
+            "--output",
+            str(path),
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )

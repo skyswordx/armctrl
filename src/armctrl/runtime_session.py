@@ -24,6 +24,12 @@ RUNTIME_SESSION_SCHEMA = "armctrl.arm_runtime_session.v1"
 RUNTIME_STATUS_SCHEMA = "armctrl.arm_runtime_status.v1"
 
 
+class RuntimeSessionError(RuntimeError):
+    def __init__(self, message: str, payload: dict[str, object]) -> None:
+        self.payload = payload
+        super().__init__(message)
+
+
 def start_fake_runtime_session(
     *,
     q_current: Sequence[float],
@@ -96,6 +102,139 @@ def runtime_status_from_artifact(
     )
 
 
+def acquire_owner_from_artifact(
+    *,
+    session_artifact_path: Path,
+    owner: str,
+    mode: str,
+    expected_q_start: Sequence[float],
+    max_start_error_rad: float,
+    heartbeat_timeout_s: float,
+    max_heartbeat_age_s: float,
+) -> dict[str, object]:
+    payload = refresh_runtime_status_payload(
+        _read_json_object(session_artifact_path),
+        max_heartbeat_age_s=float(max_heartbeat_age_s),
+    )
+    if payload.get("owner") is not None:
+        raise RuntimeSessionError(f"runtime is owned by {payload.get('owner')}", payload)
+    if payload.get("mode") != ArmRuntimeMode.HOLD_SAFE.value:
+        raise RuntimeSessionError(
+            f"runtime must be hold_safe before acquire, got {payload.get('mode')}",
+            payload,
+        )
+    if payload.get("readiness", {}).get("agent_sysid_smoke_allowed") is not True:
+        raise RuntimeSessionError("runtime readiness is not pass", payload)
+    if heartbeat_timeout_s <= 0.0:
+        raise ValueError("heartbeat_timeout_s must be positive")
+    expected_q_start_tuple = _float_tuple(
+        expected_q_start,
+        name="expected_q_start",
+    )
+    if not _q_close(
+        payload.get("q_meas"),
+        list(expected_q_start_tuple),
+        max_error_rad=float(max_start_error_rad),
+    ):
+        raise RuntimeSessionError(
+            "current q_meas is not close to expected start pose",
+            payload,
+        )
+
+    now_s = time.time()
+    updated = dict(payload)
+    updated["status"] = "ok"
+    updated["mode"] = str(mode)
+    updated["owner"] = str(owner)
+    updated["owner_lease"] = {
+        "schema": "armctrl.arm_runtime_owner_lease.v1",
+        "runtime_session_id": updated.get("runtime_session_id"),
+        "owner": str(owner),
+        "mode": str(mode),
+        "heartbeat_timeout_s": float(heartbeat_timeout_s),
+        "heartbeat_wall_time_s": now_s,
+        "acquired_wall_time_s": now_s,
+        "landing_policy": "watchdog_to_damping_release_to_hold_safe",
+    }
+    updated["heartbeat"] = _heartbeat_status(
+        {"wall_time_s": now_s},
+        max_heartbeat_age_s=float(max_heartbeat_age_s),
+    )
+    updated["readiness"] = runtime_readiness(updated)
+    return updated
+
+
+def release_owner_from_artifact(
+    *,
+    session_artifact_path: Path,
+    owner: str,
+    max_heartbeat_age_s: float,
+) -> dict[str, object]:
+    payload = refresh_runtime_status_payload(
+        _read_json_object(session_artifact_path),
+        max_heartbeat_age_s=float(max_heartbeat_age_s),
+    )
+    if payload.get("owner") != owner:
+        raise RuntimeSessionError(f"runtime is not owned by {owner}", payload)
+    updated = dict(payload)
+    q_meas = list(updated.get("q_meas") or [])
+    now_s = time.time()
+    updated["status"] = "ok"
+    updated["mode"] = ArmRuntimeMode.HOLD_SAFE.value
+    updated["owner"] = None
+    updated["owner_lease"] = None
+    updated["q_hold"] = q_meas
+    updated["heartbeat"] = _heartbeat_status(
+        {"wall_time_s": now_s},
+        max_heartbeat_age_s=float(max_heartbeat_age_s),
+    )
+    updated["readiness"] = runtime_readiness(updated)
+    return updated
+
+
+def watchdog_tick_from_artifact(
+    *,
+    session_artifact_path: Path,
+    max_heartbeat_age_s: float,
+) -> dict[str, object]:
+    payload = refresh_runtime_status_payload(
+        _read_json_object(session_artifact_path),
+        max_heartbeat_age_s=float(max_heartbeat_age_s),
+    )
+    owner_lease = payload.get("owner_lease")
+    if payload.get("owner") is None or not isinstance(owner_lease, dict):
+        return payload
+    heartbeat_wall_time_s = _float_or_none(owner_lease.get("heartbeat_wall_time_s"))
+    heartbeat_timeout_s = _float_or_none(owner_lease.get("heartbeat_timeout_s"))
+    now_s = time.time()
+    if (
+        heartbeat_wall_time_s is None
+        or heartbeat_timeout_s is None
+        or now_s - heartbeat_wall_time_s < heartbeat_timeout_s
+    ):
+        return payload
+
+    updated = dict(payload)
+    owner = updated.get("owner")
+    updated["status"] = "faulted"
+    updated["mode"] = MotionMode.DAMPING.value
+    updated["owner"] = None
+    updated["owner_lease"] = None
+    updated["watchdog"] = {
+        "owner": owner,
+        "landing_mode": MotionMode.DAMPING.value,
+        "reason": "owner_heartbeat_timeout",
+        "heartbeat_age_s": max(0.0, now_s - heartbeat_wall_time_s),
+        "heartbeat_timeout_s": heartbeat_timeout_s,
+    }
+    updated["heartbeat"] = _heartbeat_status(
+        {"wall_time_s": now_s},
+        max_heartbeat_age_s=float(max_heartbeat_age_s),
+    )
+    updated["readiness"] = runtime_readiness(updated)
+    return updated
+
+
 def refresh_runtime_status_payload(
     payload: dict[str, object],
     *,
@@ -140,7 +279,8 @@ def runtime_readiness(payload: dict[str, object]) -> dict[str, object]:
 
 
 def runtime_status_prerequisite_status(payload: dict[str, object]) -> str:
-    return "pass" if runtime_readiness(payload)["agent_sysid_smoke_allowed"] is True else "fail"
+    readiness = runtime_readiness(payload)
+    return "pass" if readiness["agent_sysid_smoke_allowed"] is True else "fail"
 
 
 def runtime_status_summary(payload: dict[str, object]) -> dict[str, object]:
@@ -249,6 +389,13 @@ def _float_tuple(values: Sequence[float], *, name: str) -> tuple[float, ...]:
     if not result:
         raise ValueError(f"{name} must not be empty")
     return result
+
+
+def _float_or_none(value: object) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _read_json_object(path: Path) -> dict[str, object]:

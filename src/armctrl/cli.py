@@ -32,9 +32,13 @@ from armctrl.recipe_runtime import (
     RecipeRuntimeSmoker,
 )
 from armctrl.runtime_session import (
+    RuntimeSessionError,
+    acquire_owner_from_artifact,
     refresh_runtime_status_payload,
+    release_owner_from_artifact,
     runtime_status_from_artifact,
     start_fake_runtime_session,
+    watchdog_tick_from_artifact,
 )
 from armctrl.release_status import release_notes, release_status
 from armctrl.lerobot_bridge import (
@@ -182,6 +186,59 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     runtime_status_parser.add_argument("--output")
     runtime_status_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    runtime_acquire_parser = runtime_subparsers.add_parser("acquire-owner")
+    runtime_acquire_parser.add_argument("--session-artifact", required=True)
+    runtime_acquire_parser.add_argument("--owner", required=True)
+    runtime_acquire_parser.add_argument(
+        "--mode",
+        choices=["agent_servo", "trajectory_replay"],
+        required=True,
+    )
+    runtime_acquire_parser.add_argument(
+        "--expected-q-start",
+        nargs="+",
+        type=float,
+        required=True,
+    )
+    runtime_acquire_parser.add_argument(
+        "--max-start-error-rad",
+        type=float,
+        default=0.02,
+    )
+    runtime_acquire_parser.add_argument(
+        "--heartbeat-timeout-s",
+        type=float,
+        default=0.5,
+    )
+    runtime_acquire_parser.add_argument(
+        "--max-heartbeat-age-s",
+        type=float,
+        default=1.0,
+    )
+    runtime_acquire_parser.add_argument("--output")
+    runtime_acquire_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    runtime_release_parser = runtime_subparsers.add_parser("release-owner")
+    runtime_release_parser.add_argument("--session-artifact", required=True)
+    runtime_release_parser.add_argument("--owner", required=True)
+    runtime_release_parser.add_argument(
+        "--max-heartbeat-age-s",
+        type=float,
+        default=1.0,
+    )
+    runtime_release_parser.add_argument("--output")
+    runtime_release_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    runtime_watchdog_parser = runtime_subparsers.add_parser("watchdog-tick")
+    runtime_watchdog_parser.add_argument("--session-artifact", required=True)
+    runtime_watchdog_parser.add_argument(
+        "--max-heartbeat-age-s",
+        type=float,
+        default=1.0,
+    )
+    runtime_watchdog_parser.add_argument("--output")
+    runtime_watchdog_parser.add_argument("--json", action="store_true", dest="as_json")
 
     recipe_parser = subparsers.add_parser("recipe")
     recipe_subparsers = recipe_parser.add_subparsers(dest="recipe_command", required=True)
@@ -1045,6 +1102,69 @@ def main(argv: Sequence[str] | None = None) -> int:
             payload,
             args.output,
             artifact_key="runtime_status",
+        )
+        _emit(payload, as_json=args.as_json)
+        return 0 if payload.get("status") == "ok" else 3
+
+    if args.command == "runtime" and args.runtime_command == "acquire-owner":
+        try:
+            payload = acquire_owner_from_artifact(
+                session_artifact_path=Path(args.session_artifact),
+                owner=args.owner,
+                mode=args.mode,
+                expected_q_start=tuple(args.expected_q_start),
+                max_start_error_rad=args.max_start_error_rad,
+                heartbeat_timeout_s=args.heartbeat_timeout_s,
+                max_heartbeat_age_s=args.max_heartbeat_age_s,
+            )
+        except RuntimeSessionError as error:
+            payload = {
+                **error.payload,
+                "status": "rejected",
+                "schema": "armctrl.arm_runtime_status.v1",
+                "reason": str(error),
+            }
+            _emit(payload, as_json=args.as_json)
+            return 3
+        payload = _attach_output_artifact(
+            payload,
+            args.output,
+            artifact_key="runtime_session",
+        )
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "runtime" and args.runtime_command == "release-owner":
+        try:
+            payload = release_owner_from_artifact(
+                session_artifact_path=Path(args.session_artifact),
+                owner=args.owner,
+                max_heartbeat_age_s=args.max_heartbeat_age_s,
+            )
+        except RuntimeSessionError as error:
+            payload = {
+                **error.payload,
+                "status": "rejected",
+                "schema": "armctrl.arm_runtime_status.v1",
+                "reason": str(error),
+            }
+            _emit(payload, as_json=args.as_json)
+            return 3
+        payload = _attach_output_artifact(
+            payload,
+            args.output,
+            artifact_key="runtime_session",
+        )
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "runtime" and args.runtime_command == "watchdog-tick":
+        payload = watchdog_tick_from_artifact(
+            session_artifact_path=Path(args.session_artifact),
+            max_heartbeat_age_s=args.max_heartbeat_age_s,
+        )
+        payload = _attach_output_artifact(
+            payload,
+            args.output,
+            artifact_key="runtime_session",
         )
         _emit(payload, as_json=args.as_json)
         return 0 if payload.get("status") == "ok" else 3
