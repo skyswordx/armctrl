@@ -4,6 +4,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 from armctrl.motion_runtime import (
     ArmRuntime,
     FakeMotionBackend,
@@ -1108,7 +1110,26 @@ def test_runtime_queue_executes_with_live_arm_runtime(
     assert result is not None
     assert result["status"] == "completed"
     assert result["runtime_session_id"] == session["runtime_session_id"]
+    assert result["timing"]["submitted_wall_time_s"] is not None
+    assert result["timing"]["dequeued_wall_time_s"] >= result["timing"]["submitted_wall_time_s"]
+    assert result["timing"]["owner_acquired_wall_time_s"] >= result["timing"]["dequeued_wall_time_s"]
+    assert result["timing"]["first_send_wall_time_s"] >= result["timing"]["owner_acquired_wall_time_s"]
+    assert result["timing"]["first_send_monotonic_s"] == 0.0
+    assert result["timing"]["completed_wall_time_s"] >= result["timing"]["owner_acquired_wall_time_s"]
+    assert result["timing"]["queue_latency_s"] >= 0.0
+    assert result["timing"]["acquire_latency_s"] >= 0.0
+    assert result["timing"]["first_send_latency_s"] >= 0.0
+    assert result["timing"]["execution_elapsed_s"] == pytest.approx(0.02)
     assert result["artifacts"]["session"] == str(session_artifact)
+    assert result["motion"]["runtime_send_hz"] == 50.0
+    assert result["motion"]["resampling_policy"] == "none_sample_hz_matches_send_hz"
+    assert result["motion"]["interpolation_policy"] == "pre_sampled_joint_positions"
+    assert result["motion"]["send_period_s"]["min"] == pytest.approx(0.02)
+    assert result["motion"]["send_period_s"]["max"] == pytest.approx(0.02)
+    assert result["motion"]["send_period_s"]["avg"] == pytest.approx(0.02)
+    assert result["motion"]["dt_min_s"] == pytest.approx(0.02)
+    assert result["motion"]["dt_max_s"] == pytest.approx(0.02)
+    assert result["motion"]["dt_avg_s"] == pytest.approx(0.02)
     assert updated_session["runtime_session_id"] == session["runtime_session_id"]
     assert updated_session["mode"] == "hold_safe"
     assert updated_session["owner"] is None
@@ -1163,6 +1184,77 @@ def test_runtime_queue_holds_final_command_when_readback_lags(
     assert result["motion"]["samples"][-1]["q_meas"] == [0.0, 0.3, 0.3]
     assert updated_session["q_hold"] == [0.02, 0.3, 0.3]
     assert runtime.status()["q_hold"] == (0.02, 0.3, 0.3)
+
+
+def test_runtime_queue_allows_repeated_trajectory_from_live_hold(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    clock = ManualClock()
+    backend = FakeMotionBackend()
+    backend.send_joint_command(
+        tuple(float(value) for value in session["q_meas"]),
+        producer="test_bootstrap",
+        mode=MotionMode.HOLD,
+        monotonic_s=0.0,
+    )
+    runtime = ArmRuntime(
+        backend=backend,
+        safe_center=tuple(float(value) for value in session["safe_center"]),
+        runtime_session_id=str(session["runtime_session_id"]),
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+    runtime.mark_hold_safe(q_hold=tuple(float(value) for value in session["q_hold"]))
+
+    first_submit = submit_trajectory_command(
+        session_artifact_path=session_artifact,
+        owner="sysid",
+        expected_q_start=(0.0, 0.3, 0.3),
+        q_points=[(0.0, 0.3, 0.3), (0.02, 0.3, 0.3)],
+        send_hz=50.0,
+        max_start_error_rad=0.02,
+        heartbeat_timeout_s=0.5,
+        max_heartbeat_age_s=1.0,
+    )
+    first_result = execute_pending_runtime_commands(
+        session_artifact_path=session_artifact,
+        backend=backend,
+        runtime=runtime,
+        max_heartbeat_age_s=1.0,
+    )
+    first_session = json.loads(session_artifact.read_text(encoding="utf-8"))
+
+    second_submit = submit_trajectory_command(
+        session_artifact_path=session_artifact,
+        owner="sysid",
+        expected_q_start=tuple(first_session["q_hold"]),
+        q_points=[
+            tuple(first_session["q_hold"]),
+            (first_session["q_hold"][0] + 0.01, 0.3, 0.3),
+        ],
+        send_hz=50.0,
+        max_start_error_rad=0.02,
+        heartbeat_timeout_s=0.5,
+        max_heartbeat_age_s=1.0,
+    )
+    second_result = execute_pending_runtime_commands(
+        session_artifact_path=session_artifact,
+        backend=backend,
+        runtime=runtime,
+        max_heartbeat_age_s=1.0,
+    )
+
+    assert first_result is not None
+    assert second_result is not None
+    assert first_result["status"] == "completed"
+    assert second_result["status"] == "completed"
+    assert first_submit["command_id"] != second_submit["command_id"]
+    assert first_session["q_hold"] == [0.02, 0.3, 0.3]
+    assert second_result["motion"]["samples"][0]["q_cmd"] == first_session["q_hold"]
+    assert second_result["motion"]["samples"][-1]["q_cmd"] == [0.03, 0.3, 0.3]
 
 
 def test_runtime_queue_throttles_owner_status_writes(

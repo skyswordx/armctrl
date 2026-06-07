@@ -202,6 +202,8 @@ def execute_pending_runtime_commands(
     running_path.parent.mkdir(parents=True, exist_ok=True)
     command_path.replace(running_path)
     command = _read_json_object(running_path)
+    command["dequeued_wall_time_s"] = time.time()
+    _write_json_atomic(running_path, command)
     result = execute_runtime_command(
         command=command,
         session_artifact_path=session_artifact_path,
@@ -233,6 +235,7 @@ def execute_runtime_command(
     session = _read_json_object(session_artifact_path)
     owner = str(command.get("owner"))
     mode = str(command.get("mode"))
+    owner_acquire_started_wall_time_s = time.time()
     try:
         _ensure_can_queue_command(
             session,
@@ -258,6 +261,7 @@ def execute_runtime_command(
             max_start_error_rad=float(command.get("max_start_error_rad", 0.02)),
             heartbeat_timeout_s=float(command.get("heartbeat_timeout_s", 0.5)),
         )
+        owner_acquired_wall_time_s = time.time()
         session = _session_from_runtime_status(
             session,
             status=live_runtime.status(),
@@ -296,6 +300,14 @@ def execute_runtime_command(
                 max(0.001, float(command.get("heartbeat_timeout_s", 0.5)) / 2.0),
             ),
         )
+        first_send_wall_time_s: float | None = None
+
+        def on_motion_sample(sample: MotionAuditSample) -> None:
+            nonlocal first_send_wall_time_s
+            if first_send_wall_time_s is None:
+                first_send_wall_time_s = time.time()
+            progress(sample)
+
         motion = _execute_motion_command(
             command,
             runtime=live_runtime,
@@ -303,7 +315,7 @@ def execute_runtime_command(
                 session_artifact_path=session_artifact_path,
                 owner=owner,
             ),
-            on_sample=progress,
+            on_sample=on_motion_sample,
         )
         watchdog = _owner_timeout_watchdog(
             session_artifact_path=session_artifact_path,
@@ -326,6 +338,9 @@ def execute_runtime_command(
                 motion=motion,
                 reason="owner_heartbeat_timeout",
                 watchdog=watchdog,
+                owner_acquire_started_wall_time_s=owner_acquire_started_wall_time_s,
+                owner_acquired_wall_time_s=owner_acquired_wall_time_s,
+                first_send_wall_time_s=first_send_wall_time_s,
             )
         if motion.status == "completed":
             status = live_runtime.status()
@@ -349,8 +364,12 @@ def execute_runtime_command(
             landing_mode=motion.landing_mode,
             motion=motion,
             reason=None,
+            owner_acquire_started_wall_time_s=owner_acquire_started_wall_time_s,
+            owner_acquired_wall_time_s=owner_acquired_wall_time_s,
+            first_send_wall_time_s=first_send_wall_time_s,
         )
     except (ArmRuntimeError, RuntimeSessionError, ValueError) as error:
+        rejected_wall_time_s = time.time()
         return {
             "status": "rejected",
             "schema": RUNTIME_COMMAND_RESULT_SCHEMA,
@@ -360,6 +379,31 @@ def execute_runtime_command(
             "movement_command_sent": False,
             "reason": str(error),
             "landing_mode": None,
+            "timing": {
+                "submitted_wall_time_s": _optional_float(
+                    command.get("submitted_wall_time_s")
+                ),
+                "dequeued_wall_time_s": _optional_float(
+                    command.get("dequeued_wall_time_s")
+                ),
+                "owner_acquire_started_wall_time_s": owner_acquire_started_wall_time_s,
+                "owner_acquired_wall_time_s": None,
+                "first_send_wall_time_s": None,
+                "first_send_monotonic_s": None,
+                "last_send_monotonic_s": None,
+                "completed_wall_time_s": rejected_wall_time_s,
+                "queue_latency_s": _duration_s(
+                    _optional_float(command.get("dequeued_wall_time_s")),
+                    _optional_float(command.get("submitted_wall_time_s")),
+                ),
+                "acquire_latency_s": None,
+                "first_send_latency_s": None,
+                "execution_elapsed_s": None,
+                "total_wall_latency_s": _duration_s(
+                    rejected_wall_time_s,
+                    _optional_float(command.get("submitted_wall_time_s")),
+                ),
+            },
         }
 
 
@@ -524,8 +568,21 @@ def _command_result_payload(
     landing_mode: str,
     motion: MotionExecutionResult,
     reason: str | None,
+    owner_acquire_started_wall_time_s: float,
+    owner_acquired_wall_time_s: float,
+    first_send_wall_time_s: float | None,
     watchdog: dict[str, object] | None = None,
 ) -> dict[str, object]:
+    completed_wall_time_s = time.time()
+    timing = _command_timing_summary(
+        command=command,
+        motion=motion,
+        owner_acquire_started_wall_time_s=owner_acquire_started_wall_time_s,
+        owner_acquired_wall_time_s=owner_acquired_wall_time_s,
+        first_send_wall_time_s=first_send_wall_time_s,
+        completed_wall_time_s=completed_wall_time_s,
+    )
+    send_period = _send_period_summary(motion.samples)
     payload = {
         "status": status,
         "schema": RUNTIME_COMMAND_RESULT_SCHEMA,
@@ -536,6 +593,7 @@ def _command_result_payload(
         "movement_command_sent": bool(motion.samples),
         "landing_mode": landing_mode,
         "reason": reason,
+        "timing": timing,
         "artifacts": {
             "session": str(session_artifact_path),
             "result": str(command.get("result_artifact") or ""),
@@ -545,9 +603,20 @@ def _command_result_payload(
             "producer": motion.producer,
             "mode": motion.mode,
             "trajectory_sample_hz": motion.trajectory_sample_hz,
+            "runtime_send_hz": motion.trajectory_sample_hz,
+            "resampling_policy": "none_sample_hz_matches_send_hz",
+            "interpolation_policy": (
+                "pre_sampled_joint_positions"
+                if command.get("kind") == "trajectory"
+                else "linear_intent_frame"
+            ),
             "actual_send_hz": motion.actual_send_hz,
             "send_jitter_ms_p95": motion.send_jitter_ms_p95,
             "send_jitter_ms_p99": motion.send_jitter_ms_p99,
+            "send_period_s": send_period,
+            "dt_min_s": send_period["min"],
+            "dt_max_s": send_period["max"],
+            "dt_avg_s": send_period["avg"],
             "controller_dt_s": motion.controller_dt_s,
             "sample_count": len(motion.samples),
             "samples": [_motion_sample_manifest(sample) for sample in motion.samples],
@@ -558,6 +627,79 @@ def _command_result_payload(
     if watchdog is not None:
         payload["watchdog"] = watchdog
     return payload
+
+
+def _command_timing_summary(
+    *,
+    command: dict[str, object],
+    motion: MotionExecutionResult,
+    owner_acquire_started_wall_time_s: float,
+    owner_acquired_wall_time_s: float,
+    first_send_wall_time_s: float | None,
+    completed_wall_time_s: float,
+) -> dict[str, object]:
+    submitted_wall_time_s = _optional_float(command.get("submitted_wall_time_s"))
+    dequeued_wall_time_s = _optional_float(command.get("dequeued_wall_time_s"))
+    first_send_monotonic_s = (
+        motion.samples[0].sent_monotonic_s if motion.samples else None
+    )
+    last_send_monotonic_s = (
+        motion.samples[-1].sent_monotonic_s if motion.samples else None
+    )
+    execution_elapsed_s = (
+        last_send_monotonic_s - first_send_monotonic_s
+        if first_send_monotonic_s is not None and last_send_monotonic_s is not None
+        else None
+    )
+    return {
+        "submitted_wall_time_s": submitted_wall_time_s,
+        "dequeued_wall_time_s": dequeued_wall_time_s,
+        "owner_acquire_started_wall_time_s": owner_acquire_started_wall_time_s,
+        "owner_acquired_wall_time_s": owner_acquired_wall_time_s,
+        "first_send_wall_time_s": first_send_wall_time_s,
+        "first_send_monotonic_s": first_send_monotonic_s,
+        "last_send_monotonic_s": last_send_monotonic_s,
+        "completed_wall_time_s": completed_wall_time_s,
+        "queue_latency_s": _duration_s(dequeued_wall_time_s, submitted_wall_time_s),
+        "acquire_latency_s": _duration_s(
+            owner_acquired_wall_time_s,
+            dequeued_wall_time_s,
+        ),
+        "first_send_latency_s": _duration_s(
+            first_send_wall_time_s,
+            owner_acquired_wall_time_s,
+        ),
+        "execution_elapsed_s": execution_elapsed_s,
+        "total_wall_latency_s": _duration_s(completed_wall_time_s, submitted_wall_time_s),
+    }
+
+
+def _send_period_summary(samples: Sequence[MotionAuditSample]) -> dict[str, object]:
+    if len(samples) < 2:
+        return {"min": None, "max": None, "avg": None, "count": 0}
+    periods = [
+        right.sent_monotonic_s - left.sent_monotonic_s
+        for left, right in zip(samples, samples[1:])
+    ]
+    return {
+        "min": min(periods),
+        "max": max(periods),
+        "avg": sum(periods) / len(periods),
+        "count": len(periods),
+    }
+
+
+def _optional_float(value: object) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _duration_s(later: float | None, earlier: float | None) -> float | None:
+    if later is None or earlier is None:
+        return None
+    return max(0.0, later - earlier)
 
 
 def _motion_sample_manifest(sample: MotionAuditSample) -> dict[str, object]:
