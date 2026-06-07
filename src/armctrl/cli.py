@@ -10,6 +10,7 @@ from typing import Callable, Sequence
 
 from armctrl.acceptance import build_real_motion_acceptance
 from armctrl.agent_flow import (
+    AGENT_FLOW_REAL_RUNTIME_CONFIRMATION,
     AgentFlowDoctor,
     AgentFlowPlanRequest,
     AgentFlowPlanner,
@@ -550,6 +551,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=float,
         default=0.005,
     )
+    agent_flow_real_runtime_smoke_parser.add_argument("--runtime-session-artifact")
     agent_flow_real_runtime_smoke_parser.add_argument("--confirm", required=True)
     agent_flow_real_runtime_smoke_parser.add_argument("--output")
     agent_flow_real_runtime_smoke_parser.add_argument(
@@ -1734,6 +1736,83 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "agent-flow" and args.agent_flow_command == "runtime-smoke-real":
         if len(args.q_start) != len(args.q_target):
             parser.error("--q-start and --q-target must have the same length")
+        if args.confirm != AGENT_FLOW_REAL_RUNTIME_CONFIRMATION:
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.agent_flow_runtime_smoke_real.v1",
+                "movement_allowed": False,
+                "hardware_motion": False,
+                "movement_command_sent": False,
+                "producer": "agent",
+                "backend": "arx5_sdk",
+                "reason": "agent real runtime smoke requires explicit operator confirmation",
+                "requires_confirm": args.confirm,
+                "contract_path": str(args.contract),
+                "readiness_artifact_path": str(args.readiness_artifact),
+                "fault_landing_mode": "damping",
+                "next_gate": (
+                    "provide the exact Agent real runtime confirmation string after "
+                    "all prerequisite gates pass"
+                ),
+            }
+            payload = _attach_output_artifact(payload, args.output)
+            _emit(payload, as_json=args.as_json)
+            return 3
+        if args.runtime_session_artifact is None:
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.agent_flow_runtime_smoke_real.v1",
+                "movement_allowed": False,
+                "hardware_motion": False,
+                "movement_command_sent": False,
+                "producer": "agent",
+                "backend": "arx5_sdk",
+                "reason": (
+                    "real Agent runtime smoke requires --runtime-session-artifact "
+                    "from armctrl runtime start --serve"
+                ),
+                "contract_path": str(args.contract),
+                "readiness_artifact_path": str(args.readiness_artifact),
+                "runtime": {
+                    "single_owner_runtime_session": True,
+                    "runtime_session_artifact": None,
+                    "owner": None,
+                },
+                "fault_landing_mode": "damping",
+                "next_gate": (
+                    "start live arm runtime, recover/hold SAFE_CENTER, then attach "
+                    "Agent owner lease"
+                ),
+            }
+            payload = _attach_output_artifact(payload, args.output)
+            _emit(payload, as_json=args.as_json)
+            return 3
+        payload = {
+            "status": "blocked",
+            "schema": "armctrl.agent_flow_runtime_smoke_real.v1",
+            "movement_allowed": False,
+            "hardware_motion": False,
+            "movement_command_sent": False,
+            "producer": "agent",
+            "backend": "arx5_sdk",
+            "reason": (
+                "real Agent execution must be submitted through live MotionRuntime "
+                "IPC; direct SDK execution is disabled"
+            ),
+            "contract_path": str(args.contract),
+            "readiness_artifact_path": str(args.readiness_artifact),
+            "runtime": {
+                "single_owner_runtime_session": True,
+                "runtime_session_artifact": str(args.runtime_session_artifact),
+                "owner": "agent",
+                "mode": "agent_servo",
+            },
+            "fault_landing_mode": "damping",
+            "next_gate": "implement live MotionRuntime command queue for Agent owner execution",
+        }
+        payload = _attach_output_artifact(payload, args.output)
+        _emit(payload, as_json=args.as_json)
+        return 3
         request = AgentFlowRealRuntimeSmokeRequest(
             contract_path=Path(args.contract),
             readiness_artifact_path=Path(args.readiness_artifact),
@@ -2625,6 +2704,57 @@ def main(argv: Sequence[str] | None = None) -> int:
             q_center = tuple(args.q_center or [0.0] * args.dof)
             if len(q_center) != args.dof:
                 parser.error("--q-center length must match --dof")
+            if args.runtime_session_artifact is None:
+                payload = {
+                    "status": "rejected",
+                    "schema": "armctrl.sysid_run.v1",
+                    "adapter": args.adapter,
+                    "reason": (
+                        "sdk sysid runner requires --runtime-session-artifact "
+                        "from armctrl runtime start --serve"
+                    ),
+                    "movement_allowed": False,
+                    "hardware_motion": False,
+                    "movement_command_sent": False,
+                    "runtime": {
+                        "single_owner_runtime_session": True,
+                        "runtime_session_artifact": None,
+                        "owner": None,
+                    },
+                    "fault_landing_mode": "damping",
+                    "recording_starts_after_safe_state": True,
+                    "next_gate": (
+                        "start live arm runtime, recover/hold SAFE_CENTER, then "
+                        "attach SysID owner lease"
+                    ),
+                }
+                payload = _attach_sysid_run_manifest(payload, args.output)
+                _emit(payload, as_json=args.as_json)
+                return 3
+            payload = {
+                "status": "blocked",
+                "schema": "armctrl.sysid_run.v1",
+                "adapter": args.adapter,
+                "reason": (
+                    "sdk sysid execution must be submitted through live MotionRuntime "
+                    "IPC; direct SDK collection is disabled"
+                ),
+                "movement_allowed": False,
+                "hardware_motion": False,
+                "movement_command_sent": False,
+                "runtime": {
+                    "single_owner_runtime_session": True,
+                    "runtime_session_artifact": str(args.runtime_session_artifact),
+                    "owner": "sysid",
+                    "mode": "trajectory_replay",
+                },
+                "fault_landing_mode": "damping",
+                "recording_starts_after_safe_state": True,
+                "next_gate": "implement live MotionRuntime command queue for SysID trajectory execution",
+            }
+            payload = _attach_sysid_run_manifest(payload, args.output)
+            _emit(payload, as_json=args.as_json)
+            return 3
             request = SysIdPlanRequest(
                 profile_name=args.profile,
                 dof=args.dof,

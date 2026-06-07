@@ -660,10 +660,10 @@ def test_cli_agent_flow_runtime_smoke_fake_writes_rejected_artifact_for_unsafe_d
     assert saved == payload
 
 
-def test_agent_flow_real_runtime_smoke_refuses_without_readiness(
+def test_agent_flow_real_runtime_smoke_requires_live_runtime_artifact(
     tmp_path: Path,
 ) -> None:
-    output_dir = tmp_path / "agent-flow-real-refuse"
+    output_dir = tmp_path / "agent-flow-real-requires-runtime"
     readiness_artifact = tmp_path / "readiness.json"
     subprocess.run(
         [
@@ -700,19 +700,19 @@ def test_agent_flow_real_runtime_smoke_refuses_without_readiness(
         json.dumps(
             {
                 "schema": "armctrl.sysid_agent_smoke_readiness.v1",
-                "agent_sysid_smoke_allowed": False,
-                "prerequisites": {"tiny_motion": "fail"},
+                "agent_sysid_smoke_allowed": True,
+                "prerequisites": {"tiny_motion": "pass"},
             }
         ),
         encoding="utf-8",
     )
 
-    def forbidden_backend_factory(*, model: str, interface: str):
-        raise AssertionError("backend must not be opened before readiness passes")
+    def forbidden_backend_factory(**kwargs):
+        raise AssertionError("backend must not be opened without live runtime")
 
     smoker = AgentFlowRealRuntimeSmoker(backend_factory=forbidden_backend_factory)
 
-    with pytest.raises(RuntimeError, match="readiness"):
+    with pytest.raises(RuntimeError, match="live runtime session artifact"):
         smoker.run(
             AgentFlowRealRuntimeSmokeRequest(
                 contract_path=output_dir / "agent_flow_plan.json",
@@ -726,13 +726,12 @@ def test_agent_flow_real_runtime_smoke_refuses_without_readiness(
         )
 
 
-def test_agent_flow_real_runtime_smoke_executes_checked_intent_via_motion_runtime(
+def test_agent_flow_real_runtime_smoke_blocks_direct_sdk_execution_with_runtime(
     tmp_path: Path,
 ) -> None:
-    output_dir = tmp_path / "agent-flow-real"
+    output_dir = tmp_path / "agent-flow-real-blocked"
     readiness_artifact = tmp_path / "readiness.json"
-    clock = ManualClock()
-    backend = FakeArx5AgentBackend()
+    runtime_session = tmp_path / "runtime-session.json"
     subprocess.run(
         [
             sys.executable,
@@ -786,291 +785,25 @@ def test_agent_flow_real_runtime_smoke_executes_checked_intent_via_motion_runtim
         ),
         encoding="utf-8",
     )
-    backend_kwargs: list[dict[str, object]] = []
 
-    def backend_factory(*, model, interface, controller_dt_s=None):
-        backend_kwargs.append(
-            {
-                "model": model,
-                "interface": interface,
-                "controller_dt_s": controller_dt_s,
-            }
+    def forbidden_backend_factory(**kwargs):
+        raise AssertionError("direct SDK backend must stay disabled")
+
+    smoker = AgentFlowRealRuntimeSmoker(backend_factory=forbidden_backend_factory)
+
+    with pytest.raises(RuntimeError, match="live MotionRuntime IPC"):
+        smoker.run(
+            AgentFlowRealRuntimeSmokeRequest(
+                contract_path=output_dir / "agent_flow_plan.json",
+                readiness_artifact_path=readiness_artifact,
+                model="X5",
+                interface="can0",
+                q_start=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
+                q_target=(0.0, 0.302, 0.3, 0.0, 0.0, 0.0),
+                confirm=AGENT_FLOW_REAL_RUNTIME_CONFIRMATION,
+                runtime_session_artifact_path=runtime_session,
+            )
         )
-        backend.controller_dt_s = controller_dt_s
-        return backend
-
-    smoker = AgentFlowRealRuntimeSmoker(
-        backend_factory=backend_factory,
-        monotonic=clock.monotonic,
-        sleep=clock.sleep,
-    )
-
-    payload = smoker.run(
-        AgentFlowRealRuntimeSmokeRequest(
-            contract_path=output_dir / "agent_flow_plan.json",
-            readiness_artifact_path=readiness_artifact,
-            model="X5",
-            interface="can0",
-            q_start=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
-            q_target=(0.0, 0.302, 0.3, 0.0, 0.0, 0.0),
-            confirm=AGENT_FLOW_REAL_RUNTIME_CONFIRMATION,
-        )
-    )
-
-    assert payload["schema"] == "armctrl.agent_flow_runtime_smoke_real.v1"
-    assert payload["hardware_motion"] is True
-    assert payload["movement_command_sent"] is True
-    assert payload["readiness"]["agent_sysid_smoke_allowed"] is True
-    assert payload["readiness"]["tiny_motion"]["tracking"] == {
-        "q_cmd_delta_max_abs_rad": 0.002,
-        "q_meas_delta_max_abs_rad": 0.002,
-        "final_tracking_error_max_abs_rad": 0.0,
-    }
-    assert payload["runtime"]["backend"] == "arx5_sdk"
-    assert payload["motion_runtime"]["mode"] == "agent_servo"
-    assert backend_kwargs == [
-        {"model": "X5", "interface": "can0", "controller_dt_s": 0.002}
-    ]
-    assert payload["motion_runtime"]["controller_dt_s"] == 0.002
-    assert payload["frequency_contract"] == {
-        "schema": "armctrl.agent_frequency_contract.v1",
-        "agent_intent_hz": 10.0,
-        "agent_control_period_s": 0.1,
-        "preview_sample_hz": 50.0,
-        "backend_send_hz": 50.0,
-        "motion_runtime_trajectory_sample_hz": 50.0,
-        "actual_send_hz": 50.0,
-        "interpolation_owner": "motion_runtime",
-        "controller_dt_s": 0.002,
-        "missed_intent_timeout_s": 0.3,
-        "missed_intent_landing_mode": "hold",
-        "fault_timeout_s": 1.0,
-        "fault_landing_mode": "damping",
-        "missed_intent_exercised_in_this_run": False,
-    }
-    assert payload["watchdog"]["policy"] == {
-        "missed_intent_timeout_s": 0.3,
-        "missed_intent_landing_mode": "hold",
-        "fault_timeout_s": 1.0,
-        "fault_landing_mode": "damping",
-        "missed_intent_exercised_in_this_run": False,
-    }
-    assert payload["motion_runtime"]["landing_mode"] == "hold"
-    assert payload["motion_runtime"]["sample_count"] == 6
-    assert payload["motion_runtime"]["tracking"]["q_cmd_delta_max_abs_rad"] == (
-        0.0020000000000000018
-    )
-    assert payload["motion_runtime"]["tracking"]["q_meas_delta_max_abs_rad"] == (
-        0.0020000000000000018
-    )
-    assert payload["motion_runtime"]["tracking"]["final_tracking_error_max_abs_rad"] == 0.0
-    assert payload["acceptance"]["schema"] == "armctrl.real_motion_acceptance.v1"
-    assert payload["acceptance"]["stage"] == "agent_smoke"
-    assert payload["acceptance"]["status"] == "pass"
-    assert payload["acceptance"]["next_gate"] == "sysid_smoke"
-    assert payload["acceptance"]["checks"]["readiness_gate"]["status"] == "pass"
-    assert payload["acceptance"]["checks"]["controller_dt_measured"]["status"] == "pass"
-    assert (
-        payload["acceptance"]["checks"]["q_meas_responded_to_commanded_motion"]["status"]
-        == "pass"
-    )
-    assert payload["acceptance"]["checks"]["no_fault_flags"]["status"] == "pass"
-    assert payload["motion_runtime"]["samples"][-1]["q_cmd"] == [
-        0.0,
-        0.302,
-        0.3,
-        0.0,
-        0.0,
-        0.0,
-    ]
-    assert backend.enter_hold_or_damping_count == 1
-    assert backend.hold_count == 1
-
-
-def test_agent_flow_real_runtime_smoke_records_faulted_motion_runtime_result(
-    tmp_path: Path,
-) -> None:
-    output_dir = tmp_path / "agent-flow-real-faulted"
-    readiness_artifact = tmp_path / "readiness.json"
-    clock = ManualClock()
-    backend = FaultingArx5AgentBackend(fault_on_read=2)
-    subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "armctrl.cli",
-            "agent-flow",
-            "plan",
-            "--preset",
-            "home",
-            "--eef-mode",
-            "pose_delta",
-            "--backend",
-            "sdk_cartesian",
-            "--delta-position",
-            "0.002",
-            "0.000",
-            "-0.003",
-            "--delta-rpy",
-            "0.0",
-            "0.0",
-            "0.02",
-            "--control-period-s",
-            "0.1",
-            "--output",
-            str(output_dir),
-            "--json",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    readiness_artifact.write_text(
-        json.dumps(
-            {
-                "schema": "armctrl.sysid_agent_smoke_readiness.v1",
-                "agent_sysid_smoke_allowed": True,
-                "prerequisites": {
-                    "doctor": "pass",
-                    "hold_damping": "pass",
-                    "tiny_motion": "pass",
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    smoker = AgentFlowRealRuntimeSmoker(
-        backend_factory=lambda **kwargs: backend,
-        monotonic=clock.monotonic,
-        sleep=clock.sleep,
-    )
-
-    payload = smoker.run(
-        AgentFlowRealRuntimeSmokeRequest(
-            contract_path=output_dir / "agent_flow_plan.json",
-            readiness_artifact_path=readiness_artifact,
-            model="X5",
-            interface="can0",
-            q_start=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
-            q_target=(0.0, 0.302, 0.3, 0.0, 0.0, 0.0),
-            confirm=AGENT_FLOW_REAL_RUNTIME_CONFIRMATION,
-        )
-    )
-
-    assert payload["schema"] == "armctrl.agent_flow_runtime_smoke_real.v1"
-    assert payload["run_status"] == "faulted"
-    assert payload["hardware_motion"] is True
-    assert payload["movement_command_sent"] is True
-    assert payload["motion_runtime"]["status"] == "faulted"
-    assert payload["motion_runtime"]["landing_mode"] == "damping"
-    assert payload["motion_runtime"]["sample_count"] == 2
-    assert payload["motion_runtime"]["fault_flags"] == ["over_current"]
-    assert payload["acceptance"]["status"] == "review_required"
-    assert payload["acceptance"]["checks"]["runtime_completed"]["status"] == "fail"
-    assert payload["acceptance"]["checks"]["no_fault_flags"] == {
-        "status": "fail",
-        "fault_flags": ["over_current"],
-    }
-    assert payload["acceptance"]["next_gate"] == (
-        "inspect_acceptance_checks_before_next_hardware_gate"
-    )
-    assert payload["fault_landing_mode"] == "damping"
-    assert backend.enter_hold_or_damping_count == 1
-    assert backend.hold_count == 0
-    assert backend.damping_count == 1
-
-
-def test_agent_flow_real_runtime_smoke_records_aborted_motion_runtime_error(
-    tmp_path: Path,
-) -> None:
-    output_dir = tmp_path / "agent-flow-real-aborted"
-    readiness_artifact = tmp_path / "readiness.json"
-    clock = ManualClock()
-    backend = AbortingArx5AgentBackend(abort_on_send=2)
-    subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "armctrl.cli",
-            "agent-flow",
-            "plan",
-            "--preset",
-            "home",
-            "--eef-mode",
-            "pose_delta",
-            "--backend",
-            "sdk_cartesian",
-            "--delta-position",
-            "0.002",
-            "0.000",
-            "-0.003",
-            "--delta-rpy",
-            "0.0",
-            "0.0",
-            "0.02",
-            "--control-period-s",
-            "0.1",
-            "--output",
-            str(output_dir),
-            "--json",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    readiness_artifact.write_text(
-        json.dumps(
-            {
-                "schema": "armctrl.sysid_agent_smoke_readiness.v1",
-                "agent_sysid_smoke_allowed": True,
-                "prerequisites": {
-                    "doctor": "pass",
-                    "hold_damping": "pass",
-                    "tiny_motion": "pass",
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    smoker = AgentFlowRealRuntimeSmoker(
-        backend_factory=lambda **kwargs: backend,
-        monotonic=clock.monotonic,
-        sleep=clock.sleep,
-    )
-
-    payload = smoker.run(
-        AgentFlowRealRuntimeSmokeRequest(
-            contract_path=output_dir / "agent_flow_plan.json",
-            readiness_artifact_path=readiness_artifact,
-            model="X5",
-            interface="can0",
-            q_start=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
-            q_target=(0.0, 0.302, 0.3, 0.0, 0.0, 0.0),
-            confirm=AGENT_FLOW_REAL_RUNTIME_CONFIRMATION,
-        )
-    )
-
-    assert payload["schema"] == "armctrl.agent_flow_runtime_smoke_real.v1"
-    assert payload["run_status"] == "aborted"
-    assert payload["hardware_motion"] is True
-    assert payload["movement_command_sent"] is True
-    assert payload["motion_runtime"]["status"] == "aborted"
-    assert payload["motion_runtime"]["landing_mode"] == "damping"
-    assert payload["motion_runtime"]["sample_count"] == 1
-    assert payload["motion_runtime"]["error"] == {
-        "type": "RuntimeError",
-        "message": "simulated SDK send failure",
-    }
-    assert payload["acceptance"]["status"] == "review_required"
-    assert payload["acceptance"]["checks"]["runtime_completed"]["status"] == "fail"
-    assert payload["acceptance"]["checks"]["movement_command_sent"]["status"] == "pass"
-    assert payload["acceptance"]["next_gate"] == (
-        "inspect_acceptance_checks_before_next_hardware_gate"
-    )
-    assert payload["fault_landing_mode"] == "damping"
-    assert backend.enter_hold_or_damping_count == 1
-    assert backend.hold_count == 0
-    assert backend.damping_count == 1
 
 
 def test_cli_agent_flow_runtime_smoke_real_routes_to_gated_smoker(
@@ -1082,6 +815,7 @@ def test_cli_agent_flow_runtime_smoke_real_routes_to_gated_smoker(
 
     contract_path = tmp_path / "agent_flow_plan.json"
     readiness_artifact = tmp_path / "readiness.json"
+    runtime_session = tmp_path / "runtime-session.json"
     output_artifact = tmp_path / "agent_real_smoke.json"
     contract_path.write_text(
         json.dumps({"schema": "armctrl.agent_flow_plan.v1"}),
@@ -1101,14 +835,87 @@ def test_cli_agent_flow_runtime_smoke_real_routes_to_gated_smoker(
     class StubRealRuntimeSmoker:
         def run(self, request: AgentFlowRealRuntimeSmokeRequest) -> dict[str, object]:
             calls.append(request)
-            return {
-                "schema": "armctrl.agent_flow_runtime_smoke_real.v1",
-                "hardware_motion": True,
-                "movement_command_sent": True,
-                "runtime": {"backend": "arx5_sdk"},
-            }
+            raise AssertionError("real Agent smoke must not bypass live runtime IPC")
 
     monkeypatch.setattr(cli, "AgentFlowRealRuntimeSmoker", StubRealRuntimeSmoker)
+
+    exit_code = cli.main(
+        [
+            "agent-flow",
+            "runtime-smoke-real",
+            "--contract",
+            str(contract_path),
+            "--readiness-artifact",
+            str(readiness_artifact),
+            "--model",
+            "X5",
+            "--interface",
+            "can0",
+            "--q-start",
+            "0",
+            "0.3",
+            "--q-target",
+            "0",
+            "0.302",
+            "--confirm",
+            AGENT_FLOW_REAL_RUNTIME_CONFIRMATION,
+            "--runtime-session-artifact",
+            str(runtime_session),
+            "--output",
+            str(output_artifact),
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 3
+    assert calls == []
+    assert payload["status"] == "blocked"
+    assert payload["schema"] == "armctrl.agent_flow_runtime_smoke_real.v1"
+    assert payload["hardware_motion"] is False
+    assert payload["movement_command_sent"] is False
+    assert payload["runtime"]["single_owner_runtime_session"] is True
+    assert payload["runtime"]["runtime_session_artifact"] == str(runtime_session)
+    assert payload["reason"] == (
+        "real Agent execution must be submitted through live MotionRuntime IPC; "
+        "direct SDK execution is disabled"
+    )
+    assert payload["artifacts"]["runtime_log"] == str(output_artifact)
+
+    saved_payload = json.loads(output_artifact.read_text(encoding="utf-8"))
+    assert saved_payload == payload
+
+
+def test_cli_agent_flow_runtime_smoke_real_requires_runtime_session_artifact(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    from armctrl import cli
+
+    contract_path = tmp_path / "agent_flow_plan.json"
+    readiness_artifact = tmp_path / "readiness.json"
+    output_artifact = tmp_path / "agent_real_smoke_requires_runtime.json"
+    contract_path.write_text(
+        json.dumps({"schema": "armctrl.agent_flow_plan.v1"}),
+        encoding="utf-8",
+    )
+    readiness_artifact.write_text(
+        json.dumps(
+            {
+                "schema": "armctrl.sysid_agent_smoke_readiness.v1",
+                "agent_sysid_smoke_allowed": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class ForbiddenRealRuntimeSmoker:
+        def run(self, request: AgentFlowRealRuntimeSmokeRequest) -> dict[str, object]:
+            raise AssertionError("real Agent smoke must not open SDK without runtime")
+
+    monkeypatch.setattr(cli, "AgentFlowRealRuntimeSmoker", ForbiddenRealRuntimeSmoker)
 
     exit_code = cli.main(
         [
@@ -1138,21 +945,22 @@ def test_cli_agent_flow_runtime_smoke_real_routes_to_gated_smoker(
 
     payload = json.loads(capsys.readouterr().out)
 
-    assert exit_code == 0
-    assert len(calls) == 1
-    assert calls[0].contract_path == contract_path
-    assert calls[0].readiness_artifact_path == readiness_artifact
-    assert calls[0].model == "X5"
-    assert calls[0].interface == "can0"
-    assert calls[0].q_start == (0.0, 0.3)
-    assert calls[0].q_target == (0.0, 0.302)
-    assert calls[0].confirm == AGENT_FLOW_REAL_RUNTIME_CONFIRMATION
-    assert payload["status"] == "ok"
+    assert exit_code == 3
+    assert payload["status"] == "rejected"
     assert payload["schema"] == "armctrl.agent_flow_runtime_smoke_real.v1"
+    assert payload["hardware_motion"] is False
+    assert payload["movement_command_sent"] is False
+    assert payload["reason"] == (
+        "real Agent runtime smoke requires --runtime-session-artifact from "
+        "armctrl runtime start --serve"
+    )
+    assert payload["runtime"]["single_owner_runtime_session"] is True
+    assert payload["runtime"]["runtime_session_artifact"] is None
+    assert payload["next_gate"] == (
+        "start live arm runtime, recover/hold SAFE_CENTER, then attach Agent owner lease"
+    )
     assert payload["artifacts"]["runtime_log"] == str(output_artifact)
-
-    saved_payload = json.loads(output_artifact.read_text(encoding="utf-8"))
-    assert saved_payload == payload
+    assert json.loads(output_artifact.read_text(encoding="utf-8")) == payload
 
 
 def test_cli_agent_flow_runtime_smoke_real_returns_nonzero_for_faulted_result(
@@ -1231,11 +1039,14 @@ def test_cli_agent_flow_runtime_smoke_real_returns_nonzero_for_faulted_result(
     payload = json.loads(capsys.readouterr().out)
 
     assert exit_code == 3
-    assert payload["status"] == "faulted"
+    assert payload["status"] == "rejected"
     assert payload["schema"] == "armctrl.agent_flow_runtime_smoke_real.v1"
-    assert payload["run_status"] == "faulted"
-    assert payload["motion_runtime"]["landing_mode"] == "damping"
-    assert payload["acceptance"]["status"] == "review_required"
+    assert payload["hardware_motion"] is False
+    assert payload["movement_command_sent"] is False
+    assert payload["reason"] == (
+        "real Agent runtime smoke requires --runtime-session-artifact from "
+        "armctrl runtime start --serve"
+    )
     assert payload["artifacts"]["runtime_log"] == str(output_artifact)
 
     saved_payload = json.loads(output_artifact.read_text(encoding="utf-8"))
@@ -1328,18 +1139,14 @@ def test_cli_agent_flow_runtime_smoke_real_returns_nonzero_for_aborted_result(
     payload = json.loads(capsys.readouterr().out)
 
     assert exit_code == 3
-    assert payload["status"] == "aborted"
+    assert payload["status"] == "rejected"
     assert payload["schema"] == "armctrl.agent_flow_runtime_smoke_real.v1"
-    assert payload["run_status"] == "aborted"
-    assert payload["motion_runtime"]["landing_mode"] == "damping"
-    assert payload["motion_runtime"]["error"] == {
-        "type": "RuntimeError",
-        "message": "simulated SDK send failure",
-    }
-    assert payload["frequency_contract"]["schema"] == (
-        "armctrl.agent_frequency_contract.v1"
+    assert payload["hardware_motion"] is False
+    assert payload["movement_command_sent"] is False
+    assert payload["reason"] == (
+        "real Agent runtime smoke requires --runtime-session-artifact from "
+        "armctrl runtime start --serve"
     )
-    assert payload["acceptance"]["status"] == "review_required"
     assert payload["artifacts"]["runtime_log"] == str(output_artifact)
 
     saved_payload = json.loads(output_artifact.read_text(encoding="utf-8"))
@@ -1427,12 +1234,13 @@ def test_cli_agent_flow_runtime_smoke_real_returns_nonzero_for_failed_acceptance
     payload = json.loads(capsys.readouterr().out)
 
     assert exit_code == 3
-    assert payload["status"] == "incomplete"
+    assert payload["status"] == "rejected"
     assert payload["schema"] == "armctrl.agent_flow_runtime_smoke_real.v1"
-    assert payload["run_status"] == "completed"
-    assert payload["acceptance"]["status"] == "incomplete"
-    assert payload["acceptance"]["next_gate"] == (
-        "inspect_acceptance_checks_before_next_hardware_gate"
+    assert payload["hardware_motion"] is False
+    assert payload["movement_command_sent"] is False
+    assert payload["reason"] == (
+        "real Agent runtime smoke requires --runtime-session-artifact from "
+        "armctrl runtime start --serve"
     )
     assert payload["artifacts"]["runtime_log"] == str(output_artifact)
 
@@ -1568,7 +1376,7 @@ def test_cli_agent_flow_runtime_smoke_real_rejects_failed_readiness(
     assert payload["hardware_motion"] is False
     assert payload["movement_command_sent"] is False
     assert payload["next_gate"] == (
-        "complete sdk-agent-sysid-smoke-readiness before Agent real smoke"
+        "start live arm runtime, recover/hold SAFE_CENTER, then attach Agent owner lease"
     )
     assert payload["artifacts"]["runtime_log"] == str(output_artifact)
     assert json.loads(output_artifact.read_text(encoding="utf-8")) == payload

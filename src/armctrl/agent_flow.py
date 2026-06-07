@@ -105,6 +105,7 @@ class AgentFlowRealRuntimeSmokeRequest:
     confirm: str
     send_hz: float = 50.0
     max_joint_delta_rad: float | None = 0.005
+    runtime_session_artifact_path: Path | None = None
 
 
 class AgentFlowPlanner:
@@ -605,6 +606,14 @@ class AgentFlowRealRuntimeSmoker:
             raise PermissionError(
                 "agent real runtime smoke requires explicit operator confirmation"
             )
+        if request.runtime_session_artifact_path is None:
+            raise RuntimeError(
+                "real Agent runtime smoke requires live runtime session artifact"
+            )
+        raise RuntimeError(
+            "real Agent runtime execution must be submitted through live "
+            "MotionRuntime IPC; direct SDK execution is disabled"
+        )
         contract = json.loads(request.contract_path.read_text(encoding="utf-8"))
         if contract.get("schema") != "armctrl.agent_flow_plan.v1":
             raise ValueError(

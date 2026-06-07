@@ -457,6 +457,80 @@ def test_cli_sysid_run_sdk_requires_smoke_readiness_after_confirm(
     assert json.loads(manifest_path.read_text(encoding="utf-8")) == payload
 
 
+def test_cli_sysid_run_sdk_requires_runtime_session_after_readiness(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    from armctrl import cli
+
+    output_dir = tmp_path / "ident-run"
+    readiness_artifact = tmp_path / "readiness.json"
+    readiness_artifact.write_text(
+        json.dumps(_passing_readiness_artifact()),
+        encoding="utf-8",
+    )
+
+    class ForbiddenArx5Backend:
+        def __init__(self, *args, **kwargs) -> None:
+            raise AssertionError("sdk sysid must not open SDK without runtime")
+
+    monkeypatch.setattr(cli, "Arx5InterfaceCollectionBackend", ForbiddenArx5Backend)
+
+    exit_code = cli.main(
+        [
+            "sysid",
+            "run",
+            "gravity_sweep",
+            "--adapter",
+            "sdk",
+            "--dof",
+            "6",
+            "--sample-hz",
+            "20",
+            "--duration",
+            "2",
+            "--amplitude",
+            "0.1",
+            "--q-center",
+            "0",
+            "0.3",
+            "0.3",
+            "0",
+            "0",
+            "0",
+            "--readiness-artifact",
+            str(readiness_artifact),
+            "--confirm",
+            SDK_CONFIRMATION,
+            "--output",
+            str(output_dir),
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 3
+    assert payload["status"] == "rejected"
+    assert payload["schema"] == "armctrl.sysid_run.v1"
+    assert payload["adapter"] == "sdk"
+    assert payload["reason"] == (
+        "sdk sysid runner requires --runtime-session-artifact from "
+        "armctrl runtime start --serve"
+    )
+    assert payload["runtime"]["single_owner_runtime_session"] is True
+    assert payload["runtime"]["runtime_session_artifact"] is None
+    assert payload["movement_allowed"] is False
+    assert payload["fault_landing_mode"] == "damping"
+    assert payload["next_gate"] == (
+        "start live arm runtime, recover/hold SAFE_CENTER, then attach SysID owner lease"
+    )
+    manifest_path = output_dir / "manifest.json"
+    assert payload["artifacts"]["manifest"] == str(manifest_path)
+    assert json.loads(manifest_path.read_text(encoding="utf-8")) == payload
+
+
 def test_cli_sysid_run_sdk_rejects_failed_smoke_readiness(tmp_path: Path) -> None:
     readiness_artifact = tmp_path / "readiness.json"
     readiness_artifact.write_text(
@@ -511,7 +585,7 @@ def test_cli_sysid_run_sdk_rejects_failed_smoke_readiness(tmp_path: Path) -> Non
     assert json.loads(manifest_path.read_text(encoding="utf-8")) == payload
 
 
-def test_cli_sysid_run_sdk_accepts_confirm_and_readiness_but_rejects_missing_backend(
+def test_cli_sysid_run_sdk_accepts_confirm_and_readiness_but_requires_runtime(
     tmp_path: Path,
 ) -> None:
     readiness_artifact = tmp_path / "readiness.json"
@@ -546,13 +620,16 @@ def test_cli_sysid_run_sdk_accepts_confirm_and_readiness_but_rejects_missing_bac
 
     assert completed.returncode == 3
     assert payload["status"] == "rejected"
-    assert payload["reason"] in {
-        "arx5_interface is not importable in this environment",
-        "planned trajectory did not pass safety checks",
-    }
-    assert payload["confirm_received"] is True
+    assert payload["reason"] == (
+        "sdk sysid runner requires --runtime-session-artifact from "
+        "armctrl runtime start --serve"
+    )
     assert payload["movement_allowed"] is False
-    assert "next_gate" in payload
+    assert payload["runtime"]["single_owner_runtime_session"] is True
+    assert payload["runtime"]["runtime_session_artifact"] is None
+    assert payload["next_gate"] == (
+        "start live arm runtime, recover/hold SAFE_CENTER, then attach SysID owner lease"
+    )
     manifest_path = tmp_path / "ident-run" / "manifest.json"
     assert payload["artifacts"]["manifest"] == str(manifest_path)
     assert json.loads(manifest_path.read_text(encoding="utf-8")) == payload
@@ -727,7 +804,7 @@ def test_sdk_sysid_runner_writes_faulted_manifest_with_partial_samples(
     ]
 
 
-def test_cli_sysid_run_sdk_success_manifest_includes_readiness_tracking(
+def test_cli_sysid_run_sdk_with_runtime_blocks_until_live_queue_exists(
     tmp_path: Path,
     monkeypatch,
     capsys,
@@ -735,36 +812,18 @@ def test_cli_sysid_run_sdk_success_manifest_includes_readiness_tracking(
     from armctrl import cli
 
     readiness_artifact = tmp_path / "readiness.json"
+    runtime_session = tmp_path / "runtime-session.json"
     output_dir = tmp_path / "ident-sdk-cli"
-    backend_kwargs: list[dict[str, object]] = []
     readiness_artifact.write_text(
         json.dumps(_passing_readiness_artifact()),
         encoding="utf-8",
     )
 
-    class RecordingBackendFactory:
+    class ForbiddenBackendFactory:
         def __init__(self, **kwargs) -> None:
-            backend_kwargs.append(kwargs)
-            self._backend = PassingRecordingBackend()
+            raise AssertionError("sdk sysid must not open SDK outside runtime")
 
-        def enter_hold_or_damping(self) -> None:
-            self._backend.enter_hold_or_damping()
-
-        def read_samples(self, request: SysIdPlanRequest) -> list[dict[str, str]]:
-            return self._backend.read_samples(request)
-
-        def enter_damping(self) -> None:
-            self._backend.enter_damping()
-
-        @property
-        def last_motion_result(self):
-            return self._backend.last_motion_result
-
-        @property
-        def last_ramp_result(self):
-            return self._backend.last_ramp_result
-
-    monkeypatch.setattr(cli, "Arx5InterfaceCollectionBackend", RecordingBackendFactory)
+    monkeypatch.setattr(cli, "Arx5InterfaceCollectionBackend", ForbiddenBackendFactory)
 
     exit_code = cli.main(
         [
@@ -794,6 +853,8 @@ def test_cli_sysid_run_sdk_success_manifest_includes_readiness_tracking(
             SDK_CONFIRMATION,
             "--readiness-artifact",
             str(readiness_artifact),
+            "--runtime-session-artifact",
+            str(runtime_session),
             "--json",
         ]
     )
@@ -801,27 +862,25 @@ def test_cli_sysid_run_sdk_success_manifest_includes_readiness_tracking(
     payload = json.loads(capsys.readouterr().out)
     manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
 
-    assert exit_code == 0
-    assert payload["status"] == "ok"
-    assert backend_kwargs[0]["controller_dt_s"] == 0.002
-    assert payload["readiness"]["artifact_path"] == str(readiness_artifact)
-    assert payload["readiness"]["tiny_motion"]["tracking"] == {
-        "q_cmd_delta_max_abs_rad": 0.002,
-        "q_meas_delta_max_abs_rad": 0.002,
-        "final_tracking_error_max_abs_rad": 0.0,
-    }
-    assert manifest["readiness"] == payload["readiness"]
-    assert payload["acceptance"] == manifest["acceptance"]
-    assert payload["acceptance"]["checks"]["readiness_gate"]["status"] == "pass"
-    assert manifest["motion_runtime"]["tracking"]["max_abs_sample_tracking_error_rad"] == (
-        0.0010000000000000009
+    assert exit_code == 3
+    assert payload["status"] == "blocked"
+    assert payload["reason"] == (
+        "sdk sysid execution must be submitted through live MotionRuntime IPC; "
+        "direct SDK collection is disabled"
     )
-    assert manifest["motion_runtime"]["tracking"]["final_tracking_error_max_abs_rad"] == (
-        0.0010000000000000009
+    assert payload["runtime"]["single_owner_runtime_session"] is True
+    assert payload["runtime"]["runtime_session_artifact"] == str(runtime_session)
+    assert payload["runtime"]["owner"] == "sysid"
+    assert payload["runtime"]["mode"] == "trajectory_replay"
+    assert payload["movement_allowed"] is False
+    assert payload["movement_command_sent"] is False
+    assert payload["next_gate"] == (
+        "implement live MotionRuntime command queue for SysID trajectory execution"
     )
+    assert manifest == payload
 
 
-def test_cli_sysid_run_sdk_returns_nonzero_for_failed_acceptance(
+def test_cli_sysid_run_sdk_with_runtime_does_not_report_fake_acceptance(
     tmp_path: Path,
     monkeypatch,
     capsys,
@@ -829,34 +888,18 @@ def test_cli_sysid_run_sdk_returns_nonzero_for_failed_acceptance(
     from armctrl import cli
 
     readiness_artifact = tmp_path / "readiness.json"
+    runtime_session = tmp_path / "runtime-session.json"
     output_dir = tmp_path / "ident-sdk-cli-review-required"
     readiness_artifact.write_text(
         json.dumps(_passing_readiness_artifact()),
         encoding="utf-8",
     )
 
-    class ReviewRequiredBackendFactory:
+    class ForbiddenBackendFactory:
         def __init__(self, **kwargs) -> None:
-            self._backend = RecordingBackend()
+            raise AssertionError("sdk sysid must not open SDK outside runtime")
 
-        def enter_hold_or_damping(self) -> None:
-            self._backend.enter_hold_or_damping()
-
-        def read_samples(self, request: SysIdPlanRequest) -> list[dict[str, str]]:
-            return self._backend.read_samples(request)
-
-        def enter_damping(self) -> None:
-            self._backend.enter_damping()
-
-        @property
-        def last_motion_result(self):
-            return self._backend.last_motion_result
-
-        @property
-        def last_ramp_result(self):
-            return self._backend.last_ramp_result
-
-    monkeypatch.setattr(cli, "Arx5InterfaceCollectionBackend", ReviewRequiredBackendFactory)
+    monkeypatch.setattr(cli, "Arx5InterfaceCollectionBackend", ForbiddenBackendFactory)
 
     exit_code = cli.main(
         [
@@ -886,6 +929,8 @@ def test_cli_sysid_run_sdk_returns_nonzero_for_failed_acceptance(
             SDK_CONFIRMATION,
             "--readiness-artifact",
             str(readiness_artifact),
+            "--runtime-session-artifact",
+            str(runtime_session),
             "--json",
         ]
     )
@@ -894,16 +939,13 @@ def test_cli_sysid_run_sdk_returns_nonzero_for_failed_acceptance(
     manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
 
     assert exit_code == 3
-    assert payload["status"] == "review_required"
-    assert payload["run_status"] == "completed"
-    assert payload["acceptance"]["status"] == "review_required"
-    assert payload["acceptance"] == manifest["acceptance"]
-    assert payload["acceptance"]["next_gate"] == (
-        "inspect_acceptance_checks_before_next_hardware_gate"
-    )
+    assert payload["status"] == "blocked"
+    assert "acceptance" not in payload
+    assert payload["movement_command_sent"] is False
+    assert manifest == payload
 
 
-def test_cli_sysid_run_sdk_returns_nonzero_for_faulted_result(
+def test_cli_sysid_run_sdk_with_runtime_does_not_report_fake_faults(
     tmp_path: Path,
     monkeypatch,
     capsys,
@@ -911,34 +953,18 @@ def test_cli_sysid_run_sdk_returns_nonzero_for_faulted_result(
     from armctrl import cli
 
     readiness_artifact = tmp_path / "readiness.json"
+    runtime_session = tmp_path / "runtime-session.json"
     output_dir = tmp_path / "ident-sdk-cli-faulted"
     readiness_artifact.write_text(
         json.dumps(_passing_readiness_artifact()),
         encoding="utf-8",
     )
 
-    class FaultedBackendFactory:
+    class ForbiddenBackendFactory:
         def __init__(self, **kwargs) -> None:
-            self._backend = FaultedRecordingBackend()
+            raise AssertionError("sdk sysid must not open SDK outside runtime")
 
-        def enter_hold_or_damping(self) -> None:
-            self._backend.enter_hold_or_damping()
-
-        def read_samples(self, request: SysIdPlanRequest) -> list[dict[str, str]]:
-            return self._backend.read_samples(request)
-
-        def enter_damping(self) -> None:
-            self._backend.enter_damping()
-
-        @property
-        def last_motion_result(self):
-            return self._backend.last_motion_result
-
-        @property
-        def last_ramp_result(self):
-            return self._backend.last_ramp_result
-
-    monkeypatch.setattr(cli, "Arx5InterfaceCollectionBackend", FaultedBackendFactory)
+    monkeypatch.setattr(cli, "Arx5InterfaceCollectionBackend", ForbiddenBackendFactory)
 
     exit_code = cli.main(
         [
@@ -968,6 +994,8 @@ def test_cli_sysid_run_sdk_returns_nonzero_for_faulted_result(
             SDK_CONFIRMATION,
             "--readiness-artifact",
             str(readiness_artifact),
+            "--runtime-session-artifact",
+            str(runtime_session),
             "--json",
         ]
     )
@@ -976,14 +1004,11 @@ def test_cli_sysid_run_sdk_returns_nonzero_for_faulted_result(
     manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
 
     assert exit_code == 3
-    assert payload["status"] == "faulted"
-    assert payload["run_status"] == "faulted"
-    assert payload["readiness"]["artifact_path"] == str(readiness_artifact)
-    assert payload["acceptance"]["status"] == "review_required"
-    assert manifest["run_status"] == "faulted"
-    assert manifest["motion_runtime"]["status"] == "faulted"
-    assert manifest["motion_runtime"]["landing_mode"] == "damping"
-    assert payload["acceptance"] == manifest["acceptance"]
+    assert payload["status"] == "blocked"
+    assert "run_status" not in payload
+    assert "motion_runtime" not in payload
+    assert payload["movement_command_sent"] is False
+    assert manifest == payload
 
 
 def test_cli_sysid_postprocess_solve_blocks_faulted_sdk_manifest(
