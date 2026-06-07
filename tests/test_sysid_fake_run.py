@@ -12,7 +12,11 @@ from armctrl.sysid_run import (
     SdkSysIdRunner,
     SDK_CONFIRMATION,
 )
-from armctrl.runtime_session import record_runtime_hold_tick, start_fake_runtime_session
+from armctrl.runtime_session import (
+    record_runtime_hold_tick,
+    refresh_runtime_status_payload,
+    start_fake_runtime_session,
+)
 
 
 def _passing_readiness_artifact() -> dict[str, object]:
@@ -52,6 +56,28 @@ def _write_fake_runtime_session(path: Path) -> None:
         fault_flags=(),
         max_heartbeat_age_s=1.0,
     )
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _write_live_runtime_status(path: Path) -> None:
+    payload = start_fake_runtime_session(
+        q_current=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
+        safe_center=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
+        send_hz=50.0,
+        hold_hz=50.0,
+        max_joint_step_rad=0.01,
+        max_heartbeat_age_s=1.0,
+    )
+    payload = record_runtime_hold_tick(
+        payload,
+        q_meas=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
+        fault_flags=(),
+        max_heartbeat_age_s=1.0,
+    )
+    payload = refresh_runtime_status_payload(payload, max_heartbeat_age_s=1.0)
     path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -842,10 +868,7 @@ def test_cli_sysid_run_sdk_with_runtime_blocks_until_live_queue_exists(
     readiness_artifact = tmp_path / "readiness.json"
     runtime_session = tmp_path / "runtime-session.json"
     output_dir = tmp_path / "ident-sdk-cli"
-    readiness_artifact.write_text(
-        json.dumps(_passing_readiness_artifact()),
-        encoding="utf-8",
-    )
+    _write_live_runtime_status(readiness_artifact)
     _write_fake_runtime_session(runtime_session)
 
     class ForbiddenBackendFactory:
@@ -903,6 +926,94 @@ def test_cli_sysid_run_sdk_with_runtime_blocks_until_live_queue_exists(
     assert Path(payload["runtime_command"]["artifacts"]["command"]).exists()
     assert payload["next_gate"] == "wait for live runtime command result artifact"
     assert manifest == payload
+
+
+def test_cli_sysid_run_sdk_with_runtime_acquires_from_live_hold_pose(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    from armctrl import cli
+
+    readiness_artifact = tmp_path / "readiness.json"
+    runtime_session = tmp_path / "runtime-session.json"
+    output_dir = tmp_path / "ident-sdk-cli-live-hold"
+    safe_center = (0.0, 0.3, 0.3, 0.0, 0.0, 0.0)
+    live_hold = (-0.009, 0.2977, 0.2821, -0.009, -0.0036, 0.0006)
+    live_meas = (-0.009, 0.2974, 0.2794, -0.0135, -0.0044, 0.0002)
+
+    runtime_payload = start_fake_runtime_session(
+        q_current=live_hold,
+        safe_center=safe_center,
+        send_hz=50.0,
+        hold_hz=50.0,
+        max_joint_step_rad=0.01,
+        max_heartbeat_age_s=1.0,
+    )
+    runtime_payload["q_hold"] = list(live_hold)
+    runtime_payload = record_runtime_hold_tick(
+        runtime_payload,
+        q_meas=live_meas,
+        fault_flags=(),
+        max_heartbeat_age_s=1.0,
+    )
+    runtime_payload = refresh_runtime_status_payload(
+        runtime_payload,
+        max_heartbeat_age_s=1.0,
+    )
+    runtime_session.write_text(
+        json.dumps(runtime_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    readiness_artifact.write_text(
+        json.dumps(runtime_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    class ForbiddenBackendFactory:
+        def __init__(self, **kwargs) -> None:
+            raise AssertionError("sdk sysid must not open SDK outside runtime")
+
+    monkeypatch.setattr(cli, "Arx5InterfaceCollectionBackend", ForbiddenBackendFactory)
+
+    exit_code = cli.main(
+        [
+            "sysid",
+            "run",
+            "gravity_sweep",
+            "--adapter",
+            "sdk",
+            "--dof",
+            "6",
+            "--sample-hz",
+            "20",
+            "--duration",
+            "1",
+            "--amplitude",
+            "0.02",
+            "--q-center",
+            *[str(value) for value in safe_center],
+            "--output",
+            str(output_dir),
+            "--confirm",
+            SDK_CONFIRMATION,
+            "--readiness-artifact",
+            str(readiness_artifact),
+            "--runtime-session-artifact",
+            str(runtime_session),
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["status"] == "queued"
+    assert payload["runtime_start_pose"]["policy"] == "live_hold"
+    assert payload["runtime_start_pose"]["q_hold"] == list(live_hold)
+    command_artifact = Path(payload["runtime_command"]["artifacts"]["command"])
+    command = json.loads(command_artifact.read_text(encoding="utf-8"))
+    assert command["expected_q_start"] == list(live_hold)
 
 
 def test_cli_sysid_run_sdk_with_runtime_does_not_report_fake_acceptance(

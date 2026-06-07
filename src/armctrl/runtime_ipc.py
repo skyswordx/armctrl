@@ -607,9 +607,22 @@ def _ensure_can_queue_command(
     if heartbeat_timeout_s <= 0.0:
         raise ValueError("heartbeat_timeout_s must be positive")
     if not _q_close(session.get("q_meas"), expected_q_start, max_start_error_rad):
+        error_payload = dict(session)
+        error_payload["expected_q_start"] = list(expected_q_start)
+        error_payload["max_start_error_rad"] = float(max_start_error_rad)
+        if isinstance(session.get("q_meas"), (list, tuple)):
+            q_meas = [float(value) for value in session["q_meas"]]
+            error_payload["q_start_error_rad"] = [
+                measured - expected
+                for measured, expected in zip(q_meas, expected_q_start, strict=True)
+            ]
+            error_payload["q_start_error_max_abs_rad"] = max(
+                (abs(value) for value in error_payload["q_start_error_rad"]),
+                default=0.0,
+            )
         raise RuntimeSessionError(
             "current q_meas is not close to expected start pose",
-            session,
+            error_payload,
         )
     if not owner:
         raise ValueError("owner must not be empty")

@@ -2154,13 +2154,36 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 3
         try:
             contract = _read_agent_flow_contract_for_runtime(Path(args.contract))
-            readiness = _read_agent_sysid_readiness(Path(args.readiness_artifact))
+            runtime_status = _runtime_first_sysid_readiness_artifact(
+                json.loads(Path(args.readiness_artifact).read_text(encoding="utf-8")),
+                runtime_session_artifact_path=Path(args.runtime_session_artifact),
+            )
+            readiness = _read_agent_sysid_readiness_from_payload(runtime_status)
+            start_pose = _runtime_live_hold_start_pose(
+                runtime_status,
+                dof=len(args.q_start),
+                max_start_error_rad=0.02,
+            )
             control_period_s = _agent_flow_contract_control_period_s(contract)
+            q_start = tuple(start_pose["q_start"])
+            requested_q_start = tuple(args.q_start)
+            requested_q_target = tuple(args.q_target)
+            q_delta = tuple(
+                target - start
+                for target, start in zip(
+                    requested_q_target,
+                    requested_q_start,
+                    strict=True,
+                )
+            )
+            q_target = tuple(
+                start + delta for start, delta in zip(q_start, q_delta, strict=True)
+            )
             queued = submit_intent_command(
                 session_artifact_path=Path(args.runtime_session_artifact),
                 owner="agent",
-                expected_q_start=tuple(args.q_start),
-                q_target=tuple(args.q_target),
+                expected_q_start=q_start,
+                q_target=q_target,
                 control_period_s=control_period_s,
                 send_hz=args.send_hz,
                 max_joint_delta_rad=args.max_joint_delta_rad,
@@ -2214,15 +2237,23 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "queue": queued["runtime"]["queue"],
             },
             "readiness": {
-                "agent_sysid_smoke_allowed": readiness.get(
-                    "agent_sysid_smoke_allowed"
+                "agent_sysid_smoke_allowed": (
+                    runtime_status.get("readiness", {}).get(
+                        "agent_sysid_smoke_allowed"
+                    )
+                    if isinstance(runtime_status.get("readiness"), dict)
+                    else readiness.get("agent_sysid_smoke_allowed")
                 ),
                 "prerequisites": readiness.get("prerequisites"),
                 "tiny_motion": readiness.get("tiny_motion"),
             },
+            "runtime_start_pose": start_pose,
             "intent": {
-                "q_start": list(args.q_start),
-                "q_target": list(args.q_target),
+                "q_start": list(q_start),
+                "q_target": list(q_target),
+                "requested_q_start": list(args.q_start),
+                "requested_q_target": list(args.q_target),
+                "requested_delta_rad": list(q_delta),
                 "control_period_s": control_period_s,
                 "agent_intent_hz": 1.0 / control_period_s,
                 "backend_send_hz": args.send_hz,
@@ -3001,11 +3032,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             readiness_artifact = json.loads(
                 readiness_artifact_path.read_text(encoding="utf-8")
             )
-            if (
-                readiness_artifact.get("schema")
-                != "armctrl.sysid_agent_smoke_readiness.v1"
-                or readiness_artifact.get("agent_sysid_smoke_allowed") is not True
-            ):
+            readiness_artifact = _runtime_first_sysid_readiness_artifact(
+                readiness_artifact,
+                runtime_session_artifact_path=(
+                    Path(args.runtime_session_artifact)
+                    if args.runtime_session_artifact is not None
+                    else None
+                ),
+            )
+            if not _sysid_run_readiness_allowed(readiness_artifact):
                 payload = gate.reject_failed_readiness(
                     adapter=args.adapter,
                     readiness_artifact_path=str(readiness_artifact_path),
@@ -3045,6 +3080,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 _emit(payload, as_json=args.as_json)
                 return 3
             try:
+                requested_q_center = q_center
+                start_pose = _runtime_live_hold_start_pose(
+                    readiness_artifact,
+                    dof=args.dof,
+                    max_start_error_rad=0.02,
+                )
+                q_center = tuple(start_pose["q_start"])
                 plan = SysIdPlanner.default().write_plan(
                     SysIdPlanRequest(
                         profile_name=args.profile,
@@ -3081,6 +3123,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                             "owner": "sysid",
                             "mode": "trajectory_replay",
                         },
+                        "runtime_start_pose": start_pose,
+                        "requested_q_center": list(requested_q_center),
+                        "effective_q_center": list(q_center),
                         "fault_landing_mode": "damping",
                         "recording_starts_after_safe_state": True,
                     }
@@ -3142,6 +3187,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "mode": "trajectory_replay",
                     "queue": queued["runtime"]["queue"],
                 },
+                "runtime_start_pose": start_pose,
+                "requested_q_center": list(requested_q_center),
+                "effective_q_center": list(q_center),
                 "runtime_command": {
                     "command_id": queued["command_id"],
                     "status": "queued",
@@ -4009,14 +4057,68 @@ def _read_agent_flow_contract_for_runtime(path: Path) -> dict[str, object]:
 
 def _read_agent_sysid_readiness(path: Path) -> dict[str, object]:
     readiness = json.loads(path.read_text(encoding="utf-8"))
+    return _read_agent_sysid_readiness_from_payload(readiness)
+
+
+def _read_agent_sysid_readiness_from_payload(
+    readiness: dict[str, object],
+) -> dict[str, object]:
     if not isinstance(readiness, dict):
         raise ValueError("readiness artifact must contain a JSON object")
+    if readiness.get("schema") == "armctrl.arm_runtime_status.v1":
+        runtime_readiness_payload = readiness.get("readiness")
+        if (
+            not isinstance(runtime_readiness_payload, dict)
+            or runtime_readiness_payload.get("agent_sysid_smoke_allowed") is not True
+        ):
+            raise RuntimeError("live runtime readiness is not passed")
+        return readiness
     if (
         readiness.get("schema") != "armctrl.sysid_agent_smoke_readiness.v1"
         or readiness.get("agent_sysid_smoke_allowed") is not True
     ):
         raise RuntimeError("agent/sysid smoke readiness is not passed")
     return readiness
+
+
+def _runtime_live_hold_start_pose(
+    runtime_status_payload: dict[str, object],
+    *,
+    dof: int,
+    max_start_error_rad: float = 0.02,
+) -> dict[str, object]:
+    q_hold = _runtime_float_list(runtime_status_payload.get("q_hold"), name="q_hold")
+    q_meas = _runtime_float_list(runtime_status_payload.get("q_meas"), name="q_meas")
+    if len(q_hold) != dof:
+        raise ValueError("runtime q_hold length must match --dof")
+    if len(q_meas) != dof:
+        raise ValueError("runtime q_meas length must match --dof")
+    q_error = [measured - held for measured, held in zip(q_meas, q_hold, strict=True)]
+    max_abs_error = max((abs(value) for value in q_error), default=0.0)
+    if max_abs_error > float(max_start_error_rad):
+        raise RuntimeError(
+            "current q_meas is not close to live runtime hold pose: "
+            f"max_abs_error_rad={max_abs_error:.6f} > "
+            f"max_error_rad={float(max_start_error_rad):.6f}"
+        )
+    return {
+        "policy": "live_hold",
+        "q_start": q_hold,
+        "q_hold": q_hold,
+        "q_meas": q_meas,
+        "q_start_error_rad": q_error,
+        "q_start_error_max_abs_rad": max_abs_error,
+        "max_start_error_rad": float(max_start_error_rad),
+    }
+
+
+def _runtime_float_list(values: object, *, name: str) -> list[float]:
+    if not isinstance(values, (list, tuple)):
+        raise ValueError(f"runtime {name} must be a numeric list")
+    result = [float(value) for value in values]
+    if not result:
+        raise ValueError(f"runtime {name} must not be empty")
+    return result
 
 
 def _agent_flow_contract_control_period_s(contract: dict[str, object]) -> float:
@@ -4079,6 +4181,45 @@ def _attach_sysid_run_manifest(
         encoding="utf-8",
     )
     return payload_with_artifact
+
+
+def _runtime_first_sysid_readiness_artifact(
+    readiness_artifact: dict[str, object],
+    *,
+    runtime_session_artifact_path: Path | None = None,
+) -> dict[str, object]:
+    if (
+        readiness_artifact.get("schema") != "armctrl.arm_runtime_status.v1"
+        and runtime_session_artifact_path is None
+    ):
+        return readiness_artifact
+    if runtime_session_artifact_path is not None:
+        live_payload = json.loads(
+            runtime_session_artifact_path.read_text(encoding="utf-8")
+        )
+        if live_payload.get("schema") == "armctrl.arm_runtime_session.v1":
+            return refresh_runtime_status_payload(
+                live_payload,
+                max_heartbeat_age_s=1.0,
+            )
+    return refresh_runtime_status_payload(
+        readiness_artifact,
+        max_heartbeat_age_s=1.0,
+    )
+
+
+def _sysid_run_readiness_allowed(readiness_artifact: dict[str, object]) -> bool:
+    if readiness_artifact.get("schema") == "armctrl.arm_runtime_status.v1":
+        readiness = readiness_artifact.get("readiness")
+        return (
+            isinstance(readiness, dict)
+            and readiness.get("agent_sysid_smoke_allowed") is True
+        )
+    return (
+        readiness_artifact.get("schema")
+        == "armctrl.sysid_agent_smoke_readiness.v1"
+        and readiness_artifact.get("agent_sysid_smoke_allowed") is True
+    )
 
 
 def _nonpassing_acceptance_status(payload: dict[str, object]) -> str | None:
