@@ -449,26 +449,22 @@ def test_cli_recipe_runtime_smoke_fake_replays_checked_plan_with_motion_runtime(
     assert written == payload
 
 
-def test_cli_recipe_runtime_smoke_fake_acquires_runtime_owner_lease(
+def test_cli_recipe_runtime_smoke_fake_rejects_runtime_session_artifact(
     tmp_path: Path,
 ) -> None:
     plan_dir = tmp_path / "recipe-runtime-smoke-plan"
-    runtime_log = tmp_path / "recipe_runtime_smoke.json"
     runtime_session_artifact = tmp_path / "runtime-session.json"
     safe_center = [0.0, 0.3, 0.3, 0.0, 0.0, 0.0]
+    original_session = start_fake_runtime_session(
+        q_current=safe_center,
+        safe_center=safe_center,
+        send_hz=50.0,
+        hold_hz=50.0,
+        max_joint_step_rad=0.01,
+        max_heartbeat_age_s=5.0,
+    )
     runtime_session_artifact.write_text(
-        json.dumps(
-            start_fake_runtime_session(
-                q_current=safe_center,
-                safe_center=safe_center,
-                send_hz=50.0,
-                hold_hz=50.0,
-                max_joint_step_rad=0.01,
-                max_heartbeat_age_s=5.0,
-            ),
-            ensure_ascii=False,
-            indent=2,
-        ),
+        json.dumps(original_session, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
     subprocess.run(
@@ -503,27 +499,25 @@ def test_cli_recipe_runtime_smoke_fake_acquires_runtime_owner_lease(
             str(plan_dir),
             "--runtime-session-artifact",
             str(runtime_session_artifact),
-            "--output",
-            str(runtime_log),
             "--json",
         ],
-        check=True,
         capture_output=True,
         text=True,
     )
 
     payload = json.loads(completed.stdout)
-    released_session = json.loads(runtime_session_artifact.read_text(encoding="utf-8"))
+    unchanged_session = json.loads(runtime_session_artifact.read_text(encoding="utf-8"))
 
-    assert payload["status"] == "ok"
-    assert payload["runtime"]["single_owner_runtime_session"] is True
-    assert payload["runtime"]["owner"] == "recipe"
-    assert payload["runtime"]["mode"] == "trajectory_replay"
-    assert payload["runtime"]["release"]["mode"] == "hold_safe"
-    assert payload["runtime"]["release"]["owner"] is None
-    assert released_session["mode"] == "hold_safe"
-    assert released_session["owner"] is None
-    assert released_session["readiness"]["agent_sysid_smoke_allowed"] is True
+    assert completed.returncode == 3
+    assert payload["status"] == "rejected"
+    assert payload["schema"] == "armctrl.recipe_runtime_smoke.v1"
+    assert payload["movement_command_sent"] is False
+    assert payload["reason"] == (
+        "recipe runtime-smoke-fake is pure fake; use recipe runtime-submit "
+        "to enqueue a live runtime owner command"
+    )
+    assert payload["next_gate"] == "run armctrl recipe runtime-submit --runtime-session-artifact"
+    assert unchanged_session == original_session
 
 
 def test_cli_recipe_runtime_submit_queues_live_runtime_owner(
@@ -681,7 +675,7 @@ def test_cli_recipe_runtime_submit_rejects_busy_runtime_owner(
     assert busy_session["owner"] == "agent"
 
 
-def test_cli_recipe_runtime_smoke_fake_rejects_busy_runtime_owner(
+def test_cli_recipe_runtime_smoke_fake_rejects_runtime_session_even_when_busy(
     tmp_path: Path,
 ) -> None:
     plan_dir = tmp_path / "recipe-runtime-smoke-plan"
@@ -749,8 +743,10 @@ def test_cli_recipe_runtime_smoke_fake_rejects_busy_runtime_owner(
     assert completed.returncode == 3
     payload = json.loads(completed.stdout)
     assert payload["status"] == "rejected"
-    assert payload["reason"] == "runtime is owned by agent"
-    assert payload["runtime"]["owner"] == "agent"
+    assert payload["reason"] == (
+        "recipe runtime-smoke-fake is pure fake; use recipe runtime-submit "
+        "to enqueue a live runtime owner command"
+    )
     busy_session = json.loads(runtime_session_artifact.read_text(encoding="utf-8"))
     assert busy_session["owner"] == "agent"
 

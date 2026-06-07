@@ -4,14 +4,14 @@ This is the short lab-facing checklist for the current armctrl-clean branch.
 
 Mainline target:
 
-`power on passive/droop -> runtime start arx5_sdk --serve -> recover to SAFE_CENTER -> active hold -> status -> Agent/SysID submit queued owner command -> runtime consumes queue -> runtime stop`
+`power on passive/droop -> runtime start arx5_sdk --serve -> recover to SAFE_CENTER -> active hold -> status -> Agent/SysID/Recipe submit queued owner command -> runtime consumes queue -> runtime stop`
 
 Important semantics:
 
 - Droop/passive pose can be physically safe at rest, but it is not the Agent/SysID start pose.
 - `SAFE_CENTER="0.0 0.3 0.3 0.0 0.0 0.0"` is a controlled hover pose and must be continuously held.
 - Readiness must mean the live runtime is fresh and still holding near `SAFE_CENTER`, not that an older command once reached it.
-- Real Agent/SysID CLIs must not open SDK/CAN directly. They now require a runtime artifact and submit queued owner commands for the live runtime to execute.
+- Real Agent/SysID/Recipe CLIs must not open SDK/CAN directly. They now require a runtime artifact and submit queued owner commands for the live runtime to execute.
 
 Stop immediately on unexpected sag, collision risk, abnormal sound, high current, non-empty fault flags, or any `status` other than the expected value.
 
@@ -157,7 +157,41 @@ Expected result:
 
 If this returns `blocked` or `rejected`, inspect `runtime_status.json` and the generated SysID plan safety result before retrying.
 
-## 5. Stop Runtime
+## 5. Recipe Attach Gate
+
+Verify the same queued-owner rule for Recipe. First generate the reviewed plan:
+
+```bash
+export RECIPE_PLAN_DIR="$RUN_DIR/recipe-home-plan"
+uv run armctrl recipe plan home \
+  --sample-hz 50 \
+  --duration 0.1 \
+  --output "$RECIPE_PLAN_DIR" \
+  --json
+```
+
+Then submit it to the live runtime queue:
+
+```bash
+uv run armctrl recipe runtime-submit \
+  --plan-dir "$RECIPE_PLAN_DIR" \
+  --runtime-session-artifact "$RUN_DIR/runtime_session.json" \
+  --output "$RUN_DIR/recipe_runtime_submit.json" \
+  --json
+```
+
+Expected result:
+
+- `status == "queued"`
+- `movement_command_sent == false` in the submit artifact; motion is sent only by the serving runtime.
+- `runtime.owner == "recipe"`
+- `runtime.mode == "trajectory_replay"`
+- A runtime command result artifact should appear under the session command queue.
+- The arm should execute the reviewed Recipe trajectory, then return to active hold.
+
+Do not pass `--runtime-session-artifact` to `recipe runtime-smoke-fake`; that command is pure fake/local validation only.
+
+## 6. Stop Runtime
 
 Stop from the second terminal:
 

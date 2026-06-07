@@ -1676,6 +1676,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _emit(payload, as_json=args.as_json)
 
     if args.command == "recipe" and args.recipe_command == "runtime-smoke-fake":
+        if args.runtime_session_artifact:
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.recipe_runtime_smoke.v1",
+                "movement_allowed": False,
+                "hardware_motion": False,
+                "movement_command_sent": False,
+                "reason": (
+                    "recipe runtime-smoke-fake is pure fake; use recipe runtime-submit "
+                    "to enqueue a live runtime owner command"
+                ),
+                "plan_dir": str(Path(args.plan_dir)),
+                "runtime": {
+                    "single_owner_runtime_session": False,
+                    "session_artifact": str(Path(args.runtime_session_artifact)),
+                },
+                "next_gate": "run armctrl recipe runtime-submit --runtime-session-artifact",
+            }
+            payload = _attach_output_artifact(payload, args.output)
+            _emit(payload, as_json=args.as_json)
+            return 3
         try:
             result = RecipeRuntimeSmoker().run(
                 RecipeRuntimeSmokeRequest(
@@ -1721,6 +1742,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             _emit(payload, as_json=args.as_json)
             return 3
         except RuntimeError as error:
+            if str(error) == (
+                "recipe runtime-smoke-fake is pure fake; use recipe runtime-submit "
+                "to enqueue a live runtime owner command"
+            ):
+                payload = {
+                    "status": "rejected",
+                    "schema": "armctrl.recipe_runtime_smoke.v1",
+                    "movement_allowed": False,
+                    "hardware_motion": False,
+                    "movement_command_sent": False,
+                    "reason": str(error),
+                    "plan_dir": str(Path(args.plan_dir)),
+                    "next_gate": "run armctrl recipe runtime-submit --runtime-session-artifact",
+                }
+                payload = _attach_output_artifact(payload, args.output)
+                _emit(payload, as_json=args.as_json)
+                return 3
             if str(error) != "recipe plan safety gate is not passed":
                 raise
             payload = {

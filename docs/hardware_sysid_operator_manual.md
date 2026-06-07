@@ -865,7 +865,7 @@ uv run armctrl recipe cancel --json
 4. 不直接调用 `arx5_interface`；
 5. 不自造 joint command。
 
-Recipe 侧如果要验证“已审查轨迹是否能进入统一 MotionRuntime”，先跑 fake runtime smoke，不要直接找 SDK：
+Recipe 侧如果要验证“已审查轨迹是否能被本地 MotionRuntime 按时间戳 replay”，先跑 fake runtime smoke，不要直接找 SDK，也不要传 `--runtime-session-artifact`：
 
 ```bash
 RECIPE_PLAN_DIR="$RUN_DIR/recipe-home-plan"
@@ -893,7 +893,28 @@ uv run armctrl recipe runtime-smoke-fake \
 - `motion_runtime.actual_send_hz` 被记录
 - `motion_runtime.landing_mode == "hold"`
 
-这一步只证明 Recipe 的 checked joint trajectory 可以进入 MotionRuntime 队列、按时间戳 replay 并落到 hold。它不能证明 arx5 SDK、MoveIt Servo 或 LeRobot 真机 runtime 已经可用。
+这一步只证明 Recipe 的 checked joint trajectory 可以被本地 fake MotionRuntime 按时间戳 replay 并落到 hold。它不能证明 arx5 SDK、MoveIt Servo、LeRobot 真机 runtime 或 live owner queue 已经可用。
+
+如果要把 Recipe 接到 live runtime，必须走 queued owner submit：
+
+```bash
+uv run armctrl recipe runtime-submit \
+  --plan-dir "$RECIPE_PLAN_DIR" \
+  --runtime-session-artifact "$RUN_DIR/runtime_session.json" \
+  --output "$RUN_DIR/recipe_runtime_submit.json" \
+  --json
+```
+
+`recipe_runtime_submit.json` 必须满足：
+
+- `schema == "armctrl.recipe_runtime_submit.v1"`
+- `status == "queued"`
+- `movement_command_sent == false`
+- `runtime.owner == "recipe"`
+- `runtime.mode == "trajectory_replay"`
+- `runtime_command.artifacts.command` 指向 live runtime queue command
+
+真正的运动只允许由正在 `--serve` 的 runtime 消费 queue 后发送。
 
 SysID Agent 调用也必须先 plan：
 

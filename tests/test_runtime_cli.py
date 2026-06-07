@@ -1469,7 +1469,7 @@ def _wait_for_session_artifact(path: Path) -> dict[str, object]:
 
 
 def _wait_for_runtime_command_result(path: Path) -> dict[str, object]:
-    deadline = time.time() + 3.0
+    deadline = time.time() + 8.0
     while time.time() < deadline:
         if path.exists():
             payload = _read_json_with_retry(path)
