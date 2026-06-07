@@ -40,6 +40,10 @@ from armctrl.motion_runtime import (
     MotionExecutionResult,
     MotionRuntime,
 )
+from armctrl.runtime_session import (
+    acquire_owner_from_artifact,
+    release_owner_from_artifact,
+)
 from armctrl.recipe_runtime import (
     DEFAULT_RECIPE_START,
     RecipeAgentPresetContractExporter,
@@ -87,6 +91,7 @@ class AgentFlowRuntimeSmokeRequest:
     q_target: tuple[float, ...]
     send_hz: float = 50.0
     max_joint_delta_rad: float | None = 0.005
+    runtime_session_artifact_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -453,6 +458,26 @@ class AgentFlowRuntimeSmoker:
         if not _agent_flow_review_passed(contract):
             raise RuntimeError("agent flow contract review is not complete")
         control_period_s = _agent_flow_control_period_s(contract)
+        runtime_owner_lease = None
+        runtime_session_after_release = None
+        if request.runtime_session_artifact_path is not None:
+            runtime_owner_lease = acquire_owner_from_artifact(
+                session_artifact_path=request.runtime_session_artifact_path,
+                owner="agent",
+                mode="agent_servo",
+                expected_q_start=request.q_start,
+                max_start_error_rad=0.02,
+                heartbeat_timeout_s=AGENT_FAULT_TIMEOUT_S,
+                max_heartbeat_age_s=1.0,
+            )
+            request.runtime_session_artifact_path.write_text(
+                json.dumps(
+                    runtime_owner_lease,
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
         clock = _ManualRuntimeClock()
         backend = FakeMotionBackend()
         runtime = MotionRuntime(
@@ -480,6 +505,20 @@ class AgentFlowRuntimeSmoker:
         )
         if missed_intent_event is None:
             raise RuntimeError("agent runtime smoke watchdog did not trigger hold")
+        if request.runtime_session_artifact_path is not None:
+            runtime_session_after_release = release_owner_from_artifact(
+                session_artifact_path=request.runtime_session_artifact_path,
+                owner="agent",
+                max_heartbeat_age_s=1.0,
+            )
+            request.runtime_session_artifact_path.write_text(
+                json.dumps(
+                    runtime_session_after_release,
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
         return {
             "schema": "armctrl.agent_flow_runtime_smoke.v1",
             "movement_allowed": False,
@@ -489,7 +528,31 @@ class AgentFlowRuntimeSmoker:
             "runtime": {
                 "backend": "fake",
                 "mode": result.mode,
-                "owner": "motion_runtime",
+                "owner": (
+                    "agent"
+                    if runtime_owner_lease is not None
+                    else "motion_runtime"
+                ),
+                "single_owner_runtime_session": runtime_owner_lease is not None,
+                "runtime_session_id": (
+                    runtime_owner_lease.get("runtime_session_id")
+                    if runtime_owner_lease is not None
+                    else None
+                ),
+                "owner_lease": (
+                    runtime_owner_lease.get("owner_lease")
+                    if runtime_owner_lease is not None
+                    else None
+                ),
+                "release": (
+                    {
+                        "mode": runtime_session_after_release.get("mode"),
+                        "owner": runtime_session_after_release.get("owner"),
+                        "readiness": runtime_session_after_release.get("readiness"),
+                    }
+                    if runtime_session_after_release is not None
+                    else None
+                ),
             },
             "intent": {
                 "q_start": list(request.q_start),

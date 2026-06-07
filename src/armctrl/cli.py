@@ -457,6 +457,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=float,
         default=0.005,
     )
+    agent_flow_runtime_smoke_parser.add_argument("--runtime-session-artifact")
     agent_flow_runtime_smoke_parser.add_argument("--output")
     agent_flow_runtime_smoke_parser.add_argument(
         "--json",
@@ -1488,6 +1489,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             q_target=tuple(args.q_target),
             send_hz=args.send_hz,
             max_joint_delta_rad=args.max_joint_delta_rad,
+            runtime_session_artifact_path=(
+                Path(args.runtime_session_artifact)
+                if args.runtime_session_artifact is not None
+                else None
+            ),
         )
         try:
             payload = {"status": "ok", **AgentFlowRuntimeSmoker().run(request)}

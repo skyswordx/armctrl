@@ -462,6 +462,128 @@ def test_cli_agent_flow_runtime_smoke_fake_replays_checked_intent_contract(
     assert saved == payload
 
 
+def test_cli_agent_flow_runtime_smoke_fake_acquires_runtime_owner_lease(
+    tmp_path: Path,
+) -> None:
+    output_dir = tmp_path / "agent-flow-runtime-lease"
+    runtime_log = tmp_path / "agent-runtime-smoke.json"
+    runtime_session = tmp_path / "runtime-session.json"
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "agent-flow",
+            "plan",
+            "--preset",
+            "home",
+            "--eef-mode",
+            "pose_delta",
+            "--backend",
+            "sdk_cartesian",
+            "--delta-position",
+            "0.002",
+            "0.000",
+            "-0.003",
+            "--delta-rpy",
+            "0.0",
+            "0.0",
+            "0.02",
+            "--control-period-s",
+            "0.1",
+            "--output",
+            str(output_dir),
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "runtime",
+            "start",
+            "--backend",
+            "fake",
+            "--q-current",
+            "0",
+            "0.3",
+            "0.3",
+            "0",
+            "0",
+            "0",
+            "--safe-center",
+            "0",
+            "0.3",
+            "0.3",
+            "0",
+            "0",
+            "0",
+            "--output",
+            str(runtime_session),
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "agent-flow",
+            "runtime-smoke-fake",
+            "--contract",
+            str(output_dir / "agent_flow_plan.json"),
+            "--runtime-session-artifact",
+            str(runtime_session),
+            "--q-start",
+            "0",
+            "0.3",
+            "0.3",
+            "0",
+            "0",
+            "0",
+            "--q-target",
+            "0",
+            "0.302",
+            "0.3",
+            "0",
+            "0",
+            "0",
+            "--send-hz",
+            "50",
+            "--output",
+            str(runtime_log),
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(completed.stdout)
+    final_session = json.loads(runtime_session.read_text(encoding="utf-8"))
+
+    assert payload["status"] == "ok"
+    assert payload["runtime"]["owner"] == "agent"
+    assert payload["runtime"]["single_owner_runtime_session"] is True
+    assert (
+        payload["runtime"]["runtime_session_id"]
+        == final_session["runtime_session_id"]
+    )
+    assert payload["runtime"]["owner_lease"]["owner"] == "agent"
+    assert payload["runtime"]["owner_lease"]["mode"] == "agent_servo"
+    assert final_session["mode"] == "hold_safe"
+    assert final_session["owner"] is None
+    assert final_session["owner_lease"] is None
+    assert final_session["readiness"]["agent_sysid_smoke_allowed"] is True
+
+
 def test_cli_agent_flow_runtime_smoke_fake_writes_rejected_artifact_for_unsafe_delta(
     tmp_path: Path,
 ) -> None:
