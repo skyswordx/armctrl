@@ -312,6 +312,9 @@ summarize all results in the run directory:
 uv run armctrl runtime result-check \
   --run-dir "$RUN_DIR" \
   --all \
+  --require-owner agent \
+  --require-owner sysid \
+  --require-owner recipe \
   --max-jitter-p99-ms 5 \
   --json
 ```
@@ -321,6 +324,7 @@ Expected result:
 - `status == "pass"`
 - `result_count` matches the number of executed runtime owner commands
 - `fail_count == 0`
+- `missing_required_owners == []`
 - each item in `results[]` has `checks.acceptance_passed == true`
 - each item in `results[]` has `checks.timing_gate_passed == true`
 - each item in `results[]` has `checks.status_publish_gate_passed == true`

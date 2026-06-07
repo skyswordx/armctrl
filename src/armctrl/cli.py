@@ -324,6 +324,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     runtime_result_source.add_argument("--result-artifact")
     runtime_result_source.add_argument("--run-dir")
     runtime_result_check_parser.add_argument("--all", action="store_true")
+    runtime_result_check_parser.add_argument(
+        "--require-owner",
+        action="append",
+        default=[],
+    )
     runtime_result_check_parser.add_argument("--expect-owner")
     runtime_result_check_parser.add_argument("--expect-mode")
     runtime_result_check_parser.add_argument("--expect-sample-count", type=int)
@@ -1619,6 +1624,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 payload = _runtime_result_check_all_payload(
                     run_dir=Path(args.run_dir) if args.run_dir is not None else None,
                     max_jitter_p99_ms=args.max_jitter_p99_ms,
+                    required_owners=args.require_owner,
                 )
             else:
                 payload = _runtime_result_check_payload(
@@ -4690,6 +4696,7 @@ def _runtime_result_check_all_payload(
     *,
     run_dir: Path | None,
     max_jitter_p99_ms: float | None,
+    required_owners: Sequence[str],
 ) -> dict[str, object]:
     if run_dir is None:
         raise ValueError("--all requires --run-dir")
@@ -4706,17 +4713,30 @@ def _runtime_result_check_all_payload(
     ]
     pass_count = sum(1 for result in results if result.get("status") == "pass")
     fail_count = len(results) - pass_count
+    owners_present = sorted(
+        str(owner) for owner in {result.get("owner") for result in results} if owner
+    )
+    required_owner_list = [str(owner) for owner in required_owners]
+    missing_required_owners = [
+        owner for owner in required_owner_list if owner not in owners_present
+    ]
+    has_missing_required_owners = bool(missing_required_owners)
     payload = {
-        "status": "pass" if fail_count == 0 else "fail",
+        "status": "pass" if fail_count == 0 and not has_missing_required_owners else "fail",
         "schema": "armctrl.runtime_result_check_summary.v1",
         "run_dir": str(run_dir),
         "result_count": len(results),
         "pass_count": pass_count,
         "fail_count": fail_count,
         "owners": [result.get("owner") for result in results],
+        "owners_present": owners_present,
+        "required_owners": required_owner_list,
+        "missing_required_owners": missing_required_owners,
         "results": results,
     }
-    if fail_count:
+    if has_missing_required_owners:
+        payload["next_gate"] = "run missing runtime owner commands"
+    elif fail_count:
         payload["next_gate"] = "inspect failed runtime result artifacts"
     return payload
 

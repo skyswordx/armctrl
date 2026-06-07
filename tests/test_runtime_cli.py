@@ -1608,6 +1608,72 @@ def test_cli_runtime_result_check_all_summarizes_run_dir_results(
     assert payload["next_gate"] == "inspect failed runtime result artifacts"
 
 
+def test_cli_runtime_result_check_all_requires_expected_owners(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    from armctrl import cli
+
+    run_dir = tmp_path / "lab-run"
+    results_dir = run_dir / "runtime_session_commands" / "results"
+    results_dir.mkdir(parents=True)
+    for name, owner in [("agent.json", "agent"), ("sysid.json", "sysid")]:
+        (results_dir / name).write_text(
+            json.dumps(
+                {
+                    "schema": "armctrl.arm_runtime_command_result.v1",
+                    "status": "completed",
+                    "owner": owner,
+                    "mode": (
+                        "agent_servo" if owner == "agent" else "trajectory_replay"
+                    ),
+                    "motion": {
+                        "status": "completed",
+                        "sample_count": 2,
+                        "send_jitter_ms_p99": 0.2,
+                    },
+                    "timing": {
+                        "queue_latency_s": 0.01,
+                        "first_send_latency_s": 0.01,
+                        "execution_elapsed_s": 0.1,
+                    },
+                    "acceptance": {
+                        "status": "pass",
+                        "timing_gate": {"status": "pass"},
+                        "status_publish_gate": {"status": "pass"},
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    exit_code = cli.main(
+        [
+            "runtime",
+            "result-check",
+            "--run-dir",
+            str(run_dir),
+            "--all",
+            "--require-owner",
+            "agent",
+            "--require-owner",
+            "sysid",
+            "--require-owner",
+            "recipe",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 3
+    assert payload["status"] == "fail"
+    assert payload["required_owners"] == ["agent", "sysid", "recipe"]
+    assert payload["owners_present"] == ["agent", "sysid"]
+    assert payload["missing_required_owners"] == ["recipe"]
+    assert payload["next_gate"] == "run missing runtime owner commands"
+
+
 def test_cli_runtime_result_check_rejects_failed_timing_gate(
     tmp_path: Path,
     capsys,
