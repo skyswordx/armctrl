@@ -74,9 +74,18 @@ Expected artifact checks:
 - `status == "ok"`
 - `mode == "hold_safe"`
 - `owner == null`
+- `hold_hz == 50.0`
+- `hold_tick_count > 0`
+- `last_hold_wall_time_s` is present and recent
+- `hold_fresh == true`
 - `readiness.agent_sysid_smoke_allowed == true`
 - `readiness.failed_checks == []`
 - `q_meas` is close to `q_hold`, and `q_hold` is close to `safe_center`.
+
+If `readiness.failed_checks` contains `hold_fresh`, do not start Agent, SysID,
+or Recipe. It means the live serving runtime has not recently refreshed active
+hold evidence. Check that terminal 1 is still running, that the arm is not in
+damping, and that `runtime_session.json` is still being updated.
 
 ## 3. Agent Attach Gate
 

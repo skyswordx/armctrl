@@ -79,9 +79,18 @@ Required live readiness checks:
 - `status == "ok"`
 - `mode == "hold_safe"`
 - `owner == null`
+- `hold_hz == 50.0`
+- `hold_tick_count > 0`
+- `last_hold_wall_time_s` is present and recent
+- `hold_fresh == true`
 - `readiness.agent_sysid_smoke_allowed == true`
 - `readiness.failed_checks == []`
 - `q_meas` is close to `q_hold`, and `q_hold` is close to `safe_center`.
+
+If `readiness.failed_checks` contains `hold_fresh`, the artifact does not prove
+current active hold. Do not submit Agent, SysID, or Recipe owners until the
+serving runtime is still running and the status command reports fresh hold
+evidence again.
 
 Agent/SysID/Recipe real paths must use `--runtime-session-artifact
 "$RUN_DIR/runtime_session.json"` and submit/acquire a runtime owner. They must
