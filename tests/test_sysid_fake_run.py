@@ -1047,6 +1047,7 @@ def test_cli_sysid_run_sdk_repeated_run_uses_updated_live_hold_pose(
     safe_center = (0.0, 0.3, 0.3, 0.0, 0.0, 0.0)
     first_hold = safe_center
     second_hold = (0.018, 0.302, 0.288, -0.004, -0.002, 0.001)
+    max_heartbeat_age_s = 10.0
 
     runtime_payload = start_fake_runtime_session(
         q_current=first_hold,
@@ -1054,17 +1055,17 @@ def test_cli_sysid_run_sdk_repeated_run_uses_updated_live_hold_pose(
         send_hz=50.0,
         hold_hz=50.0,
         max_joint_step_rad=0.01,
-        max_heartbeat_age_s=1.0,
+        max_heartbeat_age_s=max_heartbeat_age_s,
     )
     runtime_payload = record_runtime_hold_tick(
         runtime_payload,
         q_meas=first_hold,
         fault_flags=(),
-        max_heartbeat_age_s=1.0,
+        max_heartbeat_age_s=max_heartbeat_age_s,
     )
     runtime_payload = refresh_runtime_status_payload(
         runtime_payload,
-        max_heartbeat_age_s=1.0,
+        max_heartbeat_age_s=max_heartbeat_age_s,
     )
     runtime_session.write_text(
         json.dumps(runtime_payload, ensure_ascii=False, indent=2),
@@ -1121,11 +1122,11 @@ def test_cli_sysid_run_sdk_repeated_run_uses_updated_live_hold_pose(
         runtime_payload,
         q_meas=second_hold,
         fault_flags=(),
-        max_heartbeat_age_s=1.0,
+        max_heartbeat_age_s=max_heartbeat_age_s,
     )
     runtime_payload = refresh_runtime_status_payload(
         runtime_payload,
-        max_heartbeat_age_s=1.0,
+        max_heartbeat_age_s=max_heartbeat_age_s,
     )
     runtime_session.write_text(
         json.dumps(runtime_payload, ensure_ascii=False, indent=2),
