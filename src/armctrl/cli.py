@@ -31,6 +31,11 @@ from armctrl.recipe_runtime import (
     RecipeRuntimeSmokeRequest,
     RecipeRuntimeSmoker,
 )
+from armctrl.runtime_session import (
+    refresh_runtime_status_payload,
+    runtime_status_from_artifact,
+    start_fake_runtime_session,
+)
 from armctrl.release_status import release_notes, release_status
 from armctrl.lerobot_bridge import (
     LeRobotAgentRuntimeHelperPlanRequest,
@@ -132,6 +137,51 @@ from armctrl.workspace import WorkspaceSafetyConfig
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="armctrl")
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    runtime_parser = subparsers.add_parser("runtime")
+    runtime_subparsers = runtime_parser.add_subparsers(
+        dest="runtime_command",
+        required=True,
+    )
+
+    runtime_start_parser = runtime_subparsers.add_parser("start")
+    runtime_start_parser.add_argument("--backend", choices=["fake"], default="fake")
+    runtime_start_parser.add_argument(
+        "--q-current",
+        nargs="+",
+        type=float,
+        required=True,
+    )
+    runtime_start_parser.add_argument(
+        "--safe-center",
+        nargs="+",
+        type=float,
+        required=True,
+    )
+    runtime_start_parser.add_argument("--send-hz", type=float, default=50.0)
+    runtime_start_parser.add_argument("--hold-hz", type=float, default=50.0)
+    runtime_start_parser.add_argument(
+        "--max-joint-step-rad",
+        type=float,
+        default=0.01,
+    )
+    runtime_start_parser.add_argument(
+        "--max-heartbeat-age-s",
+        type=float,
+        default=1.0,
+    )
+    runtime_start_parser.add_argument("--output", required=True)
+    runtime_start_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    runtime_status_parser = runtime_subparsers.add_parser("status")
+    runtime_status_parser.add_argument("--session-artifact", required=True)
+    runtime_status_parser.add_argument(
+        "--max-heartbeat-age-s",
+        type=float,
+        default=1.0,
+    )
+    runtime_status_parser.add_argument("--output")
+    runtime_status_parser.add_argument("--json", action="store_true", dest="as_json")
 
     recipe_parser = subparsers.add_parser("recipe")
     recipe_subparsers = recipe_parser.add_subparsers(dest="recipe_command", required=True)
@@ -914,6 +964,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     sysid_agent_sysid_smoke_readiness_parser.add_argument(
         "--startup-recovery-artifact",
     )
+    sysid_agent_sysid_smoke_readiness_parser.add_argument(
+        "--runtime-status-artifact",
+    )
     sysid_agent_sysid_smoke_readiness_parser.add_argument("--output")
     sysid_agent_sysid_smoke_readiness_parser.add_argument(
         "--json",
@@ -966,6 +1019,35 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not hasattr(args, "candidate_trajectory"):
         args.candidate_trajectory = None
     catalog = RecipeCatalog.default()
+
+    if args.command == "runtime" and args.runtime_command == "start":
+        payload = start_fake_runtime_session(
+            q_current=tuple(args.q_current),
+            safe_center=tuple(args.safe_center),
+            send_hz=args.send_hz,
+            hold_hz=args.hold_hz,
+            max_joint_step_rad=args.max_joint_step_rad,
+            max_heartbeat_age_s=args.max_heartbeat_age_s,
+        )
+        payload = _attach_output_artifact(
+            payload,
+            args.output,
+            artifact_key="runtime_session",
+        )
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "runtime" and args.runtime_command == "status":
+        payload = runtime_status_from_artifact(
+            session_artifact_path=Path(args.session_artifact),
+            max_heartbeat_age_s=args.max_heartbeat_age_s,
+        )
+        payload = _attach_output_artifact(
+            payload,
+            args.output,
+            artifact_key="runtime_status",
+        )
+        _emit(payload, as_json=args.as_json)
+        return 0 if payload.get("status") == "ok" else 3
 
     if args.command == "recipe" and args.recipe_command == "list":
         payload = {
@@ -2754,15 +2836,31 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.startup_recovery_artifact is not None
             else None
         )
-        if tiny_motion_artifact is None and startup_recovery_artifact is None:
+        runtime_status_artifact = (
+            refresh_runtime_status_payload(
+                json.loads(
+                    Path(args.runtime_status_artifact).read_text(encoding="utf-8")
+                ),
+                max_heartbeat_age_s=1.0,
+            )
+            if args.runtime_status_artifact is not None
+            else None
+        )
+        if (
+            tiny_motion_artifact is None
+            and startup_recovery_artifact is None
+            and runtime_status_artifact is None
+        ):
             parser.error(
-                "sdk-agent-sysid-smoke-readiness requires --startup-recovery-artifact or --tiny-motion-artifact"
+                "sdk-agent-sysid-smoke-readiness requires --runtime-status-artifact, "
+                "--startup-recovery-artifact, or --tiny-motion-artifact"
             )
         result = SdkAgentSysIdSmokeReadinessChecker().check(
             doctor_artifact=doctor_artifact,
             hold_damping_artifact=hold_damping_artifact,
             tiny_motion_artifact=tiny_motion_artifact,
             startup_recovery_artifact=startup_recovery_artifact,
+            runtime_status_artifact=runtime_status_artifact,
         )
         result_payload = result.to_json()
         readiness_allowed = result_payload.get("agent_sysid_smoke_allowed") is True

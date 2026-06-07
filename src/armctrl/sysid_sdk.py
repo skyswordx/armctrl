@@ -13,6 +13,10 @@ from armctrl.motion_runtime import (
     MotionExecutionResult,
     MotionRuntime,
 )
+from armctrl.runtime_session import (
+    runtime_status_prerequisite_status,
+    runtime_status_summary,
+)
 from armctrl.sysid_run import Arx5InterfaceCollectionBackend
 
 SDK_HOLD_DAMPING_CONFIRMATION = "I UNDERSTAND THIS WILL CHANGE THE ARM CONTROL MODE"
@@ -1156,11 +1160,7 @@ class SdkAgentSysIdSmokeReadinessResult:
         smoke_allowed = all(
             status == "pass" for status in self.prerequisites.values()
         )
-        motion_gate_key = (
-            "startup_recovery"
-            if self.motion_gate_name == "startup_recovery"
-            else "tiny_motion"
-        )
+        motion_gate_key = self.motion_gate_name
         return {
             "schema": "armctrl.sysid_agent_smoke_readiness.v1",
             "read_only": True,
@@ -1171,10 +1171,11 @@ class SdkAgentSysIdSmokeReadinessResult:
             "next_gate": (
                 "agent_smoke_then_sysid_smoke_on_target"
                 if smoke_allowed
-                else "complete real startup recovery or tiny motion before Agent/SysID smoke"
+                else "start live ArmRuntime hold session before Agent/SysID smoke"
             ),
             "notes": [
-                "readiness check only reads prior artifacts and does not open the SDK",
+                "readiness check only reads artifacts and does not open the SDK",
+                "runtime_status proves current live hold when provided; startup/tiny artifacts are legacy gates",
                 "Agent/SysID smoke still requires explicit operator approval on the target robot",
             ],
         }
@@ -1188,8 +1189,15 @@ class SdkAgentSysIdSmokeReadinessChecker:
         hold_damping_artifact: dict[str, object],
         tiny_motion_artifact: dict[str, object] | None = None,
         startup_recovery_artifact: dict[str, object] | None = None,
+        runtime_status_artifact: dict[str, object] | None = None,
     ) -> SdkAgentSysIdSmokeReadinessResult:
-        if startup_recovery_artifact is not None:
+        if runtime_status_artifact is not None:
+            motion_gate_name = "runtime_status"
+            motion_gate_status = runtime_status_prerequisite_status(
+                runtime_status_artifact
+            )
+            motion_gate_summary = runtime_status_summary(runtime_status_artifact)
+        elif startup_recovery_artifact is not None:
             motion_gate_name = "startup_recovery"
             motion_gate_status = _startup_recovery_prerequisite_status(
                 startup_recovery_artifact

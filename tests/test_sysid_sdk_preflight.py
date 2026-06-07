@@ -3090,7 +3090,7 @@ def test_sdk_agent_sysid_smoke_readiness_requires_real_tiny_motion_success() -> 
     assert rejected["prerequisites"]["tiny_motion"] == "fail"
     assert (
         rejected["next_gate"]
-        == "complete real startup recovery or tiny motion before Agent/SysID smoke"
+        == "start live ArmRuntime hold session before Agent/SysID smoke"
     )
 
     failed_acceptance_tiny_motion = _passing_tiny_motion_execute_artifact()
