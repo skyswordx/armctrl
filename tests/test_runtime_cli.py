@@ -17,6 +17,7 @@ from armctrl.runtime_session import heartbeat_runtime_session_payload
 from armctrl.runtime_session import ARX5_RUNTIME_START_CONFIRMATION
 from armctrl.runtime_session import record_runtime_hold_tick
 from armctrl.runtime_session import refresh_runtime_status_payload
+from armctrl.runtime_session import RuntimeSessionError
 from armctrl.runtime_session import start_fake_runtime_session, stop_runtime_session_from_artifact
 from armctrl.runtime_session import start_arx5_runtime_session
 from armctrl.runtime_session import watchdog_tick_from_artifact
@@ -1291,6 +1292,34 @@ def test_runtime_queue_records_live_hold_start_pose_policy(
         "q_hold_to_safe_center_max_abs_rad": 0.0,
         "failed_checks": [],
     }
+
+
+def test_runtime_queue_rejects_stale_live_hold_evidence(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    stale_wall_time_s = time.time() - 5.0
+    session["heartbeat"]["wall_time_s"] = stale_wall_time_s
+    session["last_hold_wall_time_s"] = stale_wall_time_s
+    session["hold_fresh"] = False
+    session_artifact.write_text(
+        json.dumps(session, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeSessionError, match="runtime live hold evidence is stale"):
+        submit_trajectory_command(
+            session_artifact_path=session_artifact,
+            owner="recipe",
+            expected_q_start=(0.0, 0.3, 0.3),
+            q_points=[(0.0, 0.3, 0.3), (0.01, 0.3, 0.3)],
+            send_hz=50.0,
+            max_start_error_rad=0.02,
+            heartbeat_timeout_s=0.5,
+            max_heartbeat_age_s=1.0,
+        )
 
 
 def test_runtime_queue_rejects_explicit_start_policy_before_preposition(

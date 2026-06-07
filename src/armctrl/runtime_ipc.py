@@ -66,6 +66,7 @@ def submit_trajectory_command(
         start_pose_policy=start_pose_policy,
         max_start_error_rad=float(max_start_error_rad),
         heartbeat_timeout_s=float(heartbeat_timeout_s),
+        max_heartbeat_age_s=float(max_heartbeat_age_s),
     )
     command_id = str(uuid4())
     queue_dir = runtime_command_queue_dir(session_artifact_path)
@@ -146,6 +147,7 @@ def submit_intent_command(
         start_pose_policy=start_pose_policy,
         max_start_error_rad=float(max_start_error_rad),
         heartbeat_timeout_s=float(heartbeat_timeout_s),
+        max_heartbeat_age_s=float(max_heartbeat_age_s),
     )
     command_id = str(uuid4())
     queue_dir = runtime_command_queue_dir(session_artifact_path)
@@ -263,6 +265,7 @@ def execute_runtime_command(
             start_pose_policy=str(command.get("start_pose_policy", "live_hold")),
             max_start_error_rad=float(command.get("max_start_error_rad", 0.02)),
             heartbeat_timeout_s=float(command.get("heartbeat_timeout_s", 0.5)),
+            max_heartbeat_age_s=float(max_heartbeat_age_s),
         )
         live_runtime = runtime
         if live_runtime is None:
@@ -371,6 +374,11 @@ def execute_runtime_command(
                 status=status,
                 max_heartbeat_age_s=max_heartbeat_age_s,
             )
+            if session.get("mode") == "hold_safe":
+                session["hold_fresh"] = True
+                session["last_hold_wall_time_s"] = time.time()
+                session["hold_age_s"] = 0.0
+                session["readiness"] = runtime_readiness(session)
         else:
             session["status"] = "faulted"
             session["mode"] = motion.landing_mode
@@ -973,6 +981,7 @@ def _ensure_can_queue_command(
     start_pose_policy: str,
     max_start_error_rad: float,
     heartbeat_timeout_s: float,
+    max_heartbeat_age_s: float,
 ) -> dict[str, object]:
     if session.get("owner") is not None:
         raise RuntimeSessionError(
@@ -988,6 +997,14 @@ def _ensure_can_queue_command(
         raise ValueError("heartbeat_timeout_s must be positive")
     if not owner:
         raise ValueError("owner must not be empty")
+    freshness_guard = _live_hold_freshness_guard(
+        session,
+        max_age_s=float(max_heartbeat_age_s),
+    )
+    if freshness_guard["status"] != "pass":
+        error_payload = dict(session)
+        error_payload["freshness_guard"] = freshness_guard
+        raise RuntimeSessionError("runtime live hold evidence is stale", error_payload)
     start_pose_guard = _start_pose_guard(
         session,
         expected_q_start=expected_q_start,
@@ -1005,6 +1022,41 @@ def _ensure_can_queue_command(
             error_payload,
         )
     return start_pose_guard
+
+
+def _live_hold_freshness_guard(
+    session: dict[str, object],
+    *,
+    max_age_s: float,
+) -> dict[str, object]:
+    heartbeat = session.get("heartbeat")
+    heartbeat_wall_time_s = (
+        heartbeat.get("wall_time_s") if isinstance(heartbeat, dict) else None
+    )
+    heartbeat_age_s = _wall_age_s(heartbeat_wall_time_s)
+    hold_age_s = _wall_age_s(session.get("last_hold_wall_time_s"))
+    failed_checks: list[str] = []
+    if heartbeat_age_s is None or heartbeat_age_s > float(max_age_s):
+        failed_checks.append("heartbeat_fresh")
+    if session.get("hold_fresh") is not True:
+        failed_checks.append("hold_fresh")
+    if hold_age_s is None or hold_age_s > float(max_age_s):
+        failed_checks.append("hold_tick_fresh")
+    return {
+        "status": "pass" if not failed_checks else "fail",
+        "max_age_s": float(max_age_s),
+        "heartbeat_age_s": heartbeat_age_s,
+        "hold_age_s": hold_age_s,
+        "failed_checks": failed_checks,
+    }
+
+
+def _wall_age_s(wall_time_s: object) -> float | None:
+    try:
+        timestamp = float(wall_time_s)
+    except (TypeError, ValueError):
+        return None
+    return max(0.0, time.time() - timestamp)
 
 
 def _start_pose_guard(

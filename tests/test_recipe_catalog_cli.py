@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from armctrl.recipes import RecipeCatalog
+from armctrl.runtime_session import record_runtime_hold_tick
 from armctrl.runtime_session import start_fake_runtime_session
 from armctrl.safety import SafetyGate
 
@@ -229,7 +230,6 @@ def test_cli_recipe_export_eef_seed_reads_final_joint_sample(
         capture_output=True,
         text=True,
     )
-
     completed = subprocess.run(
         [
             sys.executable,
@@ -303,7 +303,6 @@ def test_cli_recipe_export_agent_preset_contract_collects_handoff_surface(
         capture_output=True,
         text=True,
     )
-
     completed = subprocess.run(
         [
             sys.executable,
@@ -527,16 +526,17 @@ def test_cli_recipe_runtime_submit_queues_live_runtime_owner(
     submit_log = tmp_path / "recipe_runtime_submit.json"
     runtime_session_artifact = tmp_path / "runtime-session.json"
     safe_center = [0.0, 0.3, 0.3, 0.0, 0.0, 0.0]
+    session = start_fake_runtime_session(
+        q_current=safe_center,
+        safe_center=safe_center,
+        send_hz=50.0,
+        hold_hz=50.0,
+        max_joint_step_rad=0.01,
+        max_heartbeat_age_s=5.0,
+    )
     runtime_session_artifact.write_text(
         json.dumps(
-            start_fake_runtime_session(
-                q_current=safe_center,
-                safe_center=safe_center,
-                send_hz=50.0,
-                hold_hz=50.0,
-                max_joint_step_rad=0.01,
-                max_heartbeat_age_s=5.0,
-            ),
+            session,
             ensure_ascii=False,
             indent=2,
         ),
@@ -561,6 +561,16 @@ def test_cli_recipe_runtime_submit_queues_live_runtime_owner(
         check=True,
         capture_output=True,
         text=True,
+    )
+    session = record_runtime_hold_tick(
+        session,
+        q_meas=safe_center,
+        fault_flags=(),
+        max_heartbeat_age_s=5.0,
+    )
+    runtime_session_artifact.write_text(
+        json.dumps(session, ensure_ascii=False, indent=2),
+        encoding="utf-8",
     )
 
     completed = subprocess.run(
@@ -610,16 +620,17 @@ def test_cli_recipe_runtime_submit_explicit_q_requires_preposition(
     runtime_session_artifact = tmp_path / "runtime-session.json"
     safe_center = [0.0, 0.3, 0.3, 0.0, 0.0, 0.0]
     explicit_start = [0.1, 0.3, 0.3, 0.0, 0.0, 0.0]
+    session = start_fake_runtime_session(
+        q_current=safe_center,
+        safe_center=safe_center,
+        send_hz=50.0,
+        hold_hz=50.0,
+        max_joint_step_rad=0.01,
+        max_heartbeat_age_s=5.0,
+    )
     runtime_session_artifact.write_text(
         json.dumps(
-            start_fake_runtime_session(
-                q_current=safe_center,
-                safe_center=safe_center,
-                send_hz=50.0,
-                hold_hz=50.0,
-                max_joint_step_rad=0.01,
-                max_heartbeat_age_s=5.0,
-            ),
+            session,
             ensure_ascii=False,
             indent=2,
         ),
@@ -664,6 +675,16 @@ def test_cli_recipe_runtime_submit_explicit_q_requires_preposition(
         )
     trajectory_path.write_text(
         "\n".join([header, *patched_rows]) + "\n",
+        encoding="utf-8",
+    )
+    session = record_runtime_hold_tick(
+        session,
+        q_meas=safe_center,
+        fault_flags=(),
+        max_heartbeat_age_s=5.0,
+    )
+    runtime_session_artifact.write_text(
+        json.dumps(session, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 
