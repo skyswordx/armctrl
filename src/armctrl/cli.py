@@ -423,6 +423,28 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--json", action="store_true", dest="as_json"
     )
 
+    recipe_runtime_submit_parser = recipe_subparsers.add_parser("runtime-submit")
+    recipe_runtime_submit_parser.add_argument("--plan-dir", required=True)
+    recipe_runtime_submit_parser.add_argument("--runtime-session-artifact", required=True)
+    recipe_runtime_submit_parser.add_argument(
+        "--max-start-error-rad",
+        type=float,
+        default=0.02,
+    )
+    recipe_runtime_submit_parser.add_argument(
+        "--heartbeat-timeout-s",
+        type=float,
+    )
+    recipe_runtime_submit_parser.add_argument(
+        "--max-heartbeat-age-s",
+        type=float,
+        default=1.0,
+    )
+    recipe_runtime_submit_parser.add_argument("--output")
+    recipe_runtime_submit_parser.add_argument(
+        "--json", action="store_true", dest="as_json"
+    )
+
     execute_parser = recipe_subparsers.add_parser("execute")
     execute_parser.add_argument("name")
     execute_parser.add_argument("--backend", default="not_configured")
@@ -1678,6 +1700,104 @@ def main(argv: Sequence[str] | None = None) -> int:
         payload = {"status": "ok", **result}
         payload = _attach_output_artifact(payload, args.output)
         return _emit(payload, as_json=args.as_json)
+
+    if args.command == "recipe" and args.recipe_command == "runtime-submit":
+        plan_dir = Path(args.plan_dir)
+        manifest_path = plan_dir / "manifest.json"
+        trajectory_path = plan_dir / "planned_trajectory.csv"
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            safety = manifest.get("safety")
+            if not isinstance(safety, dict) or safety.get("allowed") is not True:
+                raise RuntimeError("recipe plan safety gate is not passed")
+            request = manifest.get("request")
+            if not isinstance(request, dict):
+                raise ValueError("recipe manifest is missing request")
+            start_joints = request.get("start_joints")
+            if not isinstance(start_joints, list):
+                raise ValueError("recipe manifest is missing request.start_joints")
+            sample_hz = float(request.get("sample_hz"))
+            q_points = _read_sysid_execution_q_points(
+                trajectory_path,
+                dof=len(start_joints),
+            )
+            queued = submit_trajectory_command(
+                session_artifact_path=Path(args.runtime_session_artifact),
+                owner="recipe",
+                expected_q_start=q_points[0],
+                q_points=q_points,
+                send_hz=sample_hz,
+                max_start_error_rad=args.max_start_error_rad,
+                heartbeat_timeout_s=(
+                    float(args.heartbeat_timeout_s)
+                    if args.heartbeat_timeout_s is not None
+                    else max(1.0, len(q_points) / sample_hz + 1.0)
+                ),
+                max_heartbeat_age_s=args.max_heartbeat_age_s,
+            )
+        except FileNotFoundError as error:
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.recipe_runtime_submit.v1",
+                "movement_allowed": False,
+                "hardware_motion": False,
+                "movement_command_sent": False,
+                "reason": str(error),
+                "plan_dir": str(plan_dir),
+                "next_gate": "run armctrl recipe plan <name> --output <dir> --json before runtime submit",
+            }
+            payload = _attach_output_artifact(payload, args.output)
+            _emit(payload, as_json=args.as_json)
+            return 3
+        except (RuntimeSessionError, RuntimeError, ValueError) as error:
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.recipe_runtime_submit.v1",
+                "movement_allowed": False,
+                "hardware_motion": False,
+                "movement_command_sent": False,
+                "reason": str(error),
+                "plan_dir": str(plan_dir),
+                "runtime": {
+                    "single_owner_runtime_session": True,
+                    "runtime_session_artifact": str(args.runtime_session_artifact),
+                    "owner": "recipe",
+                    "mode": "trajectory_replay",
+                },
+                "next_gate": "complete live runtime hold_safe readiness before Recipe runtime submit",
+            }
+            payload = _attach_output_artifact(payload, args.output)
+            _emit(payload, as_json=args.as_json)
+            return 3
+        payload = {
+            "status": "queued",
+            "schema": "armctrl.recipe_runtime_submit.v1",
+            "movement_allowed": True,
+            "hardware_motion": True,
+            "movement_command_sent": False,
+            "recipe_plan_dir": str(plan_dir),
+            "recipe": manifest["recipe"],
+            "safety": safety,
+            "runtime": {
+                "single_owner_runtime_session": True,
+                "runtime_session_artifact": str(args.runtime_session_artifact),
+                "owner": "recipe",
+                "mode": "trajectory_replay",
+                "queue": queued["runtime"]["queue"],
+            },
+            "runtime_command": {
+                "command_id": queued["command_id"],
+                "status": "queued",
+                "artifacts": queued["artifacts"],
+                "sample_count": len(q_points),
+                "send_hz": sample_hz,
+            },
+            "fault_landing_mode": "damping",
+            "next_gate": "wait for live runtime command result artifact",
+        }
+        payload = _attach_output_artifact(payload, args.output)
+        _emit(payload, as_json=args.as_json)
+        return 0
 
     if args.command == "recipe" and args.recipe_command == "execute":
         recipe = catalog.get(args.name)

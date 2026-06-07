@@ -526,6 +526,161 @@ def test_cli_recipe_runtime_smoke_fake_acquires_runtime_owner_lease(
     assert released_session["readiness"]["agent_sysid_smoke_allowed"] is True
 
 
+def test_cli_recipe_runtime_submit_queues_live_runtime_owner(
+    tmp_path: Path,
+) -> None:
+    plan_dir = tmp_path / "recipe-runtime-submit-plan"
+    submit_log = tmp_path / "recipe_runtime_submit.json"
+    runtime_session_artifact = tmp_path / "runtime-session.json"
+    safe_center = [0.0, 0.3, 0.3, 0.0, 0.0, 0.0]
+    runtime_session_artifact.write_text(
+        json.dumps(
+            start_fake_runtime_session(
+                q_current=safe_center,
+                safe_center=safe_center,
+                send_hz=50.0,
+                hold_hz=50.0,
+                max_joint_step_rad=0.01,
+                max_heartbeat_age_s=5.0,
+            ),
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "recipe",
+            "plan",
+            "home",
+            "--sample-hz",
+            "50",
+            "--duration",
+            "0.1",
+            "--output",
+            str(plan_dir),
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "recipe",
+            "runtime-submit",
+            "--plan-dir",
+            str(plan_dir),
+            "--runtime-session-artifact",
+            str(runtime_session_artifact),
+            "--output",
+            str(submit_log),
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+    command = json.loads(Path(payload["runtime_command"]["artifacts"]["command"]).read_text(encoding="utf-8"))
+    written = json.loads(submit_log.read_text(encoding="utf-8"))
+
+    assert payload["status"] == "queued"
+    assert payload["schema"] == "armctrl.recipe_runtime_submit.v1"
+    assert payload["movement_command_sent"] is False
+    assert payload["runtime"]["single_owner_runtime_session"] is True
+    assert payload["runtime"]["owner"] == "recipe"
+    assert payload["runtime"]["mode"] == "trajectory_replay"
+    assert payload["runtime_command"]["sample_count"] == 6
+    assert payload["runtime_command"]["send_hz"] == 50.0
+    assert command["owner"] == "recipe"
+    assert command["kind"] == "trajectory"
+    assert command["q_points"][0] == safe_center
+    assert written == payload
+
+
+def test_cli_recipe_runtime_submit_rejects_busy_runtime_owner(
+    tmp_path: Path,
+) -> None:
+    plan_dir = tmp_path / "recipe-runtime-submit-plan"
+    runtime_session_artifact = tmp_path / "runtime-session.json"
+    safe_center = [0.0, 0.3, 0.3, 0.0, 0.0, 0.0]
+    session = start_fake_runtime_session(
+        q_current=safe_center,
+        safe_center=safe_center,
+        send_hz=50.0,
+        hold_hz=50.0,
+        max_joint_step_rad=0.01,
+        max_heartbeat_age_s=5.0,
+    )
+    session["mode"] = "agent_servo"
+    session["owner"] = "agent"
+    session["owner_lease"] = {
+        "schema": "armctrl.arm_runtime_owner_lease.v1",
+        "runtime_session_id": session["runtime_session_id"],
+        "owner": "agent",
+        "mode": "agent_servo",
+        "heartbeat_timeout_s": 1.0,
+    }
+    runtime_session_artifact.write_text(
+        json.dumps(session, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "recipe",
+            "plan",
+            "home",
+            "--sample-hz",
+            "50",
+            "--duration",
+            "0.1",
+            "--output",
+            str(plan_dir),
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "recipe",
+            "runtime-submit",
+            "--plan-dir",
+            str(plan_dir),
+            "--runtime-session-artifact",
+            str(runtime_session_artifact),
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 3
+    payload = json.loads(completed.stdout)
+    assert payload["status"] == "rejected"
+    assert payload["reason"] == "runtime is owned by agent"
+    assert payload["runtime"]["owner"] == "recipe"
+    busy_session = json.loads(runtime_session_artifact.read_text(encoding="utf-8"))
+    assert busy_session["owner"] == "agent"
+
+
 def test_cli_recipe_runtime_smoke_fake_rejects_busy_runtime_owner(
     tmp_path: Path,
 ) -> None:
