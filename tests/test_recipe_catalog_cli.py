@@ -3,6 +3,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from armctrl.recipes import RecipeCatalog
 from armctrl.safety import SafetyGate
 
@@ -378,6 +380,72 @@ def test_cli_recipe_execute_accepts_sim_backend_after_safety_preview(
     assert payload["handoff"]["eef_seed"]["final_joints"] == [0.0, 0.3, 0.3, 0.0, 0.0, 0.0]
     assert any("recipe export-eef-seed" in step for step in payload["next_steps"])
     assert any("--recipe-plan-dir" in step for step in payload["next_steps"])
+
+
+def test_cli_recipe_runtime_smoke_fake_replays_checked_plan_with_motion_runtime(
+    tmp_path: Path,
+) -> None:
+    plan_dir = tmp_path / "recipe-runtime-smoke-plan"
+    runtime_log = tmp_path / "recipe_runtime_smoke.json"
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "recipe",
+            "plan",
+            "home",
+            "--sample-hz",
+            "50",
+            "--duration",
+            "0.1",
+            "--output",
+            str(plan_dir),
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "recipe",
+            "runtime-smoke-fake",
+            "--plan-dir",
+            str(plan_dir),
+            "--output",
+            str(runtime_log),
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+    written = json.loads(runtime_log.read_text(encoding="utf-8"))
+
+    assert payload["status"] == "ok"
+    assert payload["schema"] == "armctrl.recipe_runtime_smoke.v1"
+    assert payload["movement_allowed"] is False
+    assert payload["hardware_motion"] is False
+    assert payload["runtime"]["backend"] == "fake"
+    assert payload["runtime"]["owner"] == "motion_runtime"
+    assert payload["recipe_plan_dir"] == str(plan_dir)
+    assert payload["safety"]["allowed"] is True
+    assert payload["motion_runtime"]["producer"] == "recipe"
+    assert payload["motion_runtime"]["mode"] == "trajectory_replay"
+    assert payload["motion_runtime"]["trajectory_sample_hz"] == 50.0
+    assert payload["motion_runtime"]["actual_send_hz"] == 50.0
+    assert payload["motion_runtime"]["send_jitter_ms_p95"] == pytest.approx(0.0)
+    assert payload["motion_runtime"]["landing_mode"] == "hold"
+    assert payload["motion_runtime"]["sample_count"] == 6
+    assert payload["artifacts"]["runtime_log"] == str(runtime_log)
+    assert written == payload
 
 
 def test_cli_recipe_status_reports_no_hardware_session() -> None:

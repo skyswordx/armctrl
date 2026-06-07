@@ -236,6 +236,12 @@ def test_cli_lerobot_rollout_plan_can_attach_eef_action_bridge(tmp_path: Path) -
     assert payload["eef_action_bridge"]["control_mode"] == "cartesian_pose_absolute"
     assert payload["eef_action_bridge"]["action_dict"]["eef.z"] == 0.2
     assert payload["runtime"]["owner"] == "native_lerobot_rollout"
+    assert payload["runtime"]["runtime_boundary"] == {
+        "runtime_owner": "native_lerobot_rollout",
+        "armctrl_role": "processor_contract_audit_only",
+        "motion_runtime_owner": False,
+        "hardware_execution": "outside_armctrl",
+    }
     assert payload["processor_bridge"]["schema"] == "armctrl.lerobot_rollout_processor_bridge.v1"
     assert payload["processor_bridge"]["programmatic_api"]["action_hook"] == "robot_action_processor"
     assert (
@@ -469,6 +475,12 @@ def test_lerobot_agent_runtime_helper_sample_consumes_agent_runtime_contract(
     assert payload["movement_allowed"] is False
     assert payload["resolved_backend"] == "lerobot_rollout"
     assert payload["runtime_owner"] == "native_lerobot_rollout"
+    assert payload["runtime_boundary"] == {
+        "runtime_owner": "native_lerobot_rollout",
+        "armctrl_role": "processor_contract_audit_only",
+        "motion_runtime_owner": False,
+        "hardware_execution": "outside_armctrl",
+    }
     assert payload["agent_action_schema"]["action_id"] == "eef.pose_delta"
     assert payload["processor_session_plan"]["action_hook"] == "robot_action_processor"
     assert payload["processor_session_plan"]["observation_hook"] == "robot_observation_processor"

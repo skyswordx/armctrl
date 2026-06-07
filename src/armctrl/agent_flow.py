@@ -2,8 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from time import monotonic as default_monotonic
+from time import sleep as default_sleep
+from typing import Callable
 import json
+import math
 
+from armctrl.acceptance import build_real_motion_acceptance
 from armctrl.eef import (
     EefDoctor,
     EefAgentRuntimeContractExporter,
@@ -29,6 +34,12 @@ from armctrl.lerobot_bridge import (
     LeRobotProcessorHelperPreviewRequest,
     LeRobotProcessorHelperPreviewer,
 )
+from armctrl.motion_runtime import (
+    FakeMotionBackend,
+    JointIntentFrame,
+    MotionExecutionResult,
+    MotionRuntime,
+)
 from armctrl.recipe_runtime import (
     DEFAULT_RECIPE_START,
     RecipeAgentPresetContractExporter,
@@ -36,6 +47,12 @@ from armctrl.recipe_runtime import (
     RecipePlanRequest,
     RecipePlanner,
 )
+
+AGENT_FLOW_REAL_RUNTIME_CONFIRMATION = (
+    "I UNDERSTAND THIS WILL MOVE THE ARM WITH AGENT INTENT"
+)
+AGENT_MISSED_INTENT_TIMEOUT_S = 0.3
+AGENT_FAULT_TIMEOUT_S = 1.0
 
 
 @dataclass(frozen=True)
@@ -61,6 +78,28 @@ class AgentFlowPlanRequest:
     model: str = "X5"
     interface: str = "can0"
     policy_path: str = "outputs/train/act_arx5/checkpoints/last/pretrained_model"
+
+
+@dataclass(frozen=True)
+class AgentFlowRuntimeSmokeRequest:
+    contract_path: Path
+    q_start: tuple[float, ...]
+    q_target: tuple[float, ...]
+    send_hz: float = 50.0
+    max_joint_delta_rad: float | None = 0.005
+
+
+@dataclass(frozen=True)
+class AgentFlowRealRuntimeSmokeRequest:
+    contract_path: Path
+    readiness_artifact_path: Path
+    model: str
+    interface: str
+    q_start: tuple[float, ...]
+    q_target: tuple[float, ...]
+    confirm: str
+    send_hz: float = 50.0
+    max_joint_delta_rad: float | None = 0.005
 
 
 class AgentFlowPlanner:
@@ -404,6 +443,215 @@ class AgentFlowReviewer:
         }
 
 
+class AgentFlowRuntimeSmoker:
+    def run(self, request: AgentFlowRuntimeSmokeRequest) -> dict[str, object]:
+        contract = json.loads(request.contract_path.read_text(encoding="utf-8"))
+        if contract.get("schema") != "armctrl.agent_flow_plan.v1":
+            raise ValueError(
+                "agent flow contract file must use schema armctrl.agent_flow_plan.v1"
+            )
+        if not _agent_flow_review_passed(contract):
+            raise RuntimeError("agent flow contract review is not complete")
+        control_period_s = _agent_flow_control_period_s(contract)
+        clock = _ManualRuntimeClock()
+        backend = FakeMotionBackend()
+        runtime = MotionRuntime(
+            backend=backend,
+            monotonic=clock.monotonic,
+            sleep=clock.sleep,
+        )
+        result = runtime.execute_intent_frame(
+            JointIntentFrame(
+                q_start=request.q_start,
+                q_target=request.q_target,
+                control_period_s=control_period_s,
+                max_joint_delta_rad=request.max_joint_delta_rad,
+            ),
+            producer="agent",
+            send_hz=request.send_hz,
+            hold_after=False,
+        )
+        missed_intent_timeout_s = AGENT_MISSED_INTENT_TIMEOUT_S
+        missed_intent_age_s = 0.31
+        clock.sleep(max(0.0, missed_intent_age_s - clock.now_s))
+        missed_intent_event = runtime.watchdog_tick(
+            missed_intent_timeout_s=missed_intent_timeout_s,
+            fault_timeout_s=AGENT_FAULT_TIMEOUT_S,
+        )
+        if missed_intent_event is None:
+            raise RuntimeError("agent runtime smoke watchdog did not trigger hold")
+        return {
+            "schema": "armctrl.agent_flow_runtime_smoke.v1",
+            "movement_allowed": False,
+            "hardware_motion": False,
+            "producer": "agent",
+            "contract_path": str(request.contract_path),
+            "runtime": {
+                "backend": "fake",
+                "mode": result.mode,
+                "owner": "motion_runtime",
+            },
+            "intent": {
+                "q_start": list(request.q_start),
+                "q_target": list(request.q_target),
+                "control_period_s": control_period_s,
+                "agent_intent_hz": 1.0 / control_period_s,
+                "backend_send_hz": request.send_hz,
+                "max_joint_delta_rad": request.max_joint_delta_rad,
+            },
+            "motion_runtime": _motion_runtime_manifest(result),
+            "frequency_contract": _agent_frequency_contract(
+                control_period_s=control_period_s,
+                backend_send_hz=request.send_hz,
+                result=result,
+                missed_intent_exercised_in_this_run=True,
+            ),
+            "watchdog": {
+                "policy": _agent_watchdog_policy(
+                    missed_intent_exercised_in_this_run=True
+                ),
+                "missed_intent": {
+                    **missed_intent_event,
+                    "age_s": missed_intent_age_s,
+                    "missed_intent_timeout_s": missed_intent_timeout_s,
+                },
+                "backend_hold_count": backend.hold_count,
+                "backend_damping_count": backend.damping_count,
+            },
+            "notes": [
+                "fake smoke only verifies Agent contract to MotionRuntime timing semantics",
+                "it does not perform EEF IK, SDK commands, LeRobot rollout, or hardware motion",
+            ],
+        }
+
+
+class AgentFlowRealRuntimeSmoker:
+    def __init__(
+        self,
+        *,
+        backend_factory: Callable[..., object] | None = None,
+        monotonic: Callable[[], float] = default_monotonic,
+        sleep: Callable[[float], None] = default_sleep,
+    ) -> None:
+        self._backend_factory = backend_factory or _default_arx5_agent_backend_factory
+        self._monotonic = monotonic
+        self._sleep = sleep
+
+    def run(self, request: AgentFlowRealRuntimeSmokeRequest) -> dict[str, object]:
+        if request.confirm != AGENT_FLOW_REAL_RUNTIME_CONFIRMATION:
+            raise PermissionError(
+                "agent real runtime smoke requires explicit operator confirmation"
+            )
+        contract = json.loads(request.contract_path.read_text(encoding="utf-8"))
+        if contract.get("schema") != "armctrl.agent_flow_plan.v1":
+            raise ValueError(
+                "agent flow contract file must use schema armctrl.agent_flow_plan.v1"
+            )
+        if not _agent_flow_review_passed(contract):
+            raise RuntimeError("agent flow contract review is not complete")
+        readiness = json.loads(request.readiness_artifact_path.read_text(encoding="utf-8"))
+        if not _agent_sysid_smoke_readiness_passed(readiness):
+            raise RuntimeError("agent/sysid smoke readiness is not passed")
+        control_period_s = _agent_flow_control_period_s(contract)
+        backend = self._backend_factory(
+            model=request.model,
+            interface=request.interface,
+            controller_dt_s=_controller_dt_from_readiness_artifact(readiness),
+        )
+        enter_hold_or_damping = getattr(backend, "enter_hold_or_damping", None)
+        if callable(enter_hold_or_damping):
+            enter_hold_or_damping()
+        runtime = MotionRuntime(
+            backend=backend,
+            monotonic=self._monotonic,
+            sleep=self._sleep,
+        )
+        result = runtime.execute_intent_frame(
+            JointIntentFrame(
+                q_start=request.q_start,
+                q_target=request.q_target,
+                control_period_s=control_period_s,
+                max_joint_delta_rad=request.max_joint_delta_rad,
+            ),
+            producer="agent",
+            send_hz=request.send_hz,
+            hold_after=True,
+        )
+        motion_runtime = _motion_runtime_manifest(result)
+        movement_command_sent = bool(result.samples)
+        return {
+            "schema": "armctrl.agent_flow_runtime_smoke_real.v1",
+            "run_status": result.status,
+            "hardware_motion": True,
+            "movement_command_sent": movement_command_sent,
+            "producer": "agent",
+            "contract_path": str(request.contract_path),
+            "readiness_artifact_path": str(request.readiness_artifact_path),
+            "requires_confirm": AGENT_FLOW_REAL_RUNTIME_CONFIRMATION,
+            "runtime": {
+                "backend": "arx5_sdk",
+                "mode": result.mode,
+                "owner": "motion_runtime",
+                "model": request.model,
+                "interface": request.interface,
+            },
+            "readiness": {
+                "agent_sysid_smoke_allowed": readiness.get(
+                    "agent_sysid_smoke_allowed"
+                ),
+                "prerequisites": readiness.get("prerequisites"),
+                "tiny_motion": readiness.get("tiny_motion"),
+            },
+            "intent": {
+                "q_start": list(request.q_start),
+                "q_target": list(request.q_target),
+                "control_period_s": control_period_s,
+                "agent_intent_hz": 1.0 / control_period_s,
+                "backend_send_hz": request.send_hz,
+                "max_joint_delta_rad": request.max_joint_delta_rad,
+            },
+            "motion_runtime": motion_runtime,
+            "frequency_contract": _agent_frequency_contract(
+                control_period_s=control_period_s,
+                backend_send_hz=request.send_hz,
+                result=result,
+                missed_intent_exercised_in_this_run=False,
+            ),
+            "watchdog": {
+                "policy": _agent_watchdog_policy(
+                    missed_intent_exercised_in_this_run=False
+                ),
+                "notes": [
+                    "real single-frame Agent smoke does not intentionally pause for a missed-intent timeout",
+                    "run fake Agent runtime smoke and later streaming-driver tests to verify missed-frame landing",
+                ],
+            },
+            "acceptance": build_real_motion_acceptance(
+                stage="agent_smoke",
+                motion_runtime=motion_runtime,
+                hardware_motion=True,
+                movement_command_sent=movement_command_sent,
+                readiness_passed=True,
+            ),
+            "fault_landing_mode": result.landing_mode,
+            "notes": [
+                "real Agent smoke only runs after sdk-agent-sysid-smoke-readiness passes",
+                "this path uses MotionRuntime rather than allowing Agent to call the SDK directly",
+            ],
+        }
+
+
+class _ManualRuntimeClock:
+    def __init__(self) -> None:
+        self.now_s = 0.0
+
+    def monotonic(self) -> float:
+        return self.now_s
+
+    def sleep(self, seconds: float) -> None:
+        self.now_s += max(0.0, seconds)
+
+
 def _agent_flow_recipe_plan_command(*, preset: str, recipe_plan_dir: Path) -> str:
     return f"uv run armctrl recipe plan {preset} --output {recipe_plan_dir} --json"
 
@@ -449,6 +697,199 @@ def _agent_motion_contract(
             ),
         }
     return payload
+
+
+def _agent_flow_review_passed(contract: dict[str, object]) -> bool:
+    review = contract.get("review")
+    if not isinstance(review, dict) or review.get("review_status") != "completed":
+        return False
+    sim_preview = review.get("sim_preview")
+    if not isinstance(sim_preview, dict):
+        return False
+    safety = sim_preview.get("safety")
+    return isinstance(safety, dict) and safety.get("allowed") is True
+
+
+def _agent_flow_control_period_s(contract: dict[str, object]) -> float:
+    eef = contract.get("eef")
+    if not isinstance(eef, dict):
+        raise ValueError("agent flow contract is missing eef plan")
+    plan = eef.get("plan")
+    if not isinstance(plan, dict):
+        raise ValueError("agent flow contract is missing eef plan")
+    command = plan.get("command")
+    if not isinstance(command, dict):
+        raise ValueError("agent flow contract is missing eef command")
+    control_period_s = float(command["control_period_s"])
+    if control_period_s <= 0.0:
+        raise ValueError("agent flow control_period_s must be positive")
+    return control_period_s
+
+
+def _motion_runtime_manifest(result: MotionExecutionResult) -> dict[str, object]:
+    payload = {
+        "schema": "armctrl.motion_runtime_result.v1",
+        "status": result.status,
+        "producer": result.producer,
+        "mode": result.mode,
+        "trajectory_sample_hz": result.trajectory_sample_hz,
+        "actual_send_hz": result.actual_send_hz,
+        "send_jitter_ms_p95": result.send_jitter_ms_p95,
+        "send_jitter_ms_p99": result.send_jitter_ms_p99,
+        "controller_dt_s": result.controller_dt_s,
+        "sample_count": len(result.samples),
+        "fault_flags": sorted(
+            {
+                fault_flag
+                for sample in result.samples
+                for fault_flag in sample.fault_flags
+            }
+        ),
+        "tracking": _motion_tracking_summary(result.samples),
+        "samples": [
+            {
+                "sent_monotonic_s": sample.sent_monotonic_s,
+                "q_cmd": list(sample.q_cmd),
+                "q_meas": list(sample.q_meas),
+                "dq_meas": list(sample.dq_meas),
+                "tau_meas": list(sample.tau_meas),
+                "fault_flags": list(sample.fault_flags),
+                "producer": sample.producer,
+                "mode": sample.mode,
+            }
+            for sample in result.samples
+        ],
+        "landing_mode": result.landing_mode,
+    }
+    if result.error is not None:
+        payload["error"] = result.error
+    return payload
+
+
+def _agent_frequency_contract(
+    *,
+    control_period_s: float,
+    backend_send_hz: float,
+    result: MotionExecutionResult,
+    missed_intent_exercised_in_this_run: bool,
+) -> dict[str, object]:
+    return {
+        "schema": "armctrl.agent_frequency_contract.v1",
+        "agent_intent_hz": 1.0 / control_period_s,
+        "agent_control_period_s": control_period_s,
+        "preview_sample_hz": 50.0,
+        "backend_send_hz": backend_send_hz,
+        "motion_runtime_trajectory_sample_hz": result.trajectory_sample_hz,
+        "actual_send_hz": result.actual_send_hz,
+        "interpolation_owner": "motion_runtime",
+        "controller_dt_s": result.controller_dt_s,
+        "missed_intent_timeout_s": AGENT_MISSED_INTENT_TIMEOUT_S,
+        "missed_intent_landing_mode": "hold",
+        "fault_timeout_s": AGENT_FAULT_TIMEOUT_S,
+        "fault_landing_mode": "damping",
+        "missed_intent_exercised_in_this_run": missed_intent_exercised_in_this_run,
+    }
+
+
+def _motion_tracking_summary(samples) -> dict[str, object]:
+    if not samples:
+        return {
+            "q_cmd_delta_rad": None,
+            "q_meas_delta_rad": None,
+            "q_cmd_delta_max_abs_rad": None,
+            "q_meas_delta_max_abs_rad": None,
+            "max_abs_sample_tracking_error_rad": None,
+            "final_tracking_error_rad": None,
+            "final_tracking_error_max_abs_rad": None,
+        }
+    q_cmd_delta = None
+    q_meas_delta = None
+    if len(samples) >= 2:
+        q_cmd_delta = _vector_delta(samples[0].q_cmd, samples[-1].q_cmd)
+        q_meas_delta = _vector_delta(samples[0].q_meas, samples[-1].q_meas)
+    final_tracking_error = _vector_delta(samples[-1].q_cmd, samples[-1].q_meas)
+    sample_errors = [
+        error
+        for sample in samples
+        for error in (_vector_delta(sample.q_cmd, sample.q_meas) or [])
+    ]
+    return {
+        "q_cmd_delta_rad": q_cmd_delta,
+        "q_meas_delta_rad": q_meas_delta,
+        "q_cmd_delta_max_abs_rad": _max_abs_or_none(q_cmd_delta),
+        "q_meas_delta_max_abs_rad": _max_abs_or_none(q_meas_delta),
+        "max_abs_sample_tracking_error_rad": _max_abs_or_none(sample_errors),
+        "final_tracking_error_rad": final_tracking_error,
+        "final_tracking_error_max_abs_rad": _max_abs_or_none(final_tracking_error),
+    }
+
+
+def _vector_delta(start: object, end: object) -> list[float] | None:
+    if not isinstance(start, list | tuple) or not isinstance(end, list | tuple):
+        return None
+    if len(start) == 0 or len(start) != len(end):
+        return None
+    return [
+        float(end_value) - float(start_value)
+        for start_value, end_value in zip(start, end)
+    ]
+
+
+def _max_abs_or_none(values: list[float] | None) -> float | None:
+    if values is None:
+        return None
+    if not values:
+        return None
+    return max(abs(value) for value in values)
+
+
+def _agent_sysid_smoke_readiness_passed(readiness: dict[str, object]) -> bool:
+    if readiness.get("schema") != "armctrl.sysid_agent_smoke_readiness.v1":
+        return False
+    return readiness.get("agent_sysid_smoke_allowed") is True
+
+
+def _agent_watchdog_policy(
+    *,
+    missed_intent_exercised_in_this_run: bool,
+) -> dict[str, object]:
+    return {
+        "missed_intent_timeout_s": AGENT_MISSED_INTENT_TIMEOUT_S,
+        "missed_intent_landing_mode": "hold",
+        "fault_timeout_s": AGENT_FAULT_TIMEOUT_S,
+        "fault_landing_mode": "damping",
+        "missed_intent_exercised_in_this_run": missed_intent_exercised_in_this_run,
+    }
+
+
+def _controller_dt_from_readiness_artifact(
+    readiness: dict[str, object],
+) -> float | None:
+    tiny_motion = readiness.get("tiny_motion")
+    if not isinstance(tiny_motion, dict):
+        return None
+    try:
+        controller_dt_s = float(tiny_motion.get("controller_dt_s"))
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(controller_dt_s) or controller_dt_s <= 0.0:
+        return None
+    return controller_dt_s
+
+
+def _default_arx5_agent_backend_factory(
+    *,
+    model: str,
+    interface: str,
+    controller_dt_s: float | None = None,
+):
+    from armctrl.sysid_run import Arx5InterfaceCollectionBackend
+
+    return Arx5InterfaceCollectionBackend(
+        model=model,
+        interface=interface,
+        controller_dt_s=controller_dt_s,
+    )
 
 
 def _agent_flow_recommended_path(

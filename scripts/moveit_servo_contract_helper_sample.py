@@ -58,6 +58,8 @@ def _build_payload(
         "plan_dir": str(runner_contract["plan_dir"]),
         "resolved_backend": resolved_backend,
         "runtime_owner": runner_contract["runner_api"]["owner"],
+        "runtime_boundary": _runtime_boundary(str(runner_contract["runner_api"]["owner"])),
+        "frequency_contract": _frequency_contract(ros_contract),
         "servo_session_plan": {
             "session_kind": "ros2_servo_node",
             "command_mode": command_mode,
@@ -86,6 +88,30 @@ def _build_payload(
             "It does not start ROS 2, publish commands, or move hardware.",
             "Use the generated session plan as the boundary artifact for a future mature MoveIt Servo helper implementation.",
         ],
+    }
+
+
+def _runtime_boundary(runtime_owner: str) -> dict[str, object]:
+    return {
+        "runtime_owner": runtime_owner,
+        "armctrl_role": "contract_preview_audit_only",
+        "motion_runtime_owner": False,
+        "hardware_execution": "outside_armctrl",
+    }
+
+
+def _frequency_contract(ros_contract: dict[str, object]) -> dict[str, object]:
+    control_period_s = ros_contract.get("control_period_s")
+    agent_intent_hz = None
+    if isinstance(control_period_s, int | float) and float(control_period_s) > 0.0:
+        agent_intent_hz = 1.0 / float(control_period_s)
+    return {
+        "agent_intent_hz": agent_intent_hz,
+        "command_publish_hz": "runtime_configured",
+        "servo_loop_hz": "moveit_servo_runtime_configured",
+        "actual_send_hz": "measure_in_runtime_artifact",
+        "controller_dt_s": "not_owned_by_armctrl",
+        "timestamp_policy": "ros_clock_or_servo_runtime_policy",
     }
 
 

@@ -6,6 +6,8 @@
 
 ### Added
 
+- Added `docs/lab_hardware_validation_checklist.md` as the short lab-facing gate sequence for `sdk-doctor -> hold/damping -> tiny motion -> readiness -> Agent smoke -> SysID smoke`, with explicit stop conditions and artifact fields for real hardware bring-up.
+- Added Chinese SysID acceptance guides for X5 excitation design and result-quality review, consolidating the gravity/friction/Fourier bring-up lessons, frequency-layering fixes, OED condition targets, safety-space gates, and final parameter-bundle acceptance criteria into the indexed docs.
 - Added profile-aware SysID OED safety settings: Fourier multisine now gets a wider offline OED amplitude envelope while gravity/friction can keep conservative hardware bring-up constraints.
 - Added FIGAROH base-regressor diagnostics to the external OED handoff path so `manifest.json` and OED scan summaries can distinguish FIGAROH base-regressor condition from Pinocchio full-regressor effective condition.
 - Added IPOPT print-level propagation and iteration-log tail extraction for SysID OED scans, making `obj/inf_pr/inf_du/alpha` evidence available when `print_level >= 5`.
@@ -22,6 +24,8 @@
 
 ### Changed
 
+- Updated the ARX5 SDK readiness contract to match the n100d `arx5-interface==0.1.2` Python binding: `set_to_hold` is no longer required when the installed SDK only exposes `set_to_damping`, and real-motion artifacts now report `damping_only` landing instead of pretending a hold mode was applied.
+- Tightened real-motion CLI gate semantics: real tiny motion, Agent real smoke, and SysID SDK smoke now require both `run_status == "completed"` and `acceptance.status == "pass"`; completed runs with `acceptance.status` of `incomplete` or `review_required` return nonzero and preserve their audit artifacts for review.
 - Changed URDF HTML trajectory previews to embed local mesh assets as data URIs, so X5 previews render the real STL geometry when opened outside the machine that generated the file instead of falling back to the FK skeleton.
 - Relaxed the X5 joint2/joint3 hard relation constraint for `fourier_multisine`; the narrow `q2-q3` band remains available for conservative gravity/friction probes but no longer locks the full-body OED search space.
 - Added profile-specific SysID execution step gates: global Agent/recipe motion remains at `0.01 rad/sample`, while Fourier/friction/gravity SysID plans can use `0.02/0.018/0.015 rad/sample` respectively at the 100 Hz execution layer.

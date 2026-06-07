@@ -6,6 +6,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from armctrl.limits import UrdfJointLimits, evaluate_joint_limit_samples
+from armctrl.motion_runtime import (
+    FakeMotionBackend,
+    JointTrajectoryPoint,
+    MotionAuditSample,
+    MotionExecutionResult,
+    MotionRuntime,
+)
 from armctrl.recipes import Recipe, RecipeCatalog
 from armctrl.simulation import TrajectoryPreviewer
 from armctrl.workspace import WorkspaceSafetyConfig, evaluate_workspace_fk_clearance
@@ -33,6 +40,11 @@ class RecipeEefSeedRequest:
 
 @dataclass(frozen=True)
 class RecipeAgentPresetContractRequest:
+    plan_dir: Path
+
+
+@dataclass(frozen=True)
+class RecipeRuntimeSmokeRequest:
     plan_dir: Path
 
 
@@ -280,6 +292,62 @@ class RecipeAgentPresetContractExporter:
         }
 
 
+class RecipeRuntimeSmoker:
+    def run(self, request: RecipeRuntimeSmokeRequest) -> dict[str, object]:
+        manifest_path = request.plan_dir / "manifest.json"
+        trajectory_path = request.plan_dir / "planned_trajectory.csv"
+        missing = [
+            str(path) for path in (manifest_path, trajectory_path) if not path.exists()
+        ]
+        if missing:
+            raise FileNotFoundError(
+                "missing recipe runtime smoke artifacts: " + ", ".join(missing)
+            )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        safety = manifest.get("safety")
+        if not isinstance(safety, dict) or safety.get("allowed") is not True:
+            raise RuntimeError("recipe plan safety gate is not passed")
+        sample_hz = float(manifest["request"]["sample_hz"])
+        points = _trajectory_points_from_csv(trajectory_path)
+        clock = _ManualRuntimeClock()
+        backend = FakeMotionBackend()
+        runtime = MotionRuntime(
+            backend=backend,
+            monotonic=clock.monotonic,
+            sleep=clock.sleep,
+        )
+        result = runtime.execute_trajectory(
+            points,
+            producer="recipe",
+            trajectory_sample_hz=sample_hz,
+            hold_after=True,
+        )
+        return {
+            "schema": "armctrl.recipe_runtime_smoke.v1",
+            "movement_allowed": False,
+            "hardware_motion": False,
+            "movement_command_sent": False,
+            "fake_commands_sent": len(backend.joint_commands),
+            "recipe_plan_dir": str(request.plan_dir),
+            "recipe": manifest["recipe"],
+            "safety": safety,
+            "runtime": {
+                "backend": "fake",
+                "owner": "motion_runtime",
+                "mode": result.mode,
+            },
+            "motion_runtime": _motion_runtime_manifest(result),
+            "next_gate": (
+                "real recipe execution still requires sdk doctor, hold/damping, tiny motion, "
+                "and explicit hardware backend readiness"
+            ),
+            "notes": [
+                "fake runtime smoke only proves checked Recipe trajectories flow through MotionRuntime.",
+                "It does not instantiate arx5_interface, MoveIt Servo, LeRobot rollout, or any hardware backend.",
+            ],
+        }
+
+
 def recipe_joint_samples(
     recipe: Recipe,
     *,
@@ -299,6 +367,129 @@ def recipe_joint_samples(
             )
         )
     return samples
+
+
+class _ManualRuntimeClock:
+    def __init__(self) -> None:
+        self.now_s = 0.0
+
+    def monotonic(self) -> float:
+        return self.now_s
+
+    def sleep(self, seconds: float) -> None:
+        self.now_s += max(0.0, seconds)
+
+
+def _trajectory_points_from_csv(path: Path) -> list[JointTrajectoryPoint]:
+    with path.open("r", encoding="utf-8-sig", newline="") as file:
+        rows = list(csv.DictReader(file))
+    if not rows:
+        raise ValueError("recipe planned trajectory must contain at least one sample")
+    joint_columns = sorted(
+        [name for name in rows[0] if name.startswith("q_cmd_")],
+        key=lambda name: int(name.removeprefix("q_cmd_")),
+    )
+    if not joint_columns:
+        raise ValueError("recipe planned trajectory is missing q_cmd columns")
+    return [
+        JointTrajectoryPoint(
+            time_s=float(row["time_s"]),
+            q=tuple(float(row[column]) for column in joint_columns),
+        )
+        for row in rows
+    ]
+
+
+def _motion_runtime_manifest(result: MotionExecutionResult) -> dict[str, object]:
+    return {
+        "schema": "armctrl.motion_runtime_result.v1",
+        "status": result.status,
+        "producer": result.producer,
+        "mode": result.mode,
+        "trajectory_sample_hz": result.trajectory_sample_hz,
+        "actual_send_hz": result.actual_send_hz,
+        "send_jitter_ms_p95": result.send_jitter_ms_p95,
+        "send_jitter_ms_p99": result.send_jitter_ms_p99,
+        "controller_dt_s": result.controller_dt_s,
+        "sample_count": len(result.samples),
+        "fault_flags": sorted(
+            {
+                fault_flag
+                for sample in result.samples
+                for fault_flag in sample.fault_flags
+            }
+        ),
+        "tracking": _motion_tracking_summary(result.samples),
+        "samples": [_motion_sample_manifest(sample) for sample in result.samples],
+        "landing_mode": result.landing_mode,
+    }
+
+
+def _motion_sample_manifest(sample: MotionAuditSample) -> dict[str, object]:
+    return {
+        "sent_monotonic_s": sample.sent_monotonic_s,
+        "q_cmd": list(sample.q_cmd),
+        "q_meas": list(sample.q_meas),
+        "dq_meas": list(sample.dq_meas),
+        "tau_meas": list(sample.tau_meas),
+        "fault_flags": list(sample.fault_flags),
+        "producer": sample.producer,
+        "mode": sample.mode,
+    }
+
+
+def _motion_tracking_summary(
+    samples: tuple[MotionAuditSample, ...],
+) -> dict[str, object]:
+    if not samples:
+        return {
+            "q_cmd_delta_rad": None,
+            "q_meas_delta_rad": None,
+            "q_cmd_delta_max_abs_rad": None,
+            "q_meas_delta_max_abs_rad": None,
+            "max_abs_sample_tracking_error_rad": None,
+            "final_tracking_error_rad": None,
+            "final_tracking_error_max_abs_rad": None,
+        }
+    q_cmd_delta = None
+    q_meas_delta = None
+    if len(samples) >= 2:
+        q_cmd_delta = _vector_delta(samples[0].q_cmd, samples[-1].q_cmd)
+        q_meas_delta = _vector_delta(samples[0].q_meas, samples[-1].q_meas)
+    final_tracking_error = _vector_delta(samples[-1].q_cmd, samples[-1].q_meas)
+    sample_errors = [
+        error
+        for sample in samples
+        for error in (_vector_delta(sample.q_cmd, sample.q_meas) or [])
+    ]
+    return {
+        "q_cmd_delta_rad": q_cmd_delta,
+        "q_meas_delta_rad": q_meas_delta,
+        "q_cmd_delta_max_abs_rad": _max_abs_or_none(q_cmd_delta),
+        "q_meas_delta_max_abs_rad": _max_abs_or_none(q_meas_delta),
+        "max_abs_sample_tracking_error_rad": _max_abs_or_none(sample_errors),
+        "final_tracking_error_rad": final_tracking_error,
+        "final_tracking_error_max_abs_rad": _max_abs_or_none(final_tracking_error),
+    }
+
+
+def _vector_delta(start: object, end: object) -> list[float] | None:
+    if not isinstance(start, list | tuple) or not isinstance(end, list | tuple):
+        return None
+    if len(start) == 0 or len(start) != len(end):
+        return None
+    return [
+        float(end_value) - float(start_value)
+        for start_value, end_value in zip(start, end)
+    ]
+
+
+def _max_abs_or_none(values: list[float] | None) -> float | None:
+    if values is None:
+        return None
+    if not values:
+        return None
+    return max(abs(value) for value in values)
 
 
 def _recipe_joint_target(

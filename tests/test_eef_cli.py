@@ -1817,6 +1817,100 @@ def test_cli_eef_export_moveit_helper_plan_from_runner_contract(tmp_path: Path) 
     assert written["schema"] == "armctrl.moveit_servo_helper_plan.v1"
 
 
+def test_cli_eef_export_moveit_helper_plan_records_runtime_boundary_and_frequency(
+    tmp_path: Path,
+) -> None:
+    plan_dir = tmp_path / "eef-moveit-helper-frequency"
+    contract_path = tmp_path / "eef_moveit_runner_contract.json"
+    output_path = tmp_path / "moveit_helper_plan.json"
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "eef",
+            "plan-twist",
+            "--frame",
+            "eef_link",
+            "--linear",
+            "0.01",
+            "0.0",
+            "0.0",
+            "--angular",
+            "0.0",
+            "0.0",
+            "0.02",
+            "--control-period-s",
+            "0.1",
+            "--backend",
+            "moveit_servo",
+            "--output",
+            str(plan_dir),
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "eef",
+            "export-runner-contract",
+            "--plan-dir",
+            str(plan_dir),
+            "--output",
+            str(contract_path),
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "eef",
+            "export-moveit-helper-plan",
+            "--runner-contract",
+            str(contract_path),
+            "--output",
+            str(output_path),
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+    written = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert payload["status"] == "ok"
+    assert payload["runtime_boundary"] == {
+        "runtime_owner": "ros2_moveit_servo",
+        "armctrl_role": "contract_preview_audit_only",
+        "motion_runtime_owner": False,
+        "hardware_execution": "outside_armctrl",
+    }
+    assert payload["frequency_contract"] == {
+        "agent_intent_hz": 10.0,
+        "command_publish_hz": "runtime_configured",
+        "servo_loop_hz": "moveit_servo_runtime_configured",
+        "actual_send_hz": "measure_in_runtime_artifact",
+        "controller_dt_s": "not_owned_by_armctrl",
+        "timestamp_policy": "ros_clock_or_servo_runtime_policy",
+    }
+    assert payload["servo_session_plan"]["command_payload"]["control_period_s"] == 0.1
+    assert written["runtime_boundary"] == payload["runtime_boundary"]
+    assert written["frequency_contract"] == payload["frequency_contract"]
+
+
 def test_moveit_servo_helper_sample_rejects_non_moveit_runner_contract(
     tmp_path: Path,
 ) -> None:

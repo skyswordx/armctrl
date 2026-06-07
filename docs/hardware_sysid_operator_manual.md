@@ -6,6 +6,236 @@
 cd ~/Roboclaw/references/projects/armctrl-clean-n100d
 ```
 
+## 0A. Current real-motion startup sequence
+
+This section is the current operator-grade gate order for real hardware. It is
+intentionally redundant with later detailed notes so shell operators have one
+short sequence to follow without skipping safety gates.
+
+Do not run Agent or SysID hardware smoke until every earlier artifact exists and
+the previous command returned success. Fake success never counts as hardware
+success.
+
+The formal startup path is now:
+
+```text
+sdk-doctor -> sdk-hold-damping-check -> sdk-arm-session
+  -> sdk-recover-startup-real -> sdk-arm-session(refresh)
+  -> sdk-jog-real or Agent/SysID smoke
+```
+
+`sdk-tiny-motion-*` is only a first-bringup SDK diagnostic. It is not the correct
+way to recover from an unpowered droop pose to the active startup pose.
+
+```bash
+RUN_DIR="runs/real-motion-$(date +%Y%m%d-%H%M%S)"
+mkdir -p "$RUN_DIR"
+SAFE_CENTER="0 0.30 0.30 0 0 0"  # active startup recovery target
+```
+
+Read-only SDK doctor. This must not send motion commands:
+
+```bash
+uv run armctrl sysid sdk-doctor \
+  --model X5 \
+  --interface can0 \
+  --state-sample-count 20 \
+  --state-sample-period 0.01 \
+  --output "$RUN_DIR/sdk_doctor.json" \
+  --json
+```
+
+Required artifact checks:
+
+- `schema == "armctrl.sysid_sdk_doctor.v1"`
+- `read_only == true`
+- `movement_allowed == false`
+- `doctor_gate.status == "pass"`
+- `controller.controller_dt_s` is measured
+- `state_read.state_read_hz` is measured
+- `measurement_window` records requested sample count/period and observed monotonic read duration
+- `timestamp_policy.monotonic == true`
+- `motion_commands_sent == false`
+
+Extracting the measured current joint state is useful for audit, but do not use
+it as an operator-guessed `--q-current` for startup. Recovery reads the real SDK
+state again immediately before motion:
+
+```bash
+MEASURED_Q_CURRENT="$(python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+payload = json.loads((Path(os.environ["RUN_DIR"]) / "sdk_doctor.json").read_text())
+q = payload.get("state_read", {}).get("q_meas_last")
+if not isinstance(q, list) or len(q) != 6:
+    raise SystemExit("sdk_doctor.json does not contain state_read.q_meas_last")
+print(" ".join(f"{float(v):.9f}" for v in q))
+PY
+)"
+echo "$MEASURED_Q_CURRENT"
+```
+
+Expected observation:
+
+- This prints six measured joint angles from the SDK.
+- If the arm is physically horizontal/folded, these values are allowed to differ from `SAFE_CENTER`.
+- Do not overwrite `MEASURED_Q_CURRENT` with `SAFE_CENTER`; `SAFE_CENTER` is the active startup target, not the measured droop pose.
+
+Hold/damping mode check. This may change controller mode, but must not send
+joint trajectory commands:
+
+```bash
+uv run armctrl sysid sdk-hold-damping-check \
+  --model X5 \
+  --interface can0 \
+  --doctor-artifact "$RUN_DIR/sdk_doctor.json" \
+  --confirm "I UNDERSTAND THIS WILL CHANGE THE ARM CONTROL MODE" \
+  --output "$RUN_DIR/hold_damping.json" \
+  --json
+```
+
+Required artifact checks:
+
+- `schema == "armctrl.sysid_sdk_hold_damping_check.v1"`
+- `prerequisites.doctor == "pass"`
+- `mode_change_allowed == true`
+- `joint_commands_sent == false`
+- `damping.status == "called"`
+- `landing_policy` is either `hold_then_damping` or `damping_only`
+- For `arx5-interface==0.1.2` on n100d, `set_to_hold` is not exposed by the Python SDK; `hold.status == "unsupported"` plus `damping.status == "called"` is the expected `damping_only` contract, not a CAN/power failure.
+
+Arm the SDK session. This reads the measured pose and records the controller
+contract without sending joint commands:
+
+```bash
+uv run armctrl sysid sdk-arm-session \
+  --model X5 \
+  --interface can0 \
+  --doctor-artifact "$RUN_DIR/sdk_doctor.json" \
+  --hold-damping-artifact "$RUN_DIR/hold_damping.json" \
+  --confirm "I UNDERSTAND THIS WILL ARM THE SDK SESSION WITHOUT MOVING" \
+  --output "$RUN_DIR/session.json" \
+  --json
+```
+
+Recover from the measured droop/rest pose to the active startup pose. This is the
+first real movement step:
+
+```bash
+uv run armctrl sysid sdk-recover-startup-real \
+  --session-artifact "$RUN_DIR/session.json" \
+  --q-target $SAFE_CENTER \
+  --safe-config configs/x5.safe.yaml \
+  --send-hz 50 \
+  --confirm "I UNDERSTAND THIS WILL RECOVER THE REAL ARM TO STARTUP POSE" \
+  --output "$RUN_DIR/startup_recovery.json" \
+  --json
+```
+
+Expected observation:
+
+- The arm should move continuously and slowly from the measured rest pose toward `SAFE_CENTER`.
+- The first command is the freshly measured SDK pose; there should be no first-frame jump to `SAFE_CENTER`.
+- Per-sample joint motion is bounded by `configs/x5.safe.yaml` `max_joint_step_rad` unless explicitly overridden.
+- On any abnormal sound, sag, collision risk, or fault, stop and inspect the artifact; runtime faults should land in damping.
+
+Refresh the session after recovery before running `sdk-jog-real`. This does not
+move the arm; it updates `state.q_meas` so the jog gate starts from the recovered
+startup pose rather than the pre-recovery droop pose:
+
+```bash
+uv run armctrl sysid sdk-arm-session \
+  --model X5 \
+  --interface can0 \
+  --doctor-artifact "$RUN_DIR/sdk_doctor.json" \
+  --hold-damping-artifact "$RUN_DIR/hold_damping.json" \
+  --confirm "I UNDERSTAND THIS WILL ARM THE SDK SESSION WITHOUT MOVING" \
+  --output "$RUN_DIR/session_after_recovery.json" \
+  --json
+```
+
+Optional tiny motion diagnostic. Use this only if you specifically want a
+single-joint SDK bringup check after startup recovery:
+
+```bash
+uv run armctrl sysid sdk-tiny-motion-plan \
+  --doctor-artifact "$RUN_DIR/sdk_doctor.json" \
+  --hold-damping-artifact "$RUN_DIR/hold_damping.json" \
+  --joint-index 2 \
+  --delta-rad 0.002 \
+  --max-delta-rad 0.005 \
+  --confirm "I UNDERSTAND THIS WILL MOVE ONE JOINT A TINY AMOUNT" \
+  --output "$RUN_DIR/tiny_motion_plan.json" \
+  --json
+```
+
+```bash
+uv run armctrl sysid sdk-tiny-motion-execute-real \
+  --plan-artifact "$RUN_DIR/tiny_motion_plan.json" \
+  --doctor-artifact "$RUN_DIR/sdk_doctor.json" \
+  --hold-damping-artifact "$RUN_DIR/hold_damping.json" \
+  --model X5 \
+  --interface can0 \
+  --dof 6 \
+  --q-current $MEASURED_Q_CURRENT \
+  --send-hz 50 \
+  --max-q-current-error-rad 0.02 \
+  --confirm "I UNDERSTAND THIS WILL EXECUTE THE TINY MOTION PLAN" \
+  --output "$RUN_DIR/tiny_motion_real.json" \
+  --json
+```
+
+If this returns `status == "rejected"` with
+`reason` containing `q_current does not match measured SDK state`, no joint
+command was sent. Keep the artifact and use `sdk-recover-startup-real`; do not
+rerun tiny motion with a guessed pose.
+
+Required real tiny-motion artifact checks:
+
+- `schema == "armctrl.sysid_sdk_tiny_motion_execute.v1"`
+- `backend == "arx5_sdk"`
+- `run_status == "completed"`
+- `hardware_motion == true`
+- `movement_command_sent == true`
+- `motion_runtime.status == "completed"`
+- `motion_runtime.landing_mode == "hold"`
+- `motion_runtime.controller_dt_s` is measured
+- `motion_runtime.actual_send_hz`, `send_jitter_ms_p95`, and `send_jitter_ms_p99` are recorded
+- `motion_runtime.fault_flags == []`
+- `acceptance.schema == "armctrl.real_motion_acceptance.v1"`
+- `acceptance.stage == "tiny_motion"`
+- `acceptance.status == "pass"`
+- `acceptance.next_gate == "agent_sysid_smoke_readiness"`
+
+Readiness gate for later Agent/SysID smoke. This command is read-only. If it
+cannot prove readiness, it returns `status == "blocked"` and process exit code
+`3`; do not continue to real smoke from a blocked readiness artifact:
+
+```bash
+uv run armctrl sysid sdk-agent-sysid-smoke-readiness \
+  --doctor-artifact "$RUN_DIR/sdk_doctor.json" \
+  --hold-damping-artifact "$RUN_DIR/hold_damping.json" \
+  --startup-recovery-artifact "$RUN_DIR/startup_recovery.json" \
+  --output "$RUN_DIR/agent_sysid_readiness.json" \
+  --json
+```
+
+Required readiness checks:
+
+- `schema == "armctrl.sysid_agent_smoke_readiness.v1"`
+- `status == "ok"`
+- `agent_sysid_smoke_allowed == true`
+- `prerequisites.doctor == "pass"`
+- `prerequisites.hold_damping == "pass"`
+- `prerequisites.startup_recovery == "pass"`
+- `startup_recovery.run_status == "completed"`
+
+Only after this point may the operator prepare Agent real smoke or SysID smoke.
+Agent real smoke must still use its own confirmation string and the saved
+`$RUN_DIR/agent_sysid_readiness.json`; SysID smoke must still use
+`--readiness-artifact "$RUN_DIR/agent_sysid_readiness.json"`.
+
 ## 0. 当前能力边界
 
 `armctrl` clean rebuild 当前已经具备：
@@ -188,6 +418,211 @@ cat runs/plan-gravity-smoke/trajectory_preview.json
 
 如果 fail，不要运行真机。先减小 `--amplitude` 或调整 `--q-center` / `configs/x5.safe.yaml`。
 
+## 4A. MotionRuntime tiny motion 阶梯门禁
+
+本节用于进入 Agent/SysID 真机 smoke 前的最小真实运动验收。它不替代后面的 SysID gravity smoke；它只证明 SDK doctor、hold/damping、tiny joint motion 和 readiness artifact 都按顺序通过。任一步 `status=rejected`、`movement_command_sent=unknown`、`hardware_motion=unknown`、`fault_flags` 非空，或者 Ctrl-C 后没有进入 damping，都必须停止。
+
+真实运动 CLI 会把 `acceptance.status != "pass"` 当作硬 gate：即使 `run_status == "completed"`，只要 acceptance 是 `incomplete` 或 `review_required`，命令也必须返回非零，顶层 `status` 映射为该 acceptance 状态。不要只看 `run_status` 判断能否进入下一 gate。
+
+在 MotionRuntime 执行路径里，`fault_flags` 非空必须表现为 `motion_runtime.status == "faulted"` 且 `motion_runtime.landing_mode == "damping"`；如果 artifact 显示 fault 后仍继续发送后续点，应视为运行时安全缺陷，不允许进入下一 gate。
+
+建议新开一个独立目录保存产物：
+
+```bash
+RUN_DIR="runs/real-tiny-motion-$(date +%Y%m%d-%H%M%S)"
+mkdir -p "$RUN_DIR"
+```
+
+只读 SDK doctor，不发送运动命令：
+
+```bash
+uv run armctrl sysid sdk-doctor \
+  --model X5 \
+  --interface can0 \
+  --state-sample-count 20 \
+  --state-sample-period 0.01 \
+  --output "$RUN_DIR/sdk_doctor.json" \
+  --json
+```
+
+必须满足：
+
+- `schema == "armctrl.sysid_sdk_doctor.v1"`
+- `read_only == true`
+- `movement_allowed == false`
+- `interface_status.status == "opened_read_only"`
+- `controller.controller_dt_s` 有实测值
+- `state_read.status == "ok"`
+- `measurement_window` 记录请求采样次数/周期以及实际 monotonic 读取时间窗
+- `timestamp_policy.monotonic == true`
+- `motion_commands_sent == false`
+
+只允许进入 hold/damping 模式检查，不发送 joint command：
+
+```bash
+uv run armctrl sysid sdk-hold-damping-check \
+  --model X5 \
+  --interface can0 \
+  --doctor-artifact "$RUN_DIR/sdk_doctor.json" \
+  --confirm "I UNDERSTAND THIS WILL CHANGE THE ARM CONTROL MODE" \
+  --output "$RUN_DIR/hold_damping.json" \
+  --json
+```
+
+必须满足：
+
+- `schema == "armctrl.sysid_sdk_hold_damping_check.v1"`
+- `prerequisites.doctor == "pass"`
+- `mode_change_allowed == true`
+- `joint_commands_sent == false`
+- `damping.status == "called"`
+- `landing_policy` 为 `hold_then_damping` 或 `damping_only`
+- n100d 当前 `arx5-interface==0.1.2` 的 Python SDK 不暴露 `set_to_hold`；`hold.status == "unsupported"` 且 `damping.status == "called"` 是预期的 `damping_only` 合同，不是 CAN/电源故障。
+
+生成 tiny motion plan。首轮只允许单关节、极小幅度，推荐从 `0.002 rad` 开始，不要超过 `0.005 rad`：
+
+```bash
+uv run armctrl sysid sdk-tiny-motion-plan \
+  --doctor-artifact "$RUN_DIR/sdk_doctor.json" \
+  --hold-damping-artifact "$RUN_DIR/hold_damping.json" \
+  --joint-index 2 \
+  --delta-rad 0.002 \
+  --max-delta-rad 0.005 \
+  --confirm "I UNDERSTAND THIS WILL MOVE ONE JOINT A TINY AMOUNT" \
+  --output "$RUN_DIR/tiny_motion_plan.json" \
+  --json
+```
+
+先用 fake backend 走同一 MotionRuntime 路径。这里仍然不会动真机：
+
+```bash
+uv run armctrl sysid sdk-tiny-motion-execute-fake \
+  --plan-artifact "$RUN_DIR/tiny_motion_plan.json" \
+  --dof 6 \
+  --q-current $SAFE_CENTER \
+  --send-hz 50 \
+  --confirm "I UNDERSTAND THIS WILL EXECUTE THE TINY MOTION PLAN" \
+  --output "$RUN_DIR/tiny_motion_fake.json" \
+  --json
+```
+
+fake artifact 必须满足 `backend == "fake"`、`hardware_motion == false`、`motion_runtime.landing_mode == "hold"`、`motion_runtime.actual_send_hz` 合理。fake 通过不代表真机通过。
+
+真机 tiny motion 只能在人工确认当前机械臂实际姿态接近 `$SAFE_CENTER`、底座固定、手在急停附近后执行。如果当前姿态不是 `$SAFE_CENTER`，必须把 `--q-current` 改成实际读到的安全姿态，不要为了凑命令假填：
+
+```bash
+uv run armctrl sysid sdk-tiny-motion-execute-real \
+  --plan-artifact "$RUN_DIR/tiny_motion_plan.json" \
+  --doctor-artifact "$RUN_DIR/sdk_doctor.json" \
+  --hold-damping-artifact "$RUN_DIR/hold_damping.json" \
+  --model X5 \
+  --interface can0 \
+  --dof 6 \
+  --q-current $SAFE_CENTER \
+  --send-hz 50 \
+  --confirm "I UNDERSTAND THIS WILL EXECUTE THE TINY MOTION PLAN" \
+  --output "$RUN_DIR/tiny_motion_real.json" \
+  --json
+```
+
+真机 tiny motion 必须满足：
+
+- `schema == "armctrl.sysid_sdk_tiny_motion_execute.v1"`
+- `backend == "arx5_sdk"`
+- `hardware_motion == true`
+- `movement_command_sent == true`
+- `prerequisites.doctor == "pass"`
+- `prerequisites.hold_damping == "pass"`
+- `motion_runtime.status == "completed"`
+- `motion_runtime.landing_mode == "hold"`
+- `motion_runtime.controller_dt_s` 有实测值
+- `motion_runtime.actual_send_hz`、`send_jitter_ms_p95`、`send_jitter_ms_p99` 被记录
+- `motion_runtime.samples[*].q_cmd` 与 `q_meas` 有极小、受控变化
+- `fault_flags` 为空
+
+最后运行 Agent/SysID smoke readiness。这个命令仍然只读 artifact，不运动：
+
+```bash
+uv run armctrl sysid sdk-agent-sysid-smoke-readiness \
+  --doctor-artifact "$RUN_DIR/sdk_doctor.json" \
+  --hold-damping-artifact "$RUN_DIR/hold_damping.json" \
+  --tiny-motion-artifact "$RUN_DIR/tiny_motion_real.json" \
+  --output "$RUN_DIR/agent_sysid_readiness.json" \
+  --json
+```
+
+只有 `agent_sysid_smoke_allowed == true` 时，才允许继续设计 Agent smoke 或 SysID smoke。若为 `false`，不要进入后续真机运动；先看 `prerequisites` 和 `tiny_motion` 摘要。
+
+### 4A.1 Agent real runtime smoke
+
+Agent 真机 smoke 是 `10 Hz` intent 到 MotionRuntime 后端插值/限幅的最小验收，不是让 Agent 直接控制 SDK，也不是 LeRobot rollout loop。它必须复用上面的 `$RUN_DIR/sdk_doctor.json`、`$RUN_DIR/hold_damping.json`、`$RUN_DIR/tiny_motion_real.json` 和 `$RUN_DIR/agent_sysid_readiness.json`。
+
+先生成一个已经通过 review 的 Agent contract。首轮只允许 `eef.pose_delta` 极小位移，`control_period_s=0.1` 表示 Agent intent 为 `10 Hz`：
+
+```bash
+AGENT_PLAN_DIR="$RUN_DIR/agent-flow-real-smoke"
+
+uv run armctrl agent-flow plan \
+  --preset home \
+  --eef-mode pose_delta \
+  --backend sdk_cartesian \
+  --delta-position 0.002 0.000 -0.003 \
+  --delta-rpy 0.0 0.0 0.02 \
+  --control-period-s 0.1 \
+  --output "$AGENT_PLAN_DIR" \
+  --json
+
+uv run armctrl agent-flow review \
+  --contract "$AGENT_PLAN_DIR/agent_flow_plan.json" \
+  --json
+```
+
+只有 review artifact 显示 `review_status == "completed"`、仿真/碰撞/限幅都通过，且 readiness artifact 显示 `agent_sysid_smoke_allowed == true` 时，才允许执行 Agent real runtime smoke。`--q-start` 必须填写真实读到的当前安全姿态；`--q-target` 只能比 `--q-start` 小幅变化，首轮单关节变化不要超过 `0.002 rad`，并保留 `--max-joint-delta-rad 0.005`：
+
+```bash
+uv run armctrl agent-flow runtime-smoke-real \
+  --contract "$AGENT_PLAN_DIR/agent_flow_plan.json" \
+  --readiness-artifact "$RUN_DIR/agent_sysid_readiness.json" \
+  --model X5 \
+  --interface can0 \
+  --q-start $SAFE_CENTER \
+  --q-target 0.0 0.302 0.3 0.0 0.0 0.0 \
+  --send-hz 50 \
+  --max-joint-delta-rad 0.005 \
+  --confirm "I UNDERSTAND THIS WILL MOVE THE ARM WITH AGENT INTENT" \
+  --output "$RUN_DIR/agent_runtime_smoke_real.json" \
+  --json
+```
+
+Agent real runtime smoke 必须满足：
+
+- `schema == "armctrl.agent_flow_runtime_smoke_real.v1"`
+- `hardware_motion == true`
+- `movement_command_sent == true`
+- `runtime.backend == "arx5_sdk"`
+- `readiness.agent_sysid_smoke_allowed == true`
+- `motion_runtime.mode == "agent_servo"`
+- `motion_runtime.controller_dt_s` 有实测值
+- `motion_runtime.actual_send_hz`、`send_jitter_ms_p95`、`send_jitter_ms_p99` 被记录
+- `frequency_contract.schema == "armctrl.agent_frequency_contract.v1"`
+- `frequency_contract.agent_intent_hz == 10.0`，当 `control_period_s == 0.1`
+- `frequency_contract.backend_send_hz == 50.0`，首轮按 50 Hz 后端发送验证
+- `frequency_contract.actual_send_hz` 与 `motion_runtime.actual_send_hz` 一致
+- `frequency_contract.missed_intent_exercised_in_this_run == false`
+- `motion_runtime.samples[*].q_cmd` 与 `q_meas` 有极小、受控变化
+- `watchdog.policy.missed_intent_timeout_s == 0.3`
+- `watchdog.policy.missed_intent_exercised_in_this_run == false`，因为真机单帧 smoke 不应故意等到断帧；missed-frame hold 必须由 fake smoke 或后续 streaming driver 测试验证
+- `fault_flags` 为空
+- `fault_landing_mode` 或 `motion_runtime.landing_mode` 为 `hold` / `damping` 中的预期安全落点
+- `acceptance.schema == "armctrl.real_motion_acceptance.v1"`
+- `acceptance.stage == "agent_smoke"`
+- `acceptance.status == "pass"`
+- `acceptance.checks.readiness_gate.status == "pass"`
+- `acceptance.checks.q_meas_responded_to_commanded_motion.status == "pass"`
+- `acceptance.next_gate == "sysid_smoke"`
+
+如果输出 `status=rejected`，或 `hardware_motion == "unknown"`、`movement_command_sent == "unknown"`，不要重试加大幅度；先检查 rejected artifact 的 `next_gate`、SDK 状态、readiness、急停和机械臂实际姿态。如果 `acceptance.status != "pass"`，同样不能进入下一 gate；优先看 `acceptance.checks` 中的 `fail` / `not_available` 项。fake/preview 通过仍然不能写成“Agent 真机已打通”。
+
 ## 5. 真机 gravity smoke
 
 确认：
@@ -196,7 +631,9 @@ cat runs/plan-gravity-smoke/trajectory_preview.json
 - 末端下方无桌面；
 - 手在实体急停/断电附近；
 - 已经知道 Ctrl-C 后应该落 damping；
-- 首轮只跑小幅 smoke。
+- 首轮只跑小幅 smoke；
+- `$RUN_DIR/agent_sysid_readiness.json` 已经存在，且 `agent_sysid_smoke_allowed == true`；
+- 如果 4A.1 Agent real runtime smoke 输出 `status=rejected`、`hardware_motion=unknown` 或 fault，不要进入 SysID smoke。
 
 ```bash
 uv run armctrl sysid run gravity_sweep \
@@ -212,8 +649,31 @@ uv run armctrl sysid run gravity_sweep \
   --safe-config configs/x5.safe.yaml \
   --output runs/ident-sdk-gravity-smoke \
   --confirm "I UNDERSTAND THIS WILL MOVE THE ARM" \
+  --readiness-artifact "$RUN_DIR/agent_sysid_readiness.json" \
   --json
 ```
+
+SysID smoke 输出和 `runs/ident-sdk-gravity-smoke/manifest.json` 必须满足：
+
+- `adapter == "sdk"`
+- `run_status == "completed"`
+- `safety.movement_allowed == true`
+- `readiness.agent_sysid_smoke_allowed == true`
+- `motion_runtime.mode == "trajectory_replay"`
+- `motion_runtime.controller_dt_s` 有实测值
+- `motion_runtime.actual_send_hz`、`send_jitter_ms_p95`、`send_jitter_ms_p99` 被记录
+- `motion_runtime.tracking.final_tracking_error_max_abs_rad` 被记录
+- `acceptance.schema == "armctrl.real_motion_acceptance.v1"`
+- `acceptance.stage == "sysid_smoke"`
+- `acceptance.status == "pass"`
+- `acceptance.checks.no_fault_flags.status == "pass"`
+- `acceptance.checks.readiness_gate.status == "pass"`
+
+如果 `acceptance.status == "review_required"`，通常说明存在 fault flag、q_cmd/q_meas 没有响应、或某个安全门控证据失败；如果是 `incomplete`，通常说明 `controller_dt_s`、send Hz、jitter 或 tracking 证据缺失。两种情况都不能进入更大幅度 SysID，也不能把结果当作已验收真机运动；CLI 也应返回非零，顶层 `status` 映射为该 acceptance 状态。
+
+如果运行产物中 `run_status == "faulted"`，CLI 必须返回非零退出码并把顶层 `status` 映射为 `"faulted"`。这表示 SDK runner 成功写出了故障产物，不表示这次运动验收通过。此时 `raw_samples.csv` 可能只有 fault 发生前的 partial samples，必须保留这些数据用于复盘，但不能进入 solver 或下一轮加幅度。
+
+如果 tiny motion 或 SysID runtime 产物中 `run_status == "aborted"` / `motion_runtime.status == "aborted"`，必须确认 `motion_runtime.error`、`motion_runtime.landing_mode == "damping"` 和已有 partial `samples`。这表示普通运行时异常已被转成可审计失败产物；它仍然不是验收通过，不能继续 Agent/SysID smoke，也不要重试加大幅度。
 
 停止条件：
 
@@ -233,6 +693,10 @@ uv run armctrl sysid postprocess \
   --solve \
   --json
 ```
+
+`--solve` 会读取 `manifest.json` 的 solver gate。若 `adapter == "sdk"` 且 `run_status != "completed"`，或 `acceptance.status != "pass"`，CLI 必须返回 `status == "blocked"`、退出码 `3`，只保留 postprocess 复盘产物，不进入 solver。
+
+solver 通过 gate 后，`processed/solver_metrics.json` 必须保留 `source_run` 摘要，`processed/solver_report_zh.md` 也必须显示 `source_run.*` 关键字段。operator 需要确认 `source_run.adapter == "sdk"`、`source_run.run_status == "completed"`、`source_run.acceptance == "sysid_smoke/pass"`，并核对 `actual_send_hz`、`controller_dt_s`、`final_tracking_error_max_abs_rad`、`fault_flags`、`landing_mode`，再讨论任何参数求解结论。
 
 查看产物：
 
@@ -270,6 +734,7 @@ uv run armctrl sysid run gravity_sweep \
   --safe-config configs/x5.safe.yaml \
   --output runs/ident-sdk-gravity-a010 \
   --confirm "I UNDERSTAND THIS WILL MOVE THE ARM" \
+  --readiness-artifact "$RUN_DIR/agent_sysid_readiness.json" \
   --json
 ```
 
@@ -320,6 +785,36 @@ uv run armctrl recipe cancel --json
 4. 不直接调用 `arx5_interface`；
 5. 不自造 joint command。
 
+Recipe 侧如果要验证“已审查轨迹是否能进入统一 MotionRuntime”，先跑 fake runtime smoke，不要直接找 SDK：
+
+```bash
+RECIPE_PLAN_DIR="$RUN_DIR/recipe-home-plan"
+
+uv run armctrl recipe plan home \
+  --sample-hz 50 \
+  --duration 0.1 \
+  --output "$RECIPE_PLAN_DIR" \
+  --json
+
+uv run armctrl recipe runtime-smoke-fake \
+  --plan-dir "$RECIPE_PLAN_DIR" \
+  --output "$RUN_DIR/recipe_runtime_smoke_fake.json" \
+  --json
+```
+
+`recipe_runtime_smoke_fake.json` 必须满足：
+
+- `schema == "armctrl.recipe_runtime_smoke.v1"`
+- `hardware_motion == false`
+- `runtime.backend == "fake"`
+- `runtime.owner == "motion_runtime"`
+- `motion_runtime.producer == "recipe"`
+- `motion_runtime.mode == "trajectory_replay"`
+- `motion_runtime.actual_send_hz` 被记录
+- `motion_runtime.landing_mode == "hold"`
+
+这一步只证明 Recipe 的 checked joint trajectory 可以进入 MotionRuntime 队列、按时间戳 replay 并落到 hold。它不能证明 arx5 SDK、MoveIt Servo 或 LeRobot 真机 runtime 已经可用。
+
 SysID Agent 调用也必须先 plan：
 
 ```bash
@@ -333,6 +828,42 @@ uv run armctrl sysid plan gravity_sweep \
 ```
 
 只有 plan pass，且人类明确给出确认 token，Agent 才能建议运行 SDK runner。
+
+## 9A. MoveIt Servo helper 边界
+
+如果 Agent/EEF 选择 `moveit_servo`，`armctrl` 仍然只生成 contract、preview、review 和 helper plan，不启动 ROS 2、不发布 Servo command，也不拥有 MoveIt Servo 的实时循环：
+
+```bash
+uv run armctrl eef plan-twist \
+  --frame eef_link \
+  --linear 0.01 0.0 0.0 \
+  --angular 0.0 0.0 0.02 \
+  --control-period-s 0.1 \
+  --backend moveit_servo \
+  --output "$RUN_DIR/eef-moveit-smoke" \
+  --json
+
+uv run armctrl eef export-runner-contract \
+  --plan-dir "$RUN_DIR/eef-moveit-smoke" \
+  --output "$RUN_DIR/eef_moveit_runner_contract.json" \
+  --json
+
+uv run armctrl eef export-moveit-helper-plan \
+  --runner-contract "$RUN_DIR/eef_moveit_runner_contract.json" \
+  --output "$RUN_DIR/moveit_helper_plan.json" \
+  --json
+```
+
+`moveit_helper_plan.json` 必须满足：
+
+- `runtime_boundary.runtime_owner == "ros2_moveit_servo"`
+- `runtime_boundary.armctrl_role == "contract_preview_audit_only"`
+- `runtime_boundary.motion_runtime_owner == false`
+- `frequency_contract.agent_intent_hz == 10.0`，当 `control_period_s=0.1`
+- `frequency_contract.command_publish_hz == "runtime_configured"`
+- `frequency_contract.actual_send_hz == "measure_in_runtime_artifact"`
+
+这表示 Agent 仍然只表达低频 intent；ROS 2 / MoveIt Servo 的 command publish 频率、servo loop 频率、实际发送频率必须由真正的 MoveIt runtime 配置和日志证明，不能由 armctrl helper plan 伪造。
 
 ## 10. 常见故障解释
 
@@ -367,6 +898,6 @@ uv run armctrl sysid sdk-preflight --model X5 --interface can0 --json
 uv run armctrl sysid sdk-handshake-plan --model X5 --interface can0 --json
 uv run armctrl sim doctor --json
 uv run armctrl sysid plan gravity_sweep --dof 6 --sample-hz 100 --duration 8 --amplitude 0.05 --q-center $SAFE_CENTER --urdf-path configs/models/X5_camera.urdf --safe-config configs/x5.safe.yaml --output runs/plan-gravity-smoke --json
-uv run armctrl sysid run gravity_sweep --adapter sdk --model X5 --interface can0 --dof 6 --sample-hz 100 --duration 8 --amplitude 0.05 --q-center $SAFE_CENTER --urdf-path configs/models/X5_camera.urdf --safe-config configs/x5.safe.yaml --output runs/ident-sdk-gravity-smoke --confirm "I UNDERSTAND THIS WILL MOVE THE ARM" --json
+uv run armctrl sysid run gravity_sweep --adapter sdk --model X5 --interface can0 --dof 6 --sample-hz 100 --duration 8 --amplitude 0.05 --q-center $SAFE_CENTER --urdf-path configs/models/X5_camera.urdf --safe-config configs/x5.safe.yaml --output runs/ident-sdk-gravity-smoke --confirm "I UNDERSTAND THIS WILL MOVE THE ARM" --readiness-artifact "$RUN_DIR/agent_sysid_readiness.json" --json
 uv run armctrl sysid postprocess --dataset runs/ident-sdk-gravity-smoke --solve --json
 ```

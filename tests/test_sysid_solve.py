@@ -118,6 +118,138 @@ def test_cli_sysid_solve_writes_solver_artifacts_from_processed_dataset(
     assert "基础参数" in report
 
 
+def test_cli_sysid_solve_preserves_passed_sdk_source_run_evidence(
+    tmp_path: Path,
+) -> None:
+    dataset_dir = tmp_path / "ident-sdk-run"
+    _create_processed_dataset(dataset_dir)
+    manifest_path = dataset_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.update(
+        {
+            "adapter": "sdk",
+            "run_status": "completed",
+            "readiness": {
+                "artifact_path": str(tmp_path / "readiness.json"),
+                "agent_sysid_smoke_allowed": True,
+            },
+            "motion_runtime": {
+                "schema": "armctrl.motion_runtime_result.v1",
+                "status": "completed",
+                "producer": "sysid",
+                "mode": "trajectory_replay",
+                "trajectory_sample_hz": 100.0,
+                "actual_send_hz": 99.4,
+                "send_jitter_ms_p95": 1.1,
+                "send_jitter_ms_p99": 2.4,
+                "controller_dt_s": 0.002,
+                "sample_count": 11,
+                "fault_flags": [],
+                "tracking": {
+                    "q_cmd_delta_max_abs_rad": 0.01,
+                    "q_meas_delta_max_abs_rad": 0.009,
+                    "max_abs_sample_tracking_error_rad": 0.0015,
+                    "final_tracking_error_max_abs_rad": 0.0007,
+                },
+                "samples": [
+                    {
+                        "q_cmd": [0.0, 0.31],
+                        "q_meas": [0.0, 0.3093],
+                    }
+                ],
+                "landing_mode": "hold",
+            },
+            "acceptance": {
+                "schema": "armctrl.real_motion_acceptance.v1",
+                "stage": "sysid_smoke",
+                "status": "pass",
+                "next_gate": "operator_review_before_larger_sysid_or_parameter_solve",
+            },
+        }
+    )
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "sysid",
+            "solve",
+            "--dataset",
+            str(dataset_dir),
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+    metrics = json.loads(
+        (dataset_dir / "processed" / "solver_metrics.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    source_run = metrics["source_run"]
+
+    assert payload["status"] == "ok"
+    assert source_run == {
+        "schema": "armctrl.sysid_solver_source_run.v1",
+        "manifest_schema": "armctrl.sysid_run_manifest.v1",
+        "adapter": "sdk",
+        "run_status": "completed",
+        "acceptance": {
+            "stage": "sysid_smoke",
+            "status": "pass",
+            "next_gate": "operator_review_before_larger_sysid_or_parameter_solve",
+        },
+        "readiness": {
+            "artifact_path": str(tmp_path / "readiness.json"),
+            "agent_sysid_smoke_allowed": True,
+        },
+        "motion_runtime": {
+            "status": "completed",
+            "producer": "sysid",
+            "mode": "trajectory_replay",
+            "trajectory_sample_hz": 100.0,
+            "actual_send_hz": 99.4,
+            "send_jitter_ms_p95": 1.1,
+            "send_jitter_ms_p99": 2.4,
+            "controller_dt_s": 0.002,
+            "sample_count": 11,
+            "fault_flags": [],
+            "tracking": {
+                "q_cmd_delta_max_abs_rad": 0.01,
+                "q_meas_delta_max_abs_rad": 0.009,
+                "max_abs_sample_tracking_error_rad": 0.0015,
+                "final_tracking_error_max_abs_rad": 0.0007,
+            },
+            "landing_mode": "hold",
+        },
+    }
+    assert "samples" not in source_run["motion_runtime"]
+
+    report = (dataset_dir / "processed" / "solver_report_zh.md").read_text(
+        encoding="utf-8"
+    )
+    assert "- source_run.adapter: `sdk`" in report
+    assert "- source_run.run_status: `completed`" in report
+    assert "- source_run.acceptance: `sysid_smoke/pass`" in report
+    assert "- source_run.readiness.agent_sysid_smoke_allowed: `True`" in report
+    assert "- source_run.motion_runtime.status: `completed`" in report
+    assert "- source_run.motion_runtime.actual_send_hz: `99.4`" in report
+    assert "- source_run.motion_runtime.controller_dt_s: `0.002`" in report
+    assert (
+        "- source_run.tracking.final_tracking_error_max_abs_rad: `0.0007`" in report
+    )
+    assert "- source_run.motion_runtime.fault_flags: `[]`" in report
+    assert "- source_run.motion_runtime.landing_mode: `hold`" in report
+
+
 def test_sysid_solve_computes_pinocchio_regressor_metrics_when_backend_exists(
     tmp_path: Path,
     monkeypatch,

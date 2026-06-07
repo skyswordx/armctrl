@@ -8,6 +8,12 @@ from pathlib import Path
 
 SCHEMA = "armctrl.lerobot_agent_runtime_helper_plan.v1"
 CONTRACT_SCHEMA = "armctrl.eef_agent_runtime_contract.v1"
+NATIVE_LEROBOT_RUNTIME_BOUNDARY = {
+    "runtime_owner": "native_lerobot_rollout",
+    "armctrl_role": "processor_contract_audit_only",
+    "motion_runtime_owner": False,
+    "hardware_execution": "outside_armctrl",
+}
 
 
 def _emit(payload: dict[str, object], *, as_json: bool) -> int:
@@ -42,6 +48,7 @@ def _build_payload(
         "plan_dir": str(agent_runtime_contract["plan_dir"]),
         "resolved_backend": resolved_backend,
         "runtime_owner": agent_runtime_contract["runtime_owner"],
+        "runtime_boundary": NATIVE_LEROBOT_RUNTIME_BOUNDARY,
         "agent_action_schema": agent_action_schema,
         "processor_session_plan": {
             "session_kind": backend_session_contract["session_kind"],

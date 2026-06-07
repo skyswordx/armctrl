@@ -26,6 +26,15 @@ def _module_status(module: str) -> dict[str, str]:
     }
 
 
+def _native_lerobot_runtime_boundary() -> dict[str, object]:
+    return {
+        "runtime_owner": "native_lerobot_rollout",
+        "armctrl_role": "processor_contract_audit_only",
+        "motion_runtime_owner": False,
+        "hardware_execution": "outside_armctrl",
+    }
+
+
 @dataclass(frozen=True)
 class LeRobotDoctor:
     model: str
@@ -201,6 +210,7 @@ class LeRobotConfigPlanner:
             payload["eef_action_bridge"] = eef_action_bridge
             payload["runtime"] = {
                 "owner": "native_lerobot_rollout",
+                "runtime_boundary": _native_lerobot_runtime_boundary(),
                 "session_kind": "native_lerobot_cli",
                 "api_contract": {
                     "command_surface": "lerobot-rollout",
@@ -289,6 +299,7 @@ class LeRobotProcessorContractExporter:
         payload = {
             "schema": "armctrl.lerobot_eef_processor_contract.v1",
             "movement_allowed": False,
+            "runtime_boundary": _native_lerobot_runtime_boundary(),
             "eef_plan_dir": str(request.eef_plan_dir),
             "lerobot_action": eef_export["lerobot_action"],
             "processor_bridge": {
@@ -381,6 +392,7 @@ class LeRobotAgentRuntimeHelperPlanner:
         payload = {
             "schema": "armctrl.lerobot_agent_runtime_helper_plan.v1",
             "movement_allowed": False,
+            "runtime_boundary": _native_lerobot_runtime_boundary(),
             "agent_runtime_contract_path": str(request.agent_runtime_contract_path),
             "plan_dir": str(agent_runtime_contract["plan_dir"]),
             "resolved_backend": resolved_backend,

@@ -1,0 +1,374 @@
+import pytest
+
+from armctrl.motion_runtime import (
+    FakeMotionBackend,
+    JointStateSnapshot,
+    JointIntentFrame,
+    JointTrajectoryPoint,
+    MotionMode,
+    MotionModeError,
+    MotionRuntime,
+)
+
+
+class ManualClock:
+    def __init__(self) -> None:
+        self.now_s = 0.0
+
+    def monotonic(self) -> float:
+        return self.now_s
+
+    def sleep(self, seconds: float) -> None:
+        self.now_s += max(0.0, seconds)
+
+
+class InterruptingMotionBackend(FakeMotionBackend):
+    def send_joint_command(self, *args, **kwargs) -> None:
+        raise KeyboardInterrupt()
+
+
+class FailingSendBackend(FakeMotionBackend):
+    def __init__(self, *, fail_on_send: int) -> None:
+        super().__init__()
+        self._fail_on_send = fail_on_send
+        self._send_count = 0
+
+    def send_joint_command(self, *args, **kwargs) -> None:
+        self._send_count += 1
+        if self._send_count >= self._fail_on_send:
+            raise RuntimeError("sdk send failed")
+        super().send_joint_command(*args, **kwargs)
+
+
+class FaultingReadBackend(FakeMotionBackend):
+    def __init__(self, *, fault_on_read: int) -> None:
+        super().__init__()
+        self._fault_on_read = fault_on_read
+        self._read_count = 0
+
+    def read_joint_state(self) -> JointStateSnapshot:
+        self._read_count += 1
+        if self._read_count >= self._fault_on_read:
+            return JointStateSnapshot(
+                q_meas=self._last_q or (),
+                fault_flags=("over_current",),
+            )
+        return super().read_joint_state()
+
+
+def test_execute_trajectory_replays_timestamped_points_and_reports_send_metrics():
+    clock = ManualClock()
+    backend = FakeMotionBackend()
+    runtime = MotionRuntime(backend=backend, monotonic=clock.monotonic, sleep=clock.sleep)
+    trajectory = [
+        JointTrajectoryPoint(time_s=0.0, q=(0.0, 0.0)),
+        JointTrajectoryPoint(time_s=0.01, q=(0.01, 0.0)),
+        JointTrajectoryPoint(time_s=0.02, q=(0.02, 0.0)),
+    ]
+
+    result = runtime.execute_trajectory(
+        trajectory,
+        producer="sysid",
+        trajectory_sample_hz=100.0,
+        hold_after=True,
+    )
+
+    assert [command.q for command in backend.joint_commands] == [
+        (0.0, 0.0),
+        (0.01, 0.0),
+        (0.02, 0.0),
+    ]
+    assert [round(command.sent_monotonic_s, 6) for command in backend.joint_commands] == [
+        0.0,
+        0.01,
+        0.02,
+    ]
+    assert result.status == "completed"
+    assert result.producer == "sysid"
+    assert result.mode == MotionMode.TRAJECTORY_REPLAY.value
+    assert result.trajectory_sample_hz == 100.0
+    assert result.actual_send_hz == pytest.approx(100.0)
+    assert result.send_jitter_ms_p95 == pytest.approx(0.0)
+    assert result.send_jitter_ms_p99 == pytest.approx(0.0)
+    assert result.controller_dt_s is None
+    assert [sample.q_cmd for sample in result.samples] == [
+        (0.0, 0.0),
+        (0.01, 0.0),
+        (0.02, 0.0),
+    ]
+    assert [sample.q_meas for sample in result.samples] == [
+        (0.0, 0.0),
+        (0.01, 0.0),
+        (0.02, 0.0),
+    ]
+    assert [sample.fault_flags for sample in result.samples] == [(), (), ()]
+    assert result.landing_mode == "hold"
+    assert backend.hold_count == 1
+    assert runtime.mode == MotionMode.HOLD
+
+
+def test_execute_trajectory_rejects_nonpositive_sample_hz_before_sending():
+    backend = FakeMotionBackend()
+    runtime = MotionRuntime(backend=backend)
+
+    with pytest.raises(ValueError, match="trajectory_sample_hz"):
+        runtime.execute_trajectory(
+            [JointTrajectoryPoint(time_s=0.0, q=(0.0,))],
+            producer="sysid",
+            trajectory_sample_hz=0.0,
+        )
+
+    assert backend.joint_commands == []
+    assert backend.damping_count == 0
+    assert runtime.mode == MotionMode.HOLD
+
+
+def test_execute_trajectory_rejects_nonmonotonic_timestamps_before_sending():
+    backend = FakeMotionBackend()
+    runtime = MotionRuntime(backend=backend)
+
+    with pytest.raises(ValueError, match="monotonic"):
+        runtime.execute_trajectory(
+            [
+                JointTrajectoryPoint(time_s=0.02, q=(0.02,)),
+                JointTrajectoryPoint(time_s=0.01, q=(0.01,)),
+            ],
+            producer="sysid",
+            trajectory_sample_hz=100.0,
+        )
+
+    assert backend.joint_commands == []
+    assert backend.damping_count == 0
+    assert runtime.mode == MotionMode.HOLD
+
+
+def test_execute_intent_frame_interpolates_agent_10hz_frame_to_50hz_backend():
+    clock = ManualClock()
+    backend = FakeMotionBackend()
+    runtime = MotionRuntime(backend=backend, monotonic=clock.monotonic, sleep=clock.sleep)
+
+    result = runtime.execute_intent_frame(
+        JointIntentFrame(
+            q_start=(0.0, 0.0),
+            q_target=(0.1, 0.05),
+            control_period_s=0.1,
+        ),
+        producer="agent",
+        send_hz=50.0,
+        hold_after=True,
+    )
+
+    expected_q = [
+        (0.0, 0.0),
+        (0.02, 0.01),
+        (0.04, 0.02),
+        (0.06, 0.03),
+        (0.08, 0.04),
+        (0.1, 0.05),
+    ]
+
+    assert [round(command.sent_monotonic_s, 6) for command in backend.joint_commands] == [
+        0.0,
+        0.02,
+        0.04,
+        0.06,
+        0.08,
+        0.1,
+    ]
+    assert len(backend.joint_commands) == 6
+    for command, expected in zip(backend.joint_commands, expected_q, strict=True):
+        assert command.q == pytest.approx(expected)
+        assert command.producer == "agent"
+        assert command.mode == MotionMode.AGENT_SERVO.value
+    assert result.status == "completed"
+    assert result.producer == "agent"
+    assert result.mode == MotionMode.AGENT_SERVO.value
+    assert result.trajectory_sample_hz == 50.0
+    assert result.actual_send_hz == pytest.approx(50.0)
+    assert result.send_jitter_ms_p95 == pytest.approx(0.0)
+    assert [sample.mode for sample in result.samples] == [
+        MotionMode.AGENT_SERVO.value
+    ] * 6
+    assert result.landing_mode == "hold"
+    assert backend.hold_count == 1
+    assert runtime.mode == MotionMode.HOLD
+
+
+def test_execute_intent_frame_respects_existing_mode_owner():
+    clock = ManualClock()
+    runtime = MotionRuntime(
+        backend=FakeMotionBackend(),
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+    token = runtime.acquire_mode(MotionMode.TRAJECTORY_REPLAY, producer="sysid")
+
+    with pytest.raises(MotionModeError, match="owned by sysid"):
+        runtime.execute_intent_frame(
+            JointIntentFrame(
+                q_start=(0.0,),
+                q_target=(0.1,),
+                control_period_s=0.1,
+            ),
+            producer="agent",
+            send_hz=50.0,
+        )
+
+    token.release()
+    assert runtime.mode == MotionMode.HOLD
+
+
+def test_execute_intent_frame_rejects_joint_delta_above_gate():
+    runtime = MotionRuntime(backend=FakeMotionBackend())
+
+    with pytest.raises(ValueError, match="max_joint_delta_rad"):
+        runtime.execute_intent_frame(
+            JointIntentFrame(
+                q_start=(0.0, 0.0),
+                q_target=(0.02, 0.0),
+                control_period_s=0.1,
+                max_joint_delta_rad=0.005,
+            ),
+            producer="agent",
+            send_hz=50.0,
+        )
+
+
+def test_mode_owner_rejects_competing_producers_until_released():
+    clock = ManualClock()
+    runtime = MotionRuntime(
+        backend=FakeMotionBackend(),
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+    token = runtime.acquire_mode(MotionMode.AGENT_SERVO, producer="agent")
+
+    with pytest.raises(MotionModeError, match="owned by agent"):
+        runtime.execute_trajectory(
+            [JointTrajectoryPoint(time_s=0.0, q=(0.0,))],
+            producer="sysid",
+            trajectory_sample_hz=100.0,
+        )
+
+    token.release()
+    assert runtime.mode == MotionMode.HOLD
+
+
+def test_watchdog_holds_stale_agent_intent_then_damps_after_fault_timeout():
+    clock = ManualClock()
+    backend = FakeMotionBackend()
+    runtime = MotionRuntime(backend=backend, monotonic=clock.monotonic, sleep=clock.sleep)
+
+    runtime.mark_intent_frame(producer="agent")
+    clock.now_s = 0.31
+    hold_event = runtime.watchdog_tick(missed_intent_timeout_s=0.3, fault_timeout_s=1.0)
+
+    assert hold_event["landing_mode"] == "hold"
+    assert backend.hold_count == 1
+    assert runtime.mode == MotionMode.HOLD
+
+    clock.now_s = 1.01
+    damping_event = runtime.watchdog_tick(missed_intent_timeout_s=0.3, fault_timeout_s=1.0)
+
+    assert damping_event["landing_mode"] == "damping"
+    assert backend.damping_count == 1
+    assert runtime.mode == MotionMode.DAMPING
+
+
+def test_execute_trajectory_lands_damping_and_stops_on_fault_flags():
+    clock = ManualClock()
+    backend = FaultingReadBackend(fault_on_read=2)
+    runtime = MotionRuntime(backend=backend, monotonic=clock.monotonic, sleep=clock.sleep)
+
+    result = runtime.execute_trajectory(
+        [
+            JointTrajectoryPoint(time_s=0.0, q=(0.0, 0.0)),
+            JointTrajectoryPoint(time_s=0.01, q=(0.01, 0.0)),
+            JointTrajectoryPoint(time_s=0.02, q=(0.02, 0.0)),
+        ],
+        producer="sysid",
+        trajectory_sample_hz=100.0,
+        hold_after=True,
+    )
+
+    assert result.status == "faulted"
+    assert result.landing_mode == "damping"
+    assert result.actual_send_hz == pytest.approx(100.0)
+    assert [command.q for command in backend.joint_commands] == [
+        (0.0, 0.0),
+        (0.01, 0.0),
+    ]
+    assert [sample.fault_flags for sample in result.samples] == [
+        (),
+        ("over_current",),
+    ]
+    assert backend.hold_count == 0
+    assert backend.damping_count == 1
+    assert runtime.mode == MotionMode.DAMPING
+
+
+def test_execute_trajectory_returns_aborted_result_on_send_exception():
+    clock = ManualClock()
+    backend = FailingSendBackend(fail_on_send=2)
+    runtime = MotionRuntime(backend=backend, monotonic=clock.monotonic, sleep=clock.sleep)
+
+    result = runtime.execute_trajectory(
+        [
+            JointTrajectoryPoint(time_s=0.0, q=(0.0, 0.0)),
+            JointTrajectoryPoint(time_s=0.01, q=(0.01, 0.0)),
+            JointTrajectoryPoint(time_s=0.02, q=(0.02, 0.0)),
+        ],
+        producer="sysid",
+        trajectory_sample_hz=100.0,
+        hold_after=True,
+    )
+
+    assert result.status == "aborted"
+    assert result.landing_mode == "damping"
+    assert result.error == {"type": "RuntimeError", "message": "sdk send failed"}
+    assert [command.q for command in backend.joint_commands] == [(0.0, 0.0)]
+    assert [sample.q_cmd for sample in result.samples] == [(0.0, 0.0)]
+    assert backend.hold_count == 0
+    assert backend.damping_count == 1
+    assert runtime.mode == MotionMode.DAMPING
+
+
+def test_execute_intent_frame_lands_damping_and_stops_on_fault_flags():
+    clock = ManualClock()
+    backend = FaultingReadBackend(fault_on_read=2)
+    runtime = MotionRuntime(backend=backend, monotonic=clock.monotonic, sleep=clock.sleep)
+
+    result = runtime.execute_intent_frame(
+        JointIntentFrame(
+            q_start=(0.0, 0.0),
+            q_target=(0.1, 0.05),
+            control_period_s=0.1,
+        ),
+        producer="agent",
+        send_hz=50.0,
+        hold_after=True,
+    )
+
+    assert result.status == "faulted"
+    assert result.landing_mode == "damping"
+    assert result.actual_send_hz == pytest.approx(50.0)
+    assert len(backend.joint_commands) == 2
+    assert backend.hold_count == 0
+    assert backend.damping_count == 1
+    assert runtime.mode == MotionMode.DAMPING
+
+
+def test_execute_trajectory_lands_damping_on_keyboard_interrupt():
+    clock = ManualClock()
+    backend = InterruptingMotionBackend()
+    runtime = MotionRuntime(backend=backend, monotonic=clock.monotonic, sleep=clock.sleep)
+
+    with pytest.raises(KeyboardInterrupt):
+        runtime.execute_trajectory(
+            [JointTrajectoryPoint(time_s=0.0, q=(0.0,))],
+            producer="sysid",
+            trajectory_sample_hz=100.0,
+        )
+
+    assert backend.damping_count == 1
+    assert runtime.mode == MotionMode.DAMPING

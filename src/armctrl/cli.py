@@ -2,15 +2,21 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 from typing import Sequence
 
+from armctrl.acceptance import build_real_motion_acceptance
 from armctrl.agent_flow import (
     AgentFlowDoctor,
     AgentFlowPlanRequest,
     AgentFlowPlanner,
+    AgentFlowRealRuntimeSmokeRequest,
+    AgentFlowRealRuntimeSmoker,
     AgentFlowReviewer,
+    AgentFlowRuntimeSmokeRequest,
+    AgentFlowRuntimeSmoker,
 )
 from armctrl.recipes import RecipeCatalog
 from armctrl.recipe_executor import RecipeExecutor
@@ -22,6 +28,8 @@ from armctrl.recipe_runtime import (
     RecipeEefSeedRequest,
     RecipePlanRequest,
     RecipePlanner,
+    RecipeRuntimeSmokeRequest,
+    RecipeRuntimeSmoker,
 )
 from armctrl.release_status import release_notes, release_status
 from armctrl.lerobot_bridge import (
@@ -102,7 +110,21 @@ from armctrl.sysid_run import (
     SdkSysIdRunnerGate,
 )
 from armctrl.sysid_review import SysIdOfflineReviewRequest, SysIdOfflineReviewer
-from armctrl.sysid_sdk import SdkHandshakePlanner, SdkPreflight
+from armctrl.sysid_sdk import (
+    DEFAULT_Q_CURRENT_MAX_ERROR_RAD,
+    SdkMeasuredStateMismatchError,
+    SdkAgentSysIdSmokeReadinessChecker,
+    SdkArmSession,
+    SdkDoctor,
+    SdkHandshakePlanner,
+    SdkHoldDampingCheck,
+    SdkJogReal,
+    SdkPreflight,
+    SdkStartupRecovery,
+    SdkTinyMotionExecutor,
+    SdkTinyMotionPlanner,
+    tiny_motion_execute_prerequisite_statuses,
+)
 from armctrl.sysid_solve import SysIdSolver
 from armctrl.workspace import WorkspaceSafetyConfig
 
@@ -137,6 +159,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     recipe_agent_contract_parser.add_argument("--plan-dir", required=True)
     recipe_agent_contract_parser.add_argument(
+        "--json", action="store_true", dest="as_json"
+    )
+
+    recipe_runtime_smoke_parser = recipe_subparsers.add_parser("runtime-smoke-fake")
+    recipe_runtime_smoke_parser.add_argument("--plan-dir", required=True)
+    recipe_runtime_smoke_parser.add_argument("--output")
+    recipe_runtime_smoke_parser.add_argument(
         "--json", action="store_true", dest="as_json"
     )
 
@@ -298,6 +327,75 @@ def main(argv: Sequence[str] | None = None) -> int:
     agent_flow_review_parser = agent_flow_subparsers.add_parser("review")
     agent_flow_review_parser.add_argument("--contract", required=True)
     agent_flow_review_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    agent_flow_runtime_smoke_parser = agent_flow_subparsers.add_parser(
+        "runtime-smoke-fake"
+    )
+    agent_flow_runtime_smoke_parser.add_argument("--contract", required=True)
+    agent_flow_runtime_smoke_parser.add_argument(
+        "--q-start",
+        nargs="+",
+        type=float,
+        required=True,
+    )
+    agent_flow_runtime_smoke_parser.add_argument(
+        "--q-target",
+        nargs="+",
+        type=float,
+        required=True,
+    )
+    agent_flow_runtime_smoke_parser.add_argument("--send-hz", type=float, default=50.0)
+    agent_flow_runtime_smoke_parser.add_argument(
+        "--max-joint-delta-rad",
+        type=float,
+        default=0.005,
+    )
+    agent_flow_runtime_smoke_parser.add_argument("--output")
+    agent_flow_runtime_smoke_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+    )
+
+    agent_flow_real_runtime_smoke_parser = agent_flow_subparsers.add_parser(
+        "runtime-smoke-real"
+    )
+    agent_flow_real_runtime_smoke_parser.add_argument("--contract", required=True)
+    agent_flow_real_runtime_smoke_parser.add_argument(
+        "--readiness-artifact",
+        required=True,
+    )
+    agent_flow_real_runtime_smoke_parser.add_argument("--model", default="X5")
+    agent_flow_real_runtime_smoke_parser.add_argument("--interface", required=True)
+    agent_flow_real_runtime_smoke_parser.add_argument(
+        "--q-start",
+        nargs="+",
+        type=float,
+        required=True,
+    )
+    agent_flow_real_runtime_smoke_parser.add_argument(
+        "--q-target",
+        nargs="+",
+        type=float,
+        required=True,
+    )
+    agent_flow_real_runtime_smoke_parser.add_argument(
+        "--send-hz",
+        type=float,
+        default=50.0,
+    )
+    agent_flow_real_runtime_smoke_parser.add_argument(
+        "--max-joint-delta-rad",
+        type=float,
+        default=0.005,
+    )
+    agent_flow_real_runtime_smoke_parser.add_argument("--confirm", required=True)
+    agent_flow_real_runtime_smoke_parser.add_argument("--output")
+    agent_flow_real_runtime_smoke_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+    )
 
     sysid_parser = subparsers.add_parser("sysid")
     sysid_subparsers = sysid_parser.add_subparsers(dest="sysid_command", required=True)
@@ -526,6 +624,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     sysid_run_parser.add_argument("--safe-config", default="configs/x5.safe.yaml")
     sysid_run_parser.add_argument("--output", required=True)
     sysid_run_parser.add_argument("--confirm")
+    sysid_run_parser.add_argument("--readiness-artifact")
     sysid_run_parser.add_argument("--json", action="store_true", dest="as_json")
 
     sysid_postprocess_parser = sysid_subparsers.add_parser("postprocess")
@@ -578,6 +677,245 @@ def main(argv: Sequence[str] | None = None) -> int:
     sysid_sdk_preflight_parser.add_argument("--model", default="X5")
     sysid_sdk_preflight_parser.add_argument("--interface", required=True)
     sysid_sdk_preflight_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+    )
+
+    sysid_sdk_doctor_parser = sysid_subparsers.add_parser("sdk-doctor")
+    sysid_sdk_doctor_parser.add_argument("--model", default="X5")
+    sysid_sdk_doctor_parser.add_argument("--interface", required=True)
+    sysid_sdk_doctor_parser.add_argument("--state-sample-count", type=int, default=10)
+    sysid_sdk_doctor_parser.add_argument(
+        "--state-sample-period",
+        type=float,
+        default=0.01,
+    )
+    sysid_sdk_doctor_parser.add_argument("--output")
+    sysid_sdk_doctor_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+    )
+
+    sysid_sdk_hold_damping_parser = sysid_subparsers.add_parser(
+        "sdk-hold-damping-check"
+    )
+    sysid_sdk_hold_damping_parser.add_argument("--model", default="X5")
+    sysid_sdk_hold_damping_parser.add_argument("--interface", required=True)
+    sysid_sdk_hold_damping_parser.add_argument("--confirm", required=True)
+    sysid_sdk_hold_damping_parser.add_argument("--doctor-artifact", required=True)
+    sysid_sdk_hold_damping_parser.add_argument("--output")
+    sysid_sdk_hold_damping_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+    )
+
+    sysid_sdk_arm_session_parser = sysid_subparsers.add_parser("sdk-arm-session")
+    sysid_sdk_arm_session_parser.add_argument("--model", default="X5")
+    sysid_sdk_arm_session_parser.add_argument("--interface", required=True)
+    sysid_sdk_arm_session_parser.add_argument("--doctor-artifact", required=True)
+    sysid_sdk_arm_session_parser.add_argument("--hold-damping-artifact", required=True)
+    sysid_sdk_arm_session_parser.add_argument("--confirm", required=True)
+    sysid_sdk_arm_session_parser.add_argument("--output")
+    sysid_sdk_arm_session_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+    )
+
+    sysid_sdk_jog_real_parser = sysid_subparsers.add_parser("sdk-jog-real")
+    sysid_sdk_jog_real_parser.add_argument("--session-artifact", required=True)
+    sysid_sdk_jog_real_parser.add_argument("--joint-index", type=int, required=True)
+    sysid_sdk_jog_real_parser.add_argument("--delta-rad", type=float, required=True)
+    sysid_sdk_jog_real_parser.add_argument(
+        "--max-delta-rad",
+        type=float,
+        default=0.005,
+    )
+    sysid_sdk_jog_real_parser.add_argument("--send-hz", type=float, default=50.0)
+    sysid_sdk_jog_real_parser.add_argument(
+        "--max-q-current-error-rad",
+        type=float,
+        default=DEFAULT_Q_CURRENT_MAX_ERROR_RAD,
+    )
+    sysid_sdk_jog_real_parser.add_argument("--confirm", required=True)
+    sysid_sdk_jog_real_parser.add_argument("--output")
+    sysid_sdk_jog_real_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+    )
+
+    sysid_sdk_recover_startup_parser = sysid_subparsers.add_parser(
+        "sdk-recover-startup-real"
+    )
+    sysid_sdk_recover_startup_parser.add_argument("--session-artifact", required=True)
+    sysid_sdk_recover_startup_parser.add_argument(
+        "--q-target",
+        type=float,
+        nargs="+",
+        default=[0.0, 0.3, 0.3, 0.0, 0.0, 0.0],
+    )
+    sysid_sdk_recover_startup_parser.add_argument(
+        "--safe-config",
+        default="configs/x5.safe.yaml",
+    )
+    sysid_sdk_recover_startup_parser.add_argument(
+        "--max-joint-step-rad",
+        type=float,
+    )
+    sysid_sdk_recover_startup_parser.add_argument("--send-hz", type=float, default=50.0)
+    sysid_sdk_recover_startup_parser.add_argument(
+        "--hold-seconds",
+        type=float,
+        default=None,
+        help=(
+            "Keep streaming the recovered startup pose for this many seconds. "
+            "Default holds until Ctrl-C; pass 0 to disable active hold."
+        ),
+    )
+    sysid_sdk_recover_startup_parser.add_argument(
+        "--hold-hz",
+        type=float,
+        default=50.0,
+        help="Command frequency for the post-recovery active hold stream.",
+    )
+    sysid_sdk_recover_startup_parser.add_argument("--confirm", required=True)
+    sysid_sdk_recover_startup_parser.add_argument("--output")
+    sysid_sdk_recover_startup_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+    )
+
+    sysid_sdk_tiny_motion_parser = sysid_subparsers.add_parser(
+        "sdk-tiny-motion-plan"
+    )
+    sysid_sdk_tiny_motion_parser.add_argument("--doctor-artifact", required=True)
+    sysid_sdk_tiny_motion_parser.add_argument(
+        "--hold-damping-artifact",
+        required=True,
+    )
+    sysid_sdk_tiny_motion_parser.add_argument("--joint-index", type=int, required=True)
+    sysid_sdk_tiny_motion_parser.add_argument("--delta-rad", type=float, required=True)
+    sysid_sdk_tiny_motion_parser.add_argument(
+        "--max-delta-rad",
+        type=float,
+        default=0.005,
+    )
+    sysid_sdk_tiny_motion_parser.add_argument("--confirm", required=True)
+    sysid_sdk_tiny_motion_parser.add_argument("--output")
+    sysid_sdk_tiny_motion_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+    )
+
+    sysid_sdk_tiny_motion_execute_fake_parser = sysid_subparsers.add_parser(
+        "sdk-tiny-motion-execute-fake"
+    )
+    sysid_sdk_tiny_motion_execute_fake_parser.add_argument(
+        "--plan-artifact",
+        required=True,
+    )
+    sysid_sdk_tiny_motion_execute_fake_parser.add_argument(
+        "--dof",
+        type=int,
+        required=True,
+    )
+    sysid_sdk_tiny_motion_execute_fake_parser.add_argument(
+        "--q-current",
+        type=float,
+        nargs="+",
+        required=True,
+    )
+    sysid_sdk_tiny_motion_execute_fake_parser.add_argument(
+        "--send-hz",
+        type=float,
+        default=50.0,
+    )
+    sysid_sdk_tiny_motion_execute_fake_parser.add_argument("--confirm", required=True)
+    sysid_sdk_tiny_motion_execute_fake_parser.add_argument("--output")
+    sysid_sdk_tiny_motion_execute_fake_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+    )
+
+    sysid_sdk_tiny_motion_execute_real_parser = sysid_subparsers.add_parser(
+        "sdk-tiny-motion-execute-real"
+    )
+    sysid_sdk_tiny_motion_execute_real_parser.add_argument(
+        "--plan-artifact",
+        required=True,
+    )
+    sysid_sdk_tiny_motion_execute_real_parser.add_argument(
+        "--doctor-artifact",
+        required=True,
+    )
+    sysid_sdk_tiny_motion_execute_real_parser.add_argument(
+        "--hold-damping-artifact",
+        required=True,
+    )
+    sysid_sdk_tiny_motion_execute_real_parser.add_argument("--model", default="X5")
+    sysid_sdk_tiny_motion_execute_real_parser.add_argument(
+        "--interface",
+        required=True,
+    )
+    sysid_sdk_tiny_motion_execute_real_parser.add_argument(
+        "--dof",
+        type=int,
+        required=True,
+    )
+    sysid_sdk_tiny_motion_execute_real_parser.add_argument(
+        "--q-current",
+        type=float,
+        nargs="+",
+        required=True,
+    )
+    sysid_sdk_tiny_motion_execute_real_parser.add_argument(
+        "--send-hz",
+        type=float,
+        default=50.0,
+    )
+    sysid_sdk_tiny_motion_execute_real_parser.add_argument(
+        "--max-q-current-error-rad",
+        type=float,
+        default=DEFAULT_Q_CURRENT_MAX_ERROR_RAD,
+        help=(
+            "Reject real tiny motion if operator --q-current differs from measured "
+            "SDK joint state by more than this per-joint max absolute error."
+        ),
+    )
+    sysid_sdk_tiny_motion_execute_real_parser.add_argument("--confirm", required=True)
+    sysid_sdk_tiny_motion_execute_real_parser.add_argument("--output")
+    sysid_sdk_tiny_motion_execute_real_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+    )
+
+    sysid_agent_sysid_smoke_readiness_parser = sysid_subparsers.add_parser(
+        "sdk-agent-sysid-smoke-readiness"
+    )
+    sysid_agent_sysid_smoke_readiness_parser.add_argument(
+        "--doctor-artifact",
+        required=True,
+    )
+    sysid_agent_sysid_smoke_readiness_parser.add_argument(
+        "--hold-damping-artifact",
+        required=True,
+    )
+    sysid_agent_sysid_smoke_readiness_parser.add_argument(
+        "--tiny-motion-artifact",
+    )
+    sysid_agent_sysid_smoke_readiness_parser.add_argument(
+        "--startup-recovery-artifact",
+    )
+    sysid_agent_sysid_smoke_readiness_parser.add_argument("--output")
+    sysid_agent_sysid_smoke_readiness_parser.add_argument(
         "--json",
         action="store_true",
         dest="as_json",
@@ -726,6 +1064,43 @@ def main(argv: Sequence[str] | None = None) -> int:
             _emit(payload, as_json=args.as_json)
             return 3
         payload = {"status": "ok", **result}
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "recipe" and args.recipe_command == "runtime-smoke-fake":
+        try:
+            result = RecipeRuntimeSmoker().run(
+                RecipeRuntimeSmokeRequest(plan_dir=Path(args.plan_dir))
+            )
+        except FileNotFoundError as error:
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.recipe_runtime_smoke.v1",
+                "movement_allowed": False,
+                "hardware_motion": False,
+                "reason": str(error),
+                "plan_dir": str(Path(args.plan_dir)),
+                "next_gate": "run armctrl recipe plan <name> --output <dir> --json before runtime smoke",
+            }
+            payload = _attach_output_artifact(payload, args.output)
+            _emit(payload, as_json=args.as_json)
+            return 3
+        except RuntimeError as error:
+            if str(error) != "recipe plan safety gate is not passed":
+                raise
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.recipe_runtime_smoke.v1",
+                "movement_allowed": False,
+                "hardware_motion": False,
+                "reason": str(error),
+                "plan_dir": str(Path(args.plan_dir)),
+                "next_gate": "repair recipe plan safety checks before runtime smoke",
+            }
+            payload = _attach_output_artifact(payload, args.output)
+            _emit(payload, as_json=args.as_json)
+            return 3
+        payload = {"status": "ok", **result}
+        payload = _attach_output_artifact(payload, args.output)
         return _emit(payload, as_json=args.as_json)
 
     if args.command == "recipe" and args.recipe_command == "execute":
@@ -900,6 +1275,158 @@ def main(argv: Sequence[str] | None = None) -> int:
             "status": "ok",
             **AgentFlowReviewer().review(Path(args.contract)),
         }
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "agent-flow" and args.agent_flow_command == "runtime-smoke-fake":
+        if len(args.q_start) != len(args.q_target):
+            parser.error("--q-start and --q-target must have the same length")
+        request = AgentFlowRuntimeSmokeRequest(
+            contract_path=Path(args.contract),
+            q_start=tuple(args.q_start),
+            q_target=tuple(args.q_target),
+            send_hz=args.send_hz,
+            max_joint_delta_rad=args.max_joint_delta_rad,
+        )
+        try:
+            payload = {"status": "ok", **AgentFlowRuntimeSmoker().run(request)}
+        except ValueError as error:
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.agent_flow_runtime_smoke.v1",
+                "movement_allowed": False,
+                "hardware_motion": False,
+                "producer": "agent",
+                "reason": str(error),
+                "contract_path": str(args.contract),
+                "intent": {
+                    "q_start": list(args.q_start),
+                    "q_target": list(args.q_target),
+                    "backend_send_hz": args.send_hz,
+                    "max_joint_delta_rad": args.max_joint_delta_rad,
+                },
+                "next_gate": "reduce the checked Agent joint intent delta before runtime smoke",
+            }
+            payload = _attach_output_artifact(payload, args.output)
+            _emit(payload, as_json=args.as_json)
+            return 3
+        run_status = payload.get("run_status")
+        if run_status is not None and run_status != "completed":
+            payload["status"] = str(run_status)
+            payload = _attach_output_artifact(payload, args.output)
+            _emit(payload, as_json=args.as_json)
+            return 3
+        payload = _attach_output_artifact(payload, args.output)
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "agent-flow" and args.agent_flow_command == "runtime-smoke-real":
+        if len(args.q_start) != len(args.q_target):
+            parser.error("--q-start and --q-target must have the same length")
+        request = AgentFlowRealRuntimeSmokeRequest(
+            contract_path=Path(args.contract),
+            readiness_artifact_path=Path(args.readiness_artifact),
+            model=args.model,
+            interface=args.interface,
+            q_start=tuple(args.q_start),
+            q_target=tuple(args.q_target),
+            confirm=args.confirm,
+            send_hz=args.send_hz,
+            max_joint_delta_rad=args.max_joint_delta_rad,
+        )
+        try:
+            payload = {"status": "ok", **AgentFlowRealRuntimeSmoker().run(request)}
+        except PermissionError as error:
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.agent_flow_runtime_smoke_real.v1",
+                "movement_allowed": False,
+                "hardware_motion": False,
+                "movement_command_sent": False,
+                "producer": "agent",
+                "backend": "arx5_sdk",
+                "reason": str(error),
+                "requires_confirm": args.confirm,
+                "contract_path": str(args.contract),
+                "readiness_artifact_path": str(args.readiness_artifact),
+                "fault_landing_mode": "damping",
+                "next_gate": (
+                    "provide the exact Agent real runtime confirmation string after "
+                    "all prerequisite gates pass"
+                ),
+            }
+            payload = _attach_output_artifact(payload, args.output)
+            _emit(payload, as_json=args.as_json)
+            return 3
+        except ModuleNotFoundError as error:
+            if error.name != "arx5_interface":
+                raise
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.agent_flow_runtime_smoke_real.v1",
+                "movement_allowed": False,
+                "hardware_motion": False,
+                "movement_command_sent": False,
+                "producer": "agent",
+                "backend": "arx5_sdk",
+                "reason": "arx5_interface is not importable in this environment",
+                "contract_path": str(args.contract),
+                "readiness_artifact_path": str(args.readiness_artifact),
+                "fault_landing_mode": "damping",
+                "next_gate": (
+                    "install arx5_interface on the target Linux host and rerun "
+                    "readiness before Agent real smoke"
+                ),
+            }
+            payload = _attach_output_artifact(payload, args.output)
+            _emit(payload, as_json=args.as_json)
+            return 3
+        except (ValueError, RuntimeError) as error:
+            pre_motion_failure = isinstance(error, ValueError) or any(
+                marker in str(error)
+                for marker in (
+                    "contract review is not complete",
+                    "readiness is not passed",
+                )
+            )
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.agent_flow_runtime_smoke_real.v1",
+                "movement_allowed": False,
+                "hardware_motion": False if pre_motion_failure else "unknown",
+                "movement_command_sent": False if pre_motion_failure else "unknown",
+                "producer": "agent",
+                "backend": "arx5_sdk",
+                "reason": str(error),
+                "contract_path": str(args.contract),
+                "readiness_artifact_path": str(args.readiness_artifact),
+                "intent": {
+                    "q_start": list(args.q_start),
+                    "q_target": list(args.q_target),
+                    "backend_send_hz": args.send_hz,
+                    "max_joint_delta_rad": args.max_joint_delta_rad,
+                },
+                "fault_landing_mode": "damping",
+                "next_gate": (
+                    "complete sdk-agent-sysid-smoke-readiness before Agent real smoke"
+                    if pre_motion_failure
+                    else "inspect robot state and MotionRuntime logs before retrying Agent real smoke"
+                ),
+            }
+            payload = _attach_output_artifact(payload, args.output)
+            _emit(payload, as_json=args.as_json)
+            return 3
+        run_status = payload.get("run_status")
+        if run_status is not None and run_status != "completed":
+            payload["status"] = str(run_status)
+            payload = _attach_output_artifact(payload, args.output)
+            _emit(payload, as_json=args.as_json)
+            return 3
+        acceptance_status = _nonpassing_acceptance_status(payload)
+        if acceptance_status is not None:
+            payload["status"] = str(acceptance_status)
+            payload = _attach_output_artifact(payload, args.output)
+            _emit(payload, as_json=args.as_json)
+            return 3
+        payload = _attach_output_artifact(payload, args.output)
         return _emit(payload, as_json=args.as_json)
 
     if args.command == "lerobot" and args.lerobot_command == "review-rollout":
@@ -1652,10 +2179,34 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "sysid" and args.sysid_command == "run":
         if args.adapter != "fake":
+            gate = SdkSysIdRunnerGate()
             if args.confirm != SDK_CONFIRMATION:
-                payload = SdkSysIdRunnerGate().reject_without_confirmation(
+                payload = gate.reject_without_confirmation(
                     adapter=args.adapter,
                 )
+                payload = _attach_sysid_run_manifest(payload, args.output)
+                _emit(payload, as_json=args.as_json)
+                return 3
+            if args.readiness_artifact is None:
+                payload = gate.reject_without_readiness_artifact(adapter=args.adapter)
+                payload = _attach_sysid_run_manifest(payload, args.output)
+                _emit(payload, as_json=args.as_json)
+                return 3
+            readiness_artifact_path = Path(args.readiness_artifact)
+            readiness_artifact = json.loads(
+                readiness_artifact_path.read_text(encoding="utf-8")
+            )
+            if (
+                readiness_artifact.get("schema")
+                != "armctrl.sysid_agent_smoke_readiness.v1"
+                or readiness_artifact.get("agent_sysid_smoke_allowed") is not True
+            ):
+                payload = gate.reject_failed_readiness(
+                    adapter=args.adapter,
+                    readiness_artifact_path=str(readiness_artifact_path),
+                    readiness_artifact=readiness_artifact,
+                )
+                payload = _attach_sysid_run_manifest(payload, args.output)
                 _emit(payload, as_json=args.as_json)
                 return 3
             q_center = tuple(args.q_center or [0.0] * args.dof)
@@ -1679,25 +2230,51 @@ def main(argv: Sequence[str] | None = None) -> int:
                         model=args.model,
                         interface=args.interface,
                         max_joint_step_rad=safe_config.max_joint_step_rad,
+                        controller_dt_s=_controller_dt_from_readiness_artifact(
+                            readiness_artifact
+                        ),
                     )
                 ).run(request, confirm=args.confirm)
             except ModuleNotFoundError as error:
                 if error.name != "arx5_interface":
                     raise
-                payload = SdkSysIdRunnerGate().reject_sdk_unavailable(
+                payload = gate.reject_sdk_unavailable(
                     adapter=args.adapter,
                 )
+                payload = _attach_sysid_run_manifest(payload, args.output)
                 _emit(payload, as_json=args.as_json)
                 return 3
             except RuntimeError as error:
                 if str(error) != "planned trajectory did not pass safety checks":
                     raise
-                payload = SdkSysIdRunnerGate().reject_unsafe_plan(
+                payload = gate.reject_unsafe_plan(
                     adapter=args.adapter,
                 )
+                payload = _attach_sysid_run_manifest(payload, args.output)
                 _emit(payload, as_json=args.as_json)
                 return 3
             payload = {"status": "ok", **result.to_json()}
+            readiness_summary = _sysid_readiness_summary(
+                readiness_artifact_path=readiness_artifact_path,
+                readiness_artifact=readiness_artifact,
+            )
+            payload["readiness"] = readiness_summary
+            manifest = _attach_sysid_readiness_to_manifest(
+                manifest_path=Path(result.artifacts["manifest"]),
+                readiness_summary=readiness_summary,
+            )
+            if "acceptance" in manifest:
+                payload["acceptance"] = manifest["acceptance"]
+            run_status = payload.get("run_status")
+            if run_status is not None and run_status != "completed":
+                payload["status"] = str(run_status)
+                _emit(payload, as_json=args.as_json)
+                return 3
+            acceptance_status = _nonpassing_acceptance_status(payload)
+            if acceptance_status is not None:
+                payload["status"] = str(acceptance_status)
+                _emit(payload, as_json=args.as_json)
+                return 3
             return _emit(payload, as_json=args.as_json)
         q_center = tuple(args.q_center or [0.0] * args.dof)
         if len(q_center) != args.dof:
@@ -1719,9 +2296,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _emit(payload, as_json=args.as_json)
 
     if args.command == "sysid" and args.sysid_command == "postprocess":
-        result = SysIdPostprocessor().run(Path(args.dataset))
+        dataset_path = Path(args.dataset)
+        result = SysIdPostprocessor().run(dataset_path)
         if args.solve:
-            solver_result = SysIdSolver().run(Path(args.dataset))
+            solver_gate = _sysid_solver_gate(dataset_path)
+            if solver_gate["status"] != "pass":
+                payload = {
+                    "status": "blocked",
+                    **result.to_json(),
+                    "solver_gate": solver_gate,
+                }
+                _emit(payload, as_json=args.as_json)
+                return 3
+            solver_result = SysIdSolver().run(dataset_path)
             result = SysIdPostprocessResult(
                 schema=result.schema,
                 sample_count=result.sample_count,
@@ -1732,7 +2319,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _emit(payload, as_json=args.as_json)
 
     if args.command == "sysid" and args.sysid_command == "solve":
-        result = SysIdSolver().run(Path(args.dataset))
+        dataset_path = Path(args.dataset)
+        solver_gate = _sysid_solver_gate(dataset_path)
+        if solver_gate["status"] != "pass":
+            payload = {
+                "status": "blocked",
+                "schema": "armctrl.sysid_solve.v1",
+                "dataset": str(dataset_path),
+                "solver_gate": solver_gate,
+            }
+            _emit(payload, as_json=args.as_json)
+            return 3
+        result = SysIdSolver().run(dataset_path)
         payload = {"status": "ok", **result.to_json()}
         return _emit(payload, as_json=args.as_json)
 
@@ -1774,6 +2372,411 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = SdkPreflight().run(model=args.model, interface=args.interface)
         payload = {"status": "ok", **result.to_json()}
         return _emit(payload, as_json=args.as_json)
+
+    if args.command == "sysid" and args.sysid_command == "sdk-doctor":
+        result = SdkDoctor().run(
+            model=args.model,
+            interface=args.interface,
+            state_sample_count=args.state_sample_count,
+            state_sample_period_s=args.state_sample_period,
+        )
+        payload = {"status": "ok", **result.to_json()}
+        doctor_gate = payload.get("doctor_gate")
+        if isinstance(doctor_gate, dict) and doctor_gate.get("status") != "pass":
+            payload["status"] = "blocked"
+            payload["next_gate"] = "fix_sdk_doctor_gate_before_hold_damping"
+        payload = _attach_output_artifact(
+            payload,
+            args.output,
+            artifact_key="doctor",
+        )
+        _emit(payload, as_json=args.as_json)
+        return 0 if payload["status"] == "ok" else 3
+
+    if args.command == "sysid" and args.sysid_command == "sdk-hold-damping-check":
+        doctor_artifact = json.loads(
+            Path(args.doctor_artifact).read_text(encoding="utf-8")
+        )
+        try:
+            result = SdkHoldDampingCheck().run(
+                model=args.model,
+                interface=args.interface,
+                confirm=args.confirm,
+                doctor_artifact=doctor_artifact,
+            )
+        except RuntimeError as error:
+            if str(error) != "sdk doctor prerequisite failed":
+                raise
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.sysid_sdk_hold_damping_check.v1",
+                "model": args.model,
+                "interface": args.interface,
+                "movement_allowed": False,
+                "mode_change_allowed": False,
+                "requires_confirm": args.confirm,
+                "joint_commands_sent": False,
+                "prerequisites": {"doctor": "fail"},
+                "reason": "sdk doctor prerequisite failed",
+                "fault_landing_mode": "damping",
+                "next_gate": "run sdk-doctor successfully before hold/damping",
+            }
+            payload = _attach_output_artifact(
+                payload,
+                args.output,
+                artifact_key="hold_damping",
+            )
+            _emit(payload, as_json=args.as_json)
+            return 3
+        payload = {"status": "ok", **result.to_json()}
+        hold_damping_gate = payload.get("hold_damping_gate")
+        if (
+            isinstance(hold_damping_gate, dict)
+            and hold_damping_gate.get("status") != "pass"
+        ):
+            payload["status"] = "blocked"
+            payload["next_gate"] = "fix_hold_damping_gate_before_tiny_motion"
+        payload = _attach_output_artifact(
+            payload,
+            args.output,
+            artifact_key="hold_damping",
+        )
+        _emit(payload, as_json=args.as_json)
+        return 0 if payload["status"] == "ok" else 3
+
+    if args.command == "sysid" and args.sysid_command == "sdk-arm-session":
+        doctor_artifact = json.loads(
+            Path(args.doctor_artifact).read_text(encoding="utf-8")
+        )
+        hold_damping_artifact = json.loads(
+            Path(args.hold_damping_artifact).read_text(encoding="utf-8")
+        )
+        try:
+            result = SdkArmSession().run(
+                model=args.model,
+                interface=args.interface,
+                confirm=args.confirm,
+                doctor_artifact=doctor_artifact,
+                hold_damping_artifact=hold_damping_artifact,
+            )
+        except RuntimeError as error:
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.sdk_arm_session.v1",
+                "model": args.model,
+                "interface": args.interface,
+                "movement_allowed": False,
+                "joint_commands_sent": False,
+                "reason": str(error),
+                "fault_landing_mode": "damping",
+                "next_gate": "rerun sdk-doctor and sdk-hold-damping-check before arming session",
+            }
+            payload = _attach_output_artifact(
+                payload,
+                args.output,
+                artifact_key="session",
+            )
+            _emit(payload, as_json=args.as_json)
+            return 3
+        payload = {"status": "ok", **result.to_json()}
+        payload = _attach_output_artifact(
+            payload,
+            args.output,
+            artifact_key="session",
+        )
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "sysid" and args.sysid_command == "sdk-jog-real":
+        session_artifact = json.loads(
+            Path(args.session_artifact).read_text(encoding="utf-8")
+        )
+        try:
+            result = SdkJogReal().run(
+                session_artifact=session_artifact,
+                joint_index=args.joint_index,
+                delta_rad=args.delta_rad,
+                max_delta_rad=args.max_delta_rad,
+                send_hz=args.send_hz,
+                confirm=args.confirm,
+                max_q_current_error_rad=args.max_q_current_error_rad,
+            )
+        except (RuntimeError, ValueError) as error:
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.sdk_jog_real.v1",
+                "hardware_motion": "unknown",
+                "movement_command_sent": "unknown",
+                "reason": str(error),
+                "fault_landing_mode": "damping",
+                "next_gate": "inspect session and measured robot state before retrying jog",
+            }
+            payload = _attach_output_artifact(payload, args.output, artifact_key="jog")
+            _emit(payload, as_json=args.as_json)
+            return 3
+        payload = {"status": "ok", **result.to_json()}
+        run_status = payload.get("run_status")
+        if run_status is not None and run_status != "completed":
+            payload["status"] = str(run_status)
+            payload = _attach_output_artifact(payload, args.output, artifact_key="jog")
+            _emit(payload, as_json=args.as_json)
+            return 3
+        payload = _attach_output_artifact(payload, args.output, artifact_key="jog")
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "sysid" and args.sysid_command == "sdk-recover-startup-real":
+        session_artifact = json.loads(
+            Path(args.session_artifact).read_text(encoding="utf-8")
+        )
+        max_joint_step_rad = args.max_joint_step_rad
+        if max_joint_step_rad is None:
+            max_joint_step_rad = WorkspaceSafetyConfig.from_yaml(
+                Path(args.safe_config)
+            ).max_joint_step_rad
+        try:
+            result = SdkStartupRecovery().run(
+                session_artifact=session_artifact,
+                q_target=tuple(args.q_target),
+                send_hz=args.send_hz,
+                hold_seconds=args.hold_seconds,
+                hold_hz=args.hold_hz,
+                max_joint_step_rad=max_joint_step_rad,
+                confirm=args.confirm,
+            )
+        except (RuntimeError, ValueError) as error:
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.sdk_startup_recovery.v1",
+                "hardware_motion": "unknown",
+                "movement_command_sent": "unknown",
+                "reason": str(error),
+                "fault_landing_mode": "damping",
+                "next_gate": "inspect measured startup recovery inputs before retrying",
+            }
+            payload = _attach_output_artifact(
+                payload,
+                args.output,
+                artifact_key="startup_recovery",
+            )
+            _emit(payload, as_json=args.as_json)
+            return 3
+        payload = {"status": "ok", **result.to_json()}
+        run_status = payload.get("run_status")
+        if run_status is not None and run_status != "completed":
+            payload["status"] = str(run_status)
+            payload = _attach_output_artifact(
+                payload,
+                args.output,
+                artifact_key="startup_recovery",
+            )
+            _emit(payload, as_json=args.as_json)
+            return 3
+        payload = _attach_output_artifact(
+            payload,
+            args.output,
+            artifact_key="startup_recovery",
+        )
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "sysid" and args.sysid_command == "sdk-tiny-motion-plan":
+        doctor_artifact = json.loads(
+            Path(args.doctor_artifact).read_text(encoding="utf-8")
+        )
+        hold_damping_artifact = json.loads(
+            Path(args.hold_damping_artifact).read_text(encoding="utf-8")
+        )
+        result = SdkTinyMotionPlanner(max_delta_rad=args.max_delta_rad).plan(
+            doctor_artifact=doctor_artifact,
+            hold_damping_artifact=hold_damping_artifact,
+            joint_index=args.joint_index,
+            delta_rad=args.delta_rad,
+            confirm=args.confirm,
+        )
+        payload = {"status": "ok", **result.to_json()}
+        payload = _attach_output_artifact(
+            payload,
+            args.output,
+            artifact_key="tiny_motion_plan",
+        )
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "sysid" and args.sysid_command == "sdk-tiny-motion-execute-fake":
+        plan_artifact = json.loads(
+            Path(args.plan_artifact).read_text(encoding="utf-8")
+        )
+        result = SdkTinyMotionExecutor().execute(
+            plan_artifact=plan_artifact,
+            backend_name="fake",
+            dof=args.dof,
+            q_current=tuple(args.q_current),
+            confirm=args.confirm,
+            send_hz=args.send_hz,
+        )
+        payload = {"status": "ok", **result.to_json()}
+        run_status = payload.get("run_status")
+        if run_status is not None and run_status != "completed":
+            payload["status"] = str(run_status)
+            payload = _attach_output_artifact(payload, args.output)
+            _emit(payload, as_json=args.as_json)
+            return 3
+        payload = _attach_output_artifact(payload, args.output)
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "sysid" and args.sysid_command == "sdk-tiny-motion-execute-real":
+        plan_artifact = json.loads(
+            Path(args.plan_artifact).read_text(encoding="utf-8")
+        )
+        doctor_artifact = json.loads(
+            Path(args.doctor_artifact).read_text(encoding="utf-8")
+        )
+        hold_damping_artifact = json.loads(
+            Path(args.hold_damping_artifact).read_text(encoding="utf-8")
+        )
+        prerequisites = tiny_motion_execute_prerequisite_statuses(
+            doctor_artifact=doctor_artifact,
+            hold_damping_artifact=hold_damping_artifact,
+        )
+        try:
+            result = SdkTinyMotionExecutor().execute(
+                plan_artifact=plan_artifact,
+                doctor_artifact=doctor_artifact,
+                hold_damping_artifact=hold_damping_artifact,
+                backend_name="arx5_sdk",
+                model=args.model,
+                interface=args.interface,
+                dof=args.dof,
+                q_current=tuple(args.q_current),
+                confirm=args.confirm,
+                send_hz=args.send_hz,
+                max_q_current_error_rad=args.max_q_current_error_rad,
+            )
+        except ModuleNotFoundError as error:
+            if error.name not in {None, "arx5_interface"}:
+                raise
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.sysid_sdk_tiny_motion_execute.v1",
+                "backend": "arx5_sdk",
+                "hardware_motion": False,
+                "movement_command_sent": False,
+                "prerequisites": prerequisites,
+                "reason": "arx5_interface is not importable in this environment",
+                "requires_confirm": args.confirm,
+                "fault_landing_mode": "damping",
+                "next_gate": "install arx5_interface on the target Linux host and rerun sdk-doctor before tiny motion",
+            }
+            payload = _attach_output_artifact(payload, args.output)
+            _emit(payload, as_json=args.as_json)
+            return 3
+        except SdkMeasuredStateMismatchError as error:
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.sysid_sdk_tiny_motion_execute.v1",
+                "backend": "arx5_sdk",
+                "hardware_motion": True,
+                "movement_command_sent": False,
+                "prerequisites": prerequisites,
+                "reason": str(error),
+                "requires_confirm": args.confirm,
+                "fault_landing_mode": "damping",
+                "next_gate": "plan an explicit measured-state recovery before retrying tiny motion",
+                **error.to_rejection_payload(),
+            }
+            payload = _attach_output_artifact(payload, args.output)
+            _emit(payload, as_json=args.as_json)
+            return 3
+        except RuntimeError as error:
+            if not str(error).startswith(
+                "tiny motion execution prerequisites failed:"
+            ):
+                payload = {
+                    "status": "rejected",
+                    "schema": "armctrl.sysid_sdk_tiny_motion_execute.v1",
+                    "backend": "arx5_sdk",
+                    "hardware_motion": "unknown",
+                    "movement_command_sent": "unknown",
+                    "prerequisites": prerequisites,
+                    "reason": f"tiny motion runtime failed: {error}",
+                    "requires_confirm": args.confirm,
+                    "fault_landing_mode": "damping",
+                    "next_gate": "inspect robot state and runtime logs before retrying tiny motion",
+                }
+            else:
+                payload = {
+                    "status": "rejected",
+                    "schema": "armctrl.sysid_sdk_tiny_motion_execute.v1",
+                    "backend": "arx5_sdk",
+                    "hardware_motion": False,
+                    "movement_command_sent": False,
+                    "prerequisites": prerequisites,
+                    "reason": str(error),
+                    "requires_confirm": args.confirm,
+                    "fault_landing_mode": "damping",
+                    "next_gate": "rerun sdk-doctor and sdk-hold-damping-check before real tiny motion",
+                }
+            payload = _attach_output_artifact(payload, args.output)
+            _emit(payload, as_json=args.as_json)
+            return 3
+        payload = {"status": "ok", **result.to_json()}
+        run_status = payload.get("run_status")
+        if run_status is not None and run_status != "completed":
+            payload["status"] = str(run_status)
+            payload = _attach_output_artifact(payload, args.output)
+            _emit(payload, as_json=args.as_json)
+            return 3
+        acceptance_status = _nonpassing_acceptance_status(payload)
+        if acceptance_status is not None:
+            payload["status"] = str(acceptance_status)
+            payload = _attach_output_artifact(payload, args.output)
+            _emit(payload, as_json=args.as_json)
+            return 3
+        payload = _attach_output_artifact(payload, args.output)
+        return _emit(payload, as_json=args.as_json)
+
+    if (
+        args.command == "sysid"
+        and args.sysid_command == "sdk-agent-sysid-smoke-readiness"
+    ):
+        doctor_artifact = json.loads(
+            Path(args.doctor_artifact).read_text(encoding="utf-8")
+        )
+        hold_damping_artifact = json.loads(
+            Path(args.hold_damping_artifact).read_text(encoding="utf-8")
+        )
+        tiny_motion_artifact = (
+            json.loads(Path(args.tiny_motion_artifact).read_text(encoding="utf-8"))
+            if args.tiny_motion_artifact is not None
+            else None
+        )
+        startup_recovery_artifact = (
+            json.loads(
+                Path(args.startup_recovery_artifact).read_text(encoding="utf-8")
+            )
+            if args.startup_recovery_artifact is not None
+            else None
+        )
+        if tiny_motion_artifact is None and startup_recovery_artifact is None:
+            parser.error(
+                "sdk-agent-sysid-smoke-readiness requires --startup-recovery-artifact or --tiny-motion-artifact"
+            )
+        result = SdkAgentSysIdSmokeReadinessChecker().check(
+            doctor_artifact=doctor_artifact,
+            hold_damping_artifact=hold_damping_artifact,
+            tiny_motion_artifact=tiny_motion_artifact,
+            startup_recovery_artifact=startup_recovery_artifact,
+        )
+        result_payload = result.to_json()
+        readiness_allowed = result_payload.get("agent_sysid_smoke_allowed") is True
+        payload = {
+            "status": "ok" if readiness_allowed else "blocked",
+            **result_payload,
+        }
+        payload = _attach_output_artifact(
+            payload,
+            args.output,
+            artifact_key="readiness",
+        )
+        _emit(payload, as_json=args.as_json)
+        return 0 if readiness_allowed else 3
 
     if args.command == "sysid" and args.sysid_command == "sdk-handshake-plan":
         result = SdkHandshakePlanner().plan(model=args.model, interface=args.interface)
@@ -1822,6 +2825,137 @@ def _emit(payload: dict[str, object], *, as_json: bool) -> int:
     else:
         print(payload["status"])
     return 0
+
+
+def _attach_output_artifact(
+    payload: dict[str, object],
+    output: str | None,
+    *,
+    artifact_key: str = "runtime_log",
+) -> dict[str, object]:
+    if output is None:
+        return payload
+    output_path = Path(output)
+    payload_with_artifact = dict(payload)
+    existing_artifacts = payload_with_artifact.get("artifacts")
+    artifacts = dict(existing_artifacts) if isinstance(existing_artifacts, dict) else {}
+    artifacts[artifact_key] = str(output_path)
+    payload_with_artifact["artifacts"] = artifacts
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        json.dumps(payload_with_artifact, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return payload_with_artifact
+
+
+def _attach_sysid_run_manifest(
+    payload: dict[str, object],
+    output_dir: str,
+) -> dict[str, object]:
+    manifest_path = Path(output_dir) / "manifest.json"
+    payload_with_artifact = dict(payload)
+    existing_artifacts = payload_with_artifact.get("artifacts")
+    artifacts = dict(existing_artifacts) if isinstance(existing_artifacts, dict) else {}
+    artifacts["manifest"] = str(manifest_path)
+    payload_with_artifact["artifacts"] = artifacts
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(
+        json.dumps(payload_with_artifact, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return payload_with_artifact
+
+
+def _nonpassing_acceptance_status(payload: dict[str, object]) -> str | None:
+    acceptance = payload.get("acceptance")
+    if not isinstance(acceptance, dict):
+        return None
+    status = acceptance.get("status")
+    if status is None or status == "pass":
+        return None
+    return str(status)
+
+
+def _sysid_readiness_summary(
+    *,
+    readiness_artifact_path: Path,
+    readiness_artifact: dict[str, object],
+) -> dict[str, object]:
+    return {
+        "artifact_path": str(readiness_artifact_path),
+        "agent_sysid_smoke_allowed": readiness_artifact.get(
+            "agent_sysid_smoke_allowed"
+        ),
+        "prerequisites": readiness_artifact.get("prerequisites"),
+        "tiny_motion": readiness_artifact.get("tiny_motion"),
+    }
+
+
+def _controller_dt_from_readiness_artifact(
+    readiness_artifact: dict[str, object],
+) -> float | None:
+    tiny_motion = readiness_artifact.get("tiny_motion")
+    if not isinstance(tiny_motion, dict):
+        return None
+    try:
+        controller_dt_s = float(tiny_motion.get("controller_dt_s"))
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(controller_dt_s) or controller_dt_s <= 0.0:
+        return None
+    return controller_dt_s
+
+
+def _sysid_solver_gate(dataset_path: Path) -> dict[str, object]:
+    manifest_path = dataset_path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("adapter") != "sdk":
+        return {"status": "pass", "checks": {}}
+    run_status_completed = manifest.get("run_status") == "completed"
+    acceptance = manifest.get("acceptance")
+    acceptance_passed = (
+        isinstance(acceptance, dict) and acceptance.get("status") == "pass"
+    )
+    checks = {
+        "run_status_completed": run_status_completed,
+        "acceptance_passed": acceptance_passed,
+    }
+    if run_status_completed and acceptance_passed:
+        return {"status": "pass", "checks": checks}
+    if not run_status_completed:
+        reason = f"sdk run_status is {manifest.get('run_status')}"
+    else:
+        reason = "sdk acceptance is not pass"
+    return {
+        "status": "blocked",
+        "reason": reason,
+        "next_gate": "review sysid smoke acceptance before solver",
+        "checks": checks,
+    }
+
+
+def _attach_sysid_readiness_to_manifest(
+    *,
+    manifest_path: Path,
+    readiness_summary: dict[str, object],
+) -> dict[str, object]:
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["readiness"] = readiness_summary
+    motion_runtime = manifest.get("motion_runtime")
+    if isinstance(motion_runtime, dict):
+        manifest["acceptance"] = build_real_motion_acceptance(
+            stage="sysid_smoke",
+            motion_runtime=motion_runtime,
+            hardware_motion=bool(manifest.get("safety", {}).get("movement_allowed")),
+            movement_command_sent=True,
+            readiness_passed=readiness_summary.get("agent_sysid_smoke_allowed") is True,
+        )
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return manifest
 
 
 if __name__ == "__main__":

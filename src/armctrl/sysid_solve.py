@@ -58,6 +58,7 @@ class SysIdSolver:
         metrics = {
             "schema": "armctrl.sysid_solver_quality.v1",
             "sample_count": len(processed_rows),
+            "source_run": _source_run_summary(manifest),
             "input_quality_status": input_quality_status,
             "overall_verdict": overall_verdict,
             "backend_status": backend_status,
@@ -110,6 +111,73 @@ def _module_status(module_name: str) -> dict[str, str]:
     if spec is None:
         return {"status": "missing", "module": module_name}
     return {"status": "available", "module": module_name}
+
+
+def _source_run_summary(manifest: dict[str, object]) -> dict[str, object]:
+    acceptance = _dict_value(manifest.get("acceptance"))
+    readiness = _dict_value(manifest.get("readiness"))
+    motion_runtime = _dict_value(manifest.get("motion_runtime"))
+    tracking = _dict_value(motion_runtime.get("tracking"))
+    return {
+        "schema": "armctrl.sysid_solver_source_run.v1",
+        "manifest_schema": manifest.get("schema"),
+        "adapter": manifest.get("adapter"),
+        "run_status": manifest.get("run_status"),
+        "acceptance": _pick(
+            acceptance,
+            ("stage", "status", "next_gate"),
+        ),
+        "readiness": _pick(
+            readiness,
+            ("artifact_path", "agent_sysid_smoke_allowed"),
+        ),
+        "motion_runtime": {
+            **_pick(
+                motion_runtime,
+                (
+                    "status",
+                    "producer",
+                    "mode",
+                    "trajectory_sample_hz",
+                    "actual_send_hz",
+                    "send_jitter_ms_p95",
+                    "send_jitter_ms_p99",
+                    "controller_dt_s",
+                    "sample_count",
+                ),
+            ),
+            "fault_flags": _fault_flags(motion_runtime.get("fault_flags")),
+            "tracking": _pick(
+                tracking,
+                (
+                    "q_cmd_delta_max_abs_rad",
+                    "q_meas_delta_max_abs_rad",
+                    "max_abs_sample_tracking_error_rad",
+                    "final_tracking_error_max_abs_rad",
+                ),
+            ),
+            **_pick(motion_runtime, ("landing_mode",)),
+        },
+    }
+
+
+def _dict_value(value: object) -> dict[str, object]:
+    if isinstance(value, dict):
+        return value
+    return {}
+
+
+def _pick(
+    source: dict[str, object],
+    keys: tuple[str, ...],
+) -> dict[str, object]:
+    return {key: source[key] for key in keys if key in source}
+
+
+def _fault_flags(value: object) -> list[str]:
+    if isinstance(value, list | tuple):
+        return [str(flag) for flag in value]
+    return []
 
 
 def _pinocchio_solver_result(
@@ -251,6 +319,7 @@ def _solver_report(metrics: dict[str, object]) -> str:
     physical_consistency = metrics["physical_consistency"]
     figaroh_base_parameters = metrics["figaroh_base_parameters"]
     residual_summary = metrics["residual_summary"]
+    source_run = _dict_value(metrics.get("source_run"))
     title = "SysID \u6c42\u89e3\u62a5\u544a"
     note = (
         "\u5f53\u524d clean rebuild \u53ea\u56fa\u5b9a\u6c42\u89e3\u9636\u6bb5"
@@ -272,7 +341,38 @@ def _solver_report(metrics: dict[str, object]) -> str:
         f"- Pinocchio prediction_error: `{pinocchio_prediction['status']}`\n"
         f"- 物理一致性: `{physical_consistency['status']}`\n"
         f"- 基础参数: `{figaroh_base_parameters['status']}`\n"
+        f"{_source_run_report(source_run)}"
         "- residual_summary: "
         f"`fake_zero_tau_rmse_nm={residual_summary['fake_zero_tau_rmse_nm']}`\n\n"
         f"{note}\n"
+    )
+
+
+def _source_run_report(source_run: dict[str, object]) -> str:
+    acceptance = _dict_value(source_run.get("acceptance"))
+    readiness = _dict_value(source_run.get("readiness"))
+    motion_runtime = _dict_value(source_run.get("motion_runtime"))
+    tracking = _dict_value(motion_runtime.get("tracking"))
+    fault_flags = motion_runtime.get("fault_flags")
+    if not isinstance(fault_flags, list):
+        fault_flags = []
+    return (
+        f"- source_run.adapter: `{source_run.get('adapter')}`\n"
+        f"- source_run.run_status: `{source_run.get('run_status')}`\n"
+        "- source_run.acceptance: "
+        f"`{acceptance.get('stage')}/{acceptance.get('status')}`\n"
+        "- source_run.readiness.agent_sysid_smoke_allowed: "
+        f"`{readiness.get('agent_sysid_smoke_allowed')}`\n"
+        "- source_run.motion_runtime.status: "
+        f"`{motion_runtime.get('status')}`\n"
+        "- source_run.motion_runtime.actual_send_hz: "
+        f"`{motion_runtime.get('actual_send_hz')}`\n"
+        "- source_run.motion_runtime.controller_dt_s: "
+        f"`{motion_runtime.get('controller_dt_s')}`\n"
+        "- source_run.tracking.final_tracking_error_max_abs_rad: "
+        f"`{tracking.get('final_tracking_error_max_abs_rad')}`\n"
+        "- source_run.motion_runtime.fault_flags: "
+        f"`{json.dumps(fault_flags, ensure_ascii=False)}`\n"
+        "- source_run.motion_runtime.landing_mode: "
+        f"`{motion_runtime.get('landing_mode')}`\n"
     )
