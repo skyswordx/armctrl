@@ -1437,6 +1437,102 @@ def test_cli_runtime_result_check_summarizes_passing_owner_result(
     assert payload["metrics"]["dt_max_s"] == pytest.approx(0.0102)
 
 
+def test_cli_runtime_result_check_can_find_latest_result_from_run_dir(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    from armctrl import cli
+
+    run_dir = tmp_path / "lab-run"
+    results_dir = run_dir / "runtime_session_commands" / "results"
+    results_dir.mkdir(parents=True)
+    stale_result = results_dir / "stale.json"
+    latest_result = results_dir / "latest.json"
+    stale_result.write_text(
+        json.dumps(
+            {
+                "schema": "armctrl.arm_runtime_command_result.v1",
+                "status": "completed",
+                "owner": "agent",
+                "mode": "agent_servo",
+                "motion": {
+                    "status": "completed",
+                    "sample_count": 2,
+                    "send_jitter_ms_p99": 0.1,
+                },
+                "timing": {
+                    "queue_latency_s": 0.01,
+                    "first_send_latency_s": 0.01,
+                    "execution_elapsed_s": 0.1,
+                },
+                "acceptance": {
+                    "status": "pass",
+                    "timing_gate": {"status": "pass"},
+                    "status_publish_gate": {"status": "pass"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    latest_result.write_text(
+        json.dumps(
+            {
+                "schema": "armctrl.arm_runtime_command_result.v1",
+                "status": "completed",
+                "owner": "sysid",
+                "mode": "trajectory_replay",
+                "motion": {
+                    "status": "completed",
+                    "sample_count": 801,
+                    "send_jitter_ms_p99": 0.2,
+                },
+                "timing": {
+                    "queue_latency_s": 0.01,
+                    "first_send_latency_s": 0.01,
+                    "execution_elapsed_s": 8.0,
+                },
+                "acceptance": {
+                    "status": "pass",
+                    "timing_gate": {"status": "pass"},
+                    "status_publish_gate": {"status": "pass"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    stale_mtime = time.time() - 100.0
+    latest_mtime = time.time()
+    stale_result.touch()
+    latest_result.touch()
+    stale_result.chmod(0o644)
+    latest_result.chmod(0o644)
+    import os
+
+    os.utime(stale_result, (stale_mtime, stale_mtime))
+    os.utime(latest_result, (latest_mtime, latest_mtime))
+
+    exit_code = cli.main(
+        [
+            "runtime",
+            "result-check",
+            "--run-dir",
+            str(run_dir),
+            "--expect-owner",
+            "sysid",
+            "--expect-sample-count",
+            "801",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["status"] == "pass"
+    assert payload["result_artifact"] == str(latest_result)
+    assert payload["owner"] == "sysid"
+
+
 def test_cli_runtime_result_check_rejects_failed_timing_gate(
     tmp_path: Path,
     capsys,

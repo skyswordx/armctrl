@@ -139,9 +139,8 @@ Expected result:
 Inspect the live runtime result, not only the submit artifact:
 
 ```bash
-RESULT=$(ls -t "$RUN_DIR/runtime_session_commands/results"/*.json | head -1)
 uv run armctrl runtime result-check \
-  --result-artifact "$RESULT" \
+  --run-dir "$RUN_DIR" \
   --expect-owner agent \
   --expect-mode agent_servo \
   --max-jitter-p99-ms 5 \
@@ -197,9 +196,8 @@ Expected result:
 Inspect the live runtime result:
 
 ```bash
-RESULT=$(ls -t "$RUN_DIR/runtime_session_commands/results"/*.json | head -1)
 uv run armctrl runtime result-check \
-  --result-artifact "$RESULT" \
+  --run-dir "$RUN_DIR" \
   --expect-owner sysid \
   --expect-mode trajectory_replay \
   --expect-sample-count 801 \

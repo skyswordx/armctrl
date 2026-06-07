@@ -318,7 +318,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     runtime_watchdog_parser.add_argument("--json", action="store_true", dest="as_json")
 
     runtime_result_check_parser = runtime_subparsers.add_parser("result-check")
-    runtime_result_check_parser.add_argument("--result-artifact", required=True)
+    runtime_result_source = runtime_result_check_parser.add_mutually_exclusive_group(
+        required=True
+    )
+    runtime_result_source.add_argument("--result-artifact")
+    runtime_result_source.add_argument("--run-dir")
     runtime_result_check_parser.add_argument("--expect-owner")
     runtime_result_check_parser.add_argument("--expect-mode")
     runtime_result_check_parser.add_argument("--expect-sample-count", type=int)
@@ -1609,13 +1613,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0 if payload.get("status") == "ok" else 3
 
     if args.command == "runtime" and args.runtime_command == "result-check":
-        payload = _runtime_result_check_payload(
-            result_artifact_path=Path(args.result_artifact),
-            expect_owner=args.expect_owner,
-            expect_mode=args.expect_mode,
-            expect_sample_count=args.expect_sample_count,
-            max_jitter_p99_ms=args.max_jitter_p99_ms,
-        )
+        try:
+            payload = _runtime_result_check_payload(
+                result_artifact_path=_runtime_result_artifact_path_from_args(
+                    result_artifact=args.result_artifact,
+                    run_dir=args.run_dir,
+                ),
+                expect_owner=args.expect_owner,
+                expect_mode=args.expect_mode,
+                expect_sample_count=args.expect_sample_count,
+                max_jitter_p99_ms=args.max_jitter_p99_ms,
+            )
+        except (OSError, ValueError) as error:
+            payload = {
+                "status": "fail",
+                "schema": "armctrl.runtime_result_check.v1",
+                "reason": str(error),
+                "result_artifact": args.result_artifact,
+                "run_dir": args.run_dir,
+                "next_gate": "wait for live runtime command result artifact",
+            }
         payload = _attach_output_artifact(
             payload,
             args.output,
@@ -4644,6 +4661,22 @@ def _runtime_result_check_payload(
     if payload["status"] != "pass":
         payload["next_gate"] = "inspect runtime result timing and safety evidence"
     return payload
+
+
+def _runtime_result_artifact_path_from_args(
+    *,
+    result_artifact: str | None,
+    run_dir: str | None,
+) -> Path:
+    if result_artifact is not None:
+        return Path(result_artifact)
+    if run_dir is None:
+        raise ValueError("provide --result-artifact or --run-dir")
+    results_dir = Path(run_dir) / "runtime_session_commands" / "results"
+    candidates = [path for path in results_dir.glob("*.json") if path.is_file()]
+    if not candidates:
+        raise ValueError(f"no runtime result artifacts found under {results_dir}")
+    return max(candidates, key=lambda path: path.stat().st_mtime)
 
 
 def _sysid_run_readiness_allowed(readiness_artifact: dict[str, object]) -> bool:
