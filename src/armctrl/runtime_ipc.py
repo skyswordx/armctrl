@@ -274,6 +274,14 @@ def execute_runtime_command(
         }
         session["readiness"] = runtime_readiness(session)
         _write_json_atomic(session_artifact_path, session)
+        progress = lambda _sample: _refresh_active_owner_session(
+            session_artifact_path=session_artifact_path,
+            runtime=live_runtime,
+            owner=owner,
+            mode=mode,
+            heartbeat_timeout_s=float(command.get("heartbeat_timeout_s", 0.5)),
+            max_heartbeat_age_s=max_heartbeat_age_s,
+        )
         motion = _execute_motion_command(
             command,
             runtime=live_runtime,
@@ -281,6 +289,7 @@ def execute_runtime_command(
                 session_artifact_path=session_artifact_path,
                 owner=owner,
             ),
+            on_sample=progress,
         )
         watchdog = _owner_timeout_watchdog(
             session_artifact_path=session_artifact_path,
@@ -345,6 +354,7 @@ def _execute_motion_command(
     *,
     runtime: ArmRuntime,
     watchdog=None,
+    on_sample=None,
 ) -> MotionExecutionResult:
     kind = command.get("kind")
     send_hz = float(command.get("send_hz", 50.0))
@@ -364,6 +374,7 @@ def _execute_motion_command(
             owner=str(command.get("owner")),
             trajectory_sample_hz=send_hz,
             watchdog=watchdog,
+            on_sample=on_sample,
         )
     if kind == "intent":
         return runtime.execute_owner_intent_frame(
@@ -380,6 +391,7 @@ def _execute_motion_command(
             owner=str(command.get("owner")),
             send_hz=send_hz,
             watchdog=watchdog,
+            on_sample=on_sample,
         )
     raise ValueError(f"unsupported runtime command kind: {kind}")
 
@@ -395,6 +407,7 @@ def _session_from_runtime_status(
     updated["mode"] = status.get("mode")
     updated["owner"] = status.get("owner")
     updated["owner_lease"] = None
+    updated["owner_deadman"] = None
     updated["q_meas"] = list(status.get("q_meas") or [])
     updated["q_hold"] = list(status.get("q_hold") or [])
     updated["fault_flags"] = list(status.get("fault_flags") or [])
@@ -403,6 +416,54 @@ def _session_from_runtime_status(
         max_heartbeat_age_s=max_heartbeat_age_s,
     )
     return updated
+
+
+def _refresh_active_owner_session(
+    *,
+    session_artifact_path: Path,
+    runtime: ArmRuntime,
+    owner: str,
+    mode: str,
+    heartbeat_timeout_s: float,
+    max_heartbeat_age_s: float,
+) -> None:
+    session = _read_json_object(session_artifact_path)
+    if session.get("owner") != owner:
+        return
+    owner_lease = session.get("owner_lease")
+    acquired_wall_time_s = (
+        owner_lease.get("acquired_wall_time_s")
+        if isinstance(owner_lease, dict)
+        else None
+    )
+    status = runtime.status()
+    updated = _session_from_runtime_status(
+        session,
+        status=status,
+        max_heartbeat_age_s=max_heartbeat_age_s,
+    )
+    updated["owner"] = owner
+    updated["mode"] = mode
+    updated["owner_lease"] = {
+        "schema": "armctrl.arm_runtime_owner_lease.v1",
+        "runtime_session_id": status.get("runtime_session_id"),
+        "owner": owner,
+        "mode": mode,
+        "heartbeat_timeout_s": float(heartbeat_timeout_s),
+        "heartbeat_wall_time_s": time.time(),
+        "acquired_wall_time_s": acquired_wall_time_s,
+        "landing_policy": "watchdog_to_damping_release_to_hold_safe",
+    }
+    updated["owner_deadman"] = {
+        "owner": owner,
+        "mode": mode,
+        "heartbeat_wall_time_s": updated["owner_lease"]["heartbeat_wall_time_s"],
+        "heartbeat_age_s": 0.0,
+        "heartbeat_timeout_s": float(heartbeat_timeout_s),
+        "fresh": True,
+    }
+    updated["readiness"] = runtime_readiness(updated)
+    _write_json_atomic(session_artifact_path, updated)
 
 
 def _command_result_payload(

@@ -202,6 +202,7 @@ class MotionRuntime:
         trajectory_sample_hz: float,
         hold_after: bool = False,
         watchdog: Callable[[], dict[str, object] | None] | None = None,
+        on_sample: Callable[[MotionAuditSample], None] | None = None,
     ) -> MotionExecutionResult:
         points = list(trajectory)
         _validate_trajectory_inputs(
@@ -248,18 +249,19 @@ class MotionRuntime:
                 )
                 state = self._backend.read_joint_state()
                 sent_times.append(sent_s)
-                samples.append(
-                    MotionAuditSample(
-                        sent_monotonic_s=sent_s,
-                        q_cmd=q_cmd,
-                        q_meas=state.q_meas,
-                        dq_meas=state.dq_meas,
-                        tau_meas=state.tau_meas,
-                        fault_flags=state.fault_flags,
-                        producer=producer,
-                        mode=MotionMode.TRAJECTORY_REPLAY.value,
-                    )
+                sample = MotionAuditSample(
+                    sent_monotonic_s=sent_s,
+                    q_cmd=q_cmd,
+                    q_meas=state.q_meas,
+                    dq_meas=state.dq_meas,
+                    tau_meas=state.tau_meas,
+                    fault_flags=state.fault_flags,
+                    producer=producer,
+                    mode=MotionMode.TRAJECTORY_REPLAY.value,
                 )
+                samples.append(sample)
+                if on_sample is not None:
+                    on_sample(sample)
                 if state.fault_flags:
                     self._damping()
                     return _motion_execution_result(
@@ -329,6 +331,7 @@ class MotionRuntime:
         send_hz: float,
         hold_after: bool = False,
         watchdog: Callable[[], dict[str, object] | None] | None = None,
+        on_sample: Callable[[MotionAuditSample], None] | None = None,
     ) -> MotionExecutionResult:
         if send_hz <= 0.0:
             raise ValueError("send_hz must be positive")
@@ -375,18 +378,19 @@ class MotionRuntime:
                 )
                 state = self._backend.read_joint_state()
                 sent_times.append(sent_s)
-                samples.append(
-                    MotionAuditSample(
-                        sent_monotonic_s=sent_s,
-                        q_cmd=q_cmd,
-                        q_meas=state.q_meas,
-                        dq_meas=state.dq_meas,
-                        tau_meas=state.tau_meas,
-                        fault_flags=state.fault_flags,
-                        producer=producer,
-                        mode=MotionMode.AGENT_SERVO.value,
-                    )
+                sample = MotionAuditSample(
+                    sent_monotonic_s=sent_s,
+                    q_cmd=q_cmd,
+                    q_meas=state.q_meas,
+                    dq_meas=state.dq_meas,
+                    tau_meas=state.tau_meas,
+                    fault_flags=state.fault_flags,
+                    producer=producer,
+                    mode=MotionMode.AGENT_SERVO.value,
                 )
+                samples.append(sample)
+                if on_sample is not None:
+                    on_sample(sample)
                 if state.fault_flags:
                     self._damping()
                     return _motion_execution_result(
@@ -677,6 +681,7 @@ class ArmRuntime:
         owner: str,
         trajectory_sample_hz: float,
         watchdog: Callable[[], dict[str, object] | None] | None = None,
+        on_sample: Callable[[MotionAuditSample], None] | None = None,
     ) -> MotionExecutionResult:
         self._raise_if_not_owned(owner=owner, mode=MotionMode.TRAJECTORY_REPLAY)
         motion = MotionRuntime(
@@ -690,6 +695,7 @@ class ArmRuntime:
             trajectory_sample_hz=trajectory_sample_hz,
             hold_after=False,
             watchdog=watchdog,
+            on_sample=on_sample,
         )
         return self._finish_owner_motion(owner=owner, result=result)
 
@@ -700,6 +706,7 @@ class ArmRuntime:
         owner: str,
         send_hz: float,
         watchdog: Callable[[], dict[str, object] | None] | None = None,
+        on_sample: Callable[[MotionAuditSample], None] | None = None,
     ) -> MotionExecutionResult:
         self._raise_if_not_owned(owner=owner, mode=MotionMode.AGENT_SERVO)
         motion = MotionRuntime(
@@ -713,6 +720,7 @@ class ArmRuntime:
             send_hz=send_hz,
             hold_after=False,
             watchdog=watchdog,
+            on_sample=on_sample,
         )
         return self._finish_owner_motion(owner=owner, result=result)
 

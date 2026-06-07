@@ -1098,6 +1098,65 @@ def test_runtime_queue_owner_heartbeat_timeout_lands_damping(
     assert backend.damping_count >= 1
 
 
+def test_runtime_queue_refreshes_owner_heartbeat_during_long_trajectory(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    clock = ManualClock()
+    backend = FakeMotionBackend()
+    backend.send_joint_command(
+        tuple(float(value) for value in session["q_meas"]),
+        producer="test_bootstrap",
+        mode=MotionMode.HOLD,
+        monotonic_s=0.0,
+    )
+    runtime = ArmRuntime(
+        backend=backend,
+        safe_center=tuple(float(value) for value in session["safe_center"]),
+        runtime_session_id=str(session["runtime_session_id"]),
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+    runtime.mark_hold_safe(q_hold=tuple(float(value) for value in session["q_hold"]))
+    monkeypatch.setattr("armctrl.runtime_ipc.time.time", clock.monotonic)
+    submitted = submit_trajectory_command(
+        session_artifact_path=session_artifact,
+        owner="sysid",
+        expected_q_start=(0.0, 0.3, 0.3),
+        q_points=[
+            (0.0, 0.3, 0.3),
+            (0.01, 0.3, 0.3),
+            (0.02, 0.3, 0.3),
+            (0.03, 0.3, 0.3),
+        ],
+        send_hz=100.0,
+        max_start_error_rad=0.02,
+        heartbeat_timeout_s=0.015,
+        max_heartbeat_age_s=1.0,
+    )
+
+    result = execute_pending_runtime_commands(
+        session_artifact_path=session_artifact,
+        backend=backend,
+        runtime=runtime,
+        max_heartbeat_age_s=1.0,
+    )
+    updated_session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    result_artifact = json.loads(Path(submitted["artifacts"]["result"]).read_text())
+
+    assert result is not None
+    assert result["status"] == "completed"
+    assert result["landing_mode"] == "hold"
+    assert "watchdog" not in result
+    assert result_artifact["status"] == "completed"
+    assert updated_session["mode"] == "hold_safe"
+    assert updated_session["owner"] is None
+    assert updated_session["owner_deadman"] is None
+
+
 def test_runtime_queue_passes_owner_watchdog_into_motion_loop(
     tmp_path: Path,
     monkeypatch,
