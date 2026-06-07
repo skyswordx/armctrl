@@ -1843,6 +1843,63 @@ def test_runtime_queue_refreshes_owner_heartbeat_during_long_trajectory(
     assert updated_session["owner_deadman"] is None
 
 
+def test_runtime_queue_throttles_session_writes_during_100hz_sysid_trajectory(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    clock = ManualClock()
+    backend = FakeMotionBackend()
+    backend.send_joint_command(
+        tuple(float(value) for value in session["q_meas"]),
+        producer="test_bootstrap",
+        mode=MotionMode.HOLD,
+        monotonic_s=0.0,
+    )
+    runtime = ArmRuntime(
+        backend=backend,
+        safe_center=tuple(float(value) for value in session["safe_center"]),
+        runtime_session_id=str(session["runtime_session_id"]),
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+    runtime.mark_hold_safe(q_hold=tuple(float(value) for value in session["q_hold"]))
+    monkeypatch.setattr("armctrl.runtime_ipc.time.time", clock.monotonic)
+    submitted = submit_trajectory_command(
+        session_artifact_path=session_artifact,
+        owner="sysid",
+        expected_q_start=(0.0, 0.3, 0.3),
+        q_points=[
+            (0.001 * index, 0.3, 0.3)
+            for index in range(801)
+        ],
+        send_hz=100.0,
+        max_start_error_rad=0.02,
+        heartbeat_timeout_s=1.0,
+        max_heartbeat_age_s=1.0,
+    )
+
+    result = execute_pending_runtime_commands(
+        session_artifact_path=session_artifact,
+        backend=backend,
+        runtime=runtime,
+        max_heartbeat_age_s=1.0,
+    )
+    result_artifact = json.loads(Path(submitted["artifacts"]["result"]).read_text())
+
+    assert result is not None
+    assert result["status"] == "completed"
+    assert result["motion"]["sample_count"] == 801
+    assert result["status_update"]["sample_count"] == 801
+    assert result["status_update"]["session_write_count"] < 50
+    assert result["status_update"]["session_write_count"] < (
+        result["motion"]["sample_count"] / 10
+    )
+    assert result_artifact["status_update"] == result["status_update"]
+
+
 def test_runtime_queue_passes_owner_watchdog_into_motion_loop(
     tmp_path: Path,
     monkeypatch,

@@ -325,6 +325,7 @@ def execute_runtime_command(
                 max(0.001, float(command.get("heartbeat_timeout_s", 0.5)) / 2.0),
             ),
         )
+        status_update = progress.stats
         first_send_wall_time_s: float | None = None
 
         def on_motion_sample(sample: MotionAuditSample) -> None:
@@ -366,6 +367,7 @@ def execute_runtime_command(
                 owner_acquire_started_wall_time_s=owner_acquire_started_wall_time_s,
                 owner_acquired_wall_time_s=owner_acquired_wall_time_s,
                 first_send_wall_time_s=first_send_wall_time_s,
+                status_update=status_update,
             )
         if motion.status == "completed":
             status = live_runtime.status()
@@ -397,6 +399,7 @@ def execute_runtime_command(
             owner_acquire_started_wall_time_s=owner_acquire_started_wall_time_s,
             owner_acquired_wall_time_s=owner_acquired_wall_time_s,
             first_send_wall_time_s=first_send_wall_time_s,
+            status_update=status_update,
         )
     except (ArmRuntimeError, RuntimeSessionError, ValueError) as error:
         rejected_wall_time_s = time.time()
@@ -522,9 +525,16 @@ def _active_owner_session_progress_throttle(
     min_period_s: float,
 ):
     last_write_monotonic_s: float | None = None
+    stats: dict[str, object] = {
+        "policy": "throttled_active_owner_status",
+        "sample_count": 0,
+        "session_write_count": 0,
+        "min_period_s": float(min_period_s),
+    }
 
     def on_sample(sample: MotionAuditSample) -> None:
         nonlocal last_write_monotonic_s
+        stats["sample_count"] = int(stats["sample_count"]) + 1
         if (
             last_write_monotonic_s is not None
             and sample.sent_monotonic_s - last_write_monotonic_s < min_period_s
@@ -539,7 +549,9 @@ def _active_owner_session_progress_throttle(
             heartbeat_timeout_s=heartbeat_timeout_s,
             max_heartbeat_age_s=max_heartbeat_age_s,
         )
+        stats["session_write_count"] = int(stats["session_write_count"]) + 1
 
+    on_sample.stats = stats
     return on_sample
 
 
@@ -614,6 +626,7 @@ def _command_result_payload(
     owner_acquired_wall_time_s: float,
     first_send_wall_time_s: float | None,
     watchdog: dict[str, object] | None = None,
+    status_update: dict[str, object] | None = None,
 ) -> dict[str, object]:
     completed_wall_time_s = time.time()
     timing = _command_timing_summary(
@@ -680,6 +693,8 @@ def _command_result_payload(
             "error": motion.error,
         },
     }
+    if status_update is not None:
+        payload["status_update"] = dict(status_update)
     if command.get("kind") == "intent":
         payload["motion"].update(_intent_motion_contract(command))
     if watchdog is not None:
