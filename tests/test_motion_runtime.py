@@ -1,6 +1,9 @@
 import pytest
 
 from armctrl.motion_runtime import (
+    ArmRuntime,
+    ArmRuntimeError,
+    ArmRuntimeMode,
     FakeMotionBackend,
     JointStateSnapshot,
     JointIntentFrame,
@@ -372,3 +375,113 @@ def test_execute_trajectory_lands_damping_on_keyboard_interrupt():
 
     assert backend.damping_count == 1
     assert runtime.mode == MotionMode.DAMPING
+
+
+def test_arm_runtime_recovers_from_passive_droop_to_live_hold_session():
+    clock = ManualClock()
+    backend = FakeMotionBackend()
+    backend._last_q = (1.3, 0.0, 0.0, -0.05, 0.0, 0.0)
+    runtime = ArmRuntime(
+        backend=backend,
+        safe_center=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
+        passive_safe_q=(1.3, 0.0, 0.0, -0.05, 0.0, 0.0),
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+
+    runtime.arm_from_passive()
+    result = runtime.recover_to_safe(send_hz=50.0, max_joint_step_rad=0.5)
+    status = runtime.status()
+
+    assert result.status == "completed"
+    assert status["schema"] == "armctrl.arm_runtime_status.v1"
+    assert status["mode"] == ArmRuntimeMode.HOLD_SAFE.value
+    assert status["owner"] is None
+    assert status["q_hold"] == pytest.approx((0.0, 0.3, 0.3, 0.0, 0.0, 0.0))
+    assert status["q_meas"] == pytest.approx((0.0, 0.3, 0.3, 0.0, 0.0, 0.0))
+    assert status["heartbeat_age_s"] == pytest.approx(0.0)
+    assert status["runtime_session_id"]
+    assert backend.hold_count == 1
+
+
+def test_arm_runtime_requires_fresh_pose_before_owner_acquire():
+    clock = ManualClock()
+    backend = FakeMotionBackend()
+    backend._last_q = (0.0, 0.3, 0.3, 0.0, 0.0, 0.0)
+    runtime = ArmRuntime(
+        backend=backend,
+        safe_center=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+    runtime.mark_hold_safe(q_hold=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0))
+
+    lease = runtime.acquire_owner(
+        owner="agent",
+        mode=MotionMode.AGENT_SERVO,
+        expected_q_start=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
+        max_start_error_rad=0.02,
+        heartbeat_timeout_s=0.5,
+    )
+
+    assert lease.owner == "agent"
+    assert runtime.status()["mode"] == MotionMode.AGENT_SERVO.value
+    assert runtime.status()["owner"] == "agent"
+
+    with pytest.raises(ArmRuntimeError, match="owned by agent"):
+        runtime.acquire_owner(
+            owner="sysid",
+            mode=MotionMode.TRAJECTORY_REPLAY,
+            expected_q_start=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
+            max_start_error_rad=0.02,
+            heartbeat_timeout_s=0.5,
+        )
+
+    lease.release()
+    backend._last_q = (0.5, 0.0, 0.0, 0.0, 0.0, 0.0)
+
+    with pytest.raises(ArmRuntimeError, match="current q_meas is not close"):
+        runtime.acquire_owner(
+            owner="sysid",
+            mode=MotionMode.TRAJECTORY_REPLAY,
+            expected_q_start=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
+            max_start_error_rad=0.02,
+            heartbeat_timeout_s=0.5,
+        )
+
+    assert runtime.status()["mode"] == ArmRuntimeMode.HOLD_SAFE.value
+    assert runtime.status()["owner"] is None
+
+
+def test_arm_runtime_deadman_timeout_lands_damping():
+    clock = ManualClock()
+    backend = FakeMotionBackend()
+    backend._last_q = (0.0, 0.3, 0.3, 0.0, 0.0, 0.0)
+    runtime = ArmRuntime(
+        backend=backend,
+        safe_center=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+    runtime.mark_hold_safe(q_hold=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0))
+    runtime.acquire_owner(
+        owner="xbox",
+        mode=MotionMode.AGENT_SERVO,
+        expected_q_start=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
+        max_start_error_rad=0.02,
+        heartbeat_timeout_s=0.5,
+    )
+
+    clock.now_s = 0.49
+    assert runtime.watchdog_tick() is None
+    clock.now_s = 0.51
+    event = runtime.watchdog_tick()
+
+    assert event == {
+        "owner": "xbox",
+        "landing_mode": "damping",
+        "reason": "owner_heartbeat_timeout",
+    }
+    assert runtime.status()["mode"] == MotionMode.DAMPING.value
+    assert runtime.status()["owner"] is None
+    assert backend.damping_count == 1

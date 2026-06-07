@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 import math
+from uuid import uuid4
 from time import monotonic as default_monotonic
 from time import sleep as default_sleep
 from typing import Callable, Iterable, Protocol, Sequence
@@ -17,8 +18,17 @@ class MotionMode(str, Enum):
     TRAJECTORY_REPLAY = "trajectory_replay"
 
 
+class ArmRuntimeMode(str, Enum):
+    PASSIVE_SAFE = "passive_safe"
+    HOLD_SAFE = "hold_safe"
+
+
 class MotionModeError(RuntimeError):
     """Raised when two producers try to own the runtime at the same time."""
+
+
+class ArmRuntimeError(RuntimeError):
+    """Raised when a live arm runtime ownership or state invariant is violated."""
 
 
 @dataclass(frozen=True)
@@ -423,6 +433,203 @@ class MotionRuntime:
         self._mode = MotionMode.DAMPING
 
 
+@dataclass(frozen=True)
+class ArmOwnerLease:
+    owner: str
+    mode: str
+    runtime_session_id: str
+    _runtime: ArmRuntime
+    _released: bool = False
+
+    def release(self) -> None:
+        if self._released:
+            return
+        object.__setattr__(self, "_released", True)
+        self._runtime.release_owner(owner=self.owner)
+
+    def heartbeat(self) -> None:
+        if self._released:
+            raise ArmRuntimeError("owner lease is already released")
+        self._runtime.owner_heartbeat(owner=self.owner)
+
+
+class ArmRuntime:
+    """Long-lived arm state machine around MotionRuntime and one hardware backend."""
+
+    def __init__(
+        self,
+        *,
+        backend: MotionBackend,
+        safe_center: tuple[float, ...],
+        passive_safe_q: tuple[float, ...] | None = None,
+        runtime_session_id: str | None = None,
+        monotonic: Callable[[], float] = default_monotonic,
+        sleep: Callable[[float], None] = default_sleep,
+    ) -> None:
+        self._backend = backend
+        self._safe_center = tuple(float(value) for value in safe_center)
+        self._passive_safe_q = (
+            tuple(float(value) for value in passive_safe_q)
+            if passive_safe_q is not None
+            else None
+        )
+        self._runtime_session_id = runtime_session_id or str(uuid4())
+        self._monotonic = monotonic
+        self._sleep = sleep
+        self._mode: str = ArmRuntimeMode.PASSIVE_SAFE.value
+        self._owner: str | None = None
+        self._owner_mode: MotionMode | None = None
+        self._owner_heartbeat_timeout_s: float | None = None
+        self._last_owner_heartbeat_s: float | None = None
+        self._last_heartbeat_s: float = self._monotonic()
+        self._q_hold: tuple[float, ...] | None = None
+
+    def arm_from_passive(self, *, max_passive_error_rad: float = 0.05) -> None:
+        if self._passive_safe_q is None:
+            self._last_heartbeat_s = self._monotonic()
+            return
+        q_meas = self._read_q_meas()
+        _raise_if_not_close(
+            q_meas,
+            self._passive_safe_q,
+            max_error_rad=float(max_passive_error_rad),
+            message="current q_meas is not close to passive-safe droop pose",
+        )
+        self._last_heartbeat_s = self._monotonic()
+
+    def recover_to_safe(
+        self,
+        *,
+        send_hz: float,
+        max_joint_step_rad: float,
+    ) -> MotionExecutionResult:
+        q_start = self._read_q_meas()
+        trajectory = _linear_recovery_trajectory(
+            q_start=q_start,
+            q_target=self._safe_center,
+            send_hz=float(send_hz),
+            max_joint_step_rad=float(max_joint_step_rad),
+        )
+        motion = MotionRuntime(
+            backend=self._backend,
+            monotonic=self._monotonic,
+            sleep=self._sleep,
+        )
+        result = motion.execute_trajectory(
+            trajectory,
+            producer="runtime_recovery",
+            trajectory_sample_hz=float(send_hz),
+            hold_after=True,
+        )
+        if result.status == "completed":
+            self.mark_hold_safe(q_hold=self._safe_center)
+        else:
+            self._mode = MotionMode.DAMPING.value
+            self._owner = None
+        return result
+
+    def mark_hold_safe(self, *, q_hold: tuple[float, ...]) -> None:
+        self._q_hold = tuple(float(value) for value in q_hold)
+        self._owner = None
+        self._owner_mode = None
+        self._owner_heartbeat_timeout_s = None
+        self._last_owner_heartbeat_s = None
+        self._mode = ArmRuntimeMode.HOLD_SAFE.value
+        self._last_heartbeat_s = self._monotonic()
+
+    def acquire_owner(
+        self,
+        *,
+        owner: str,
+        mode: MotionMode,
+        expected_q_start: tuple[float, ...],
+        max_start_error_rad: float,
+        heartbeat_timeout_s: float,
+    ) -> ArmOwnerLease:
+        if self._owner is not None:
+            raise ArmRuntimeError(f"runtime is owned by {self._owner}")
+        if self._mode != ArmRuntimeMode.HOLD_SAFE.value:
+            raise ArmRuntimeError(f"runtime must be hold_safe before acquire, got {self._mode}")
+        if heartbeat_timeout_s <= 0.0:
+            raise ValueError("heartbeat_timeout_s must be positive")
+        q_meas = self._read_q_meas()
+        _raise_if_not_close(
+            q_meas,
+            tuple(float(value) for value in expected_q_start),
+            max_error_rad=float(max_start_error_rad),
+            message="current q_meas is not close to expected start pose",
+        )
+        self._owner = str(owner)
+        self._owner_mode = mode
+        self._mode = mode.value
+        self._owner_heartbeat_timeout_s = float(heartbeat_timeout_s)
+        self._last_owner_heartbeat_s = self._monotonic()
+        self._last_heartbeat_s = self._last_owner_heartbeat_s
+        return ArmOwnerLease(
+            owner=str(owner),
+            mode=mode.value,
+            runtime_session_id=self._runtime_session_id,
+            _runtime=self,
+        )
+
+    def owner_heartbeat(self, *, owner: str) -> None:
+        if self._owner != owner:
+            raise ArmRuntimeError(f"runtime is not owned by {owner}")
+        now_s = self._monotonic()
+        self._last_owner_heartbeat_s = now_s
+        self._last_heartbeat_s = now_s
+
+    def release_owner(self, *, owner: str) -> None:
+        if self._owner != owner:
+            raise ArmRuntimeError(f"runtime is not owned by {owner}")
+        q_meas = self._read_q_meas()
+        self.mark_hold_safe(q_hold=q_meas)
+        self._backend.hold()
+
+    def watchdog_tick(self) -> dict[str, str] | None:
+        if self._owner is None or self._owner_heartbeat_timeout_s is None:
+            return None
+        last_heartbeat_s = self._last_owner_heartbeat_s
+        if last_heartbeat_s is None:
+            return None
+        if self._monotonic() - last_heartbeat_s < self._owner_heartbeat_timeout_s:
+            return None
+        owner = self._owner
+        self._backend.damping()
+        self._owner = None
+        self._owner_mode = None
+        self._owner_heartbeat_timeout_s = None
+        self._last_owner_heartbeat_s = None
+        self._mode = MotionMode.DAMPING.value
+        self._last_heartbeat_s = self._monotonic()
+        return {
+            "owner": owner,
+            "landing_mode": MotionMode.DAMPING.value,
+            "reason": "owner_heartbeat_timeout",
+        }
+
+    def status(self) -> dict[str, object]:
+        q_meas = self._read_q_meas()
+        now_s = self._monotonic()
+        fault_flags = self._backend.read_joint_state().fault_flags
+        return {
+            "schema": "armctrl.arm_runtime_status.v1",
+            "runtime_session_id": self._runtime_session_id,
+            "mode": self._mode,
+            "owner": self._owner,
+            "q_meas": q_meas,
+            "q_hold": self._q_hold,
+            "safe_center": self._safe_center,
+            "controller_dt_s": getattr(self._backend, "controller_dt_s", None),
+            "heartbeat_monotonic_s": self._last_heartbeat_s,
+            "heartbeat_age_s": max(0.0, now_s - self._last_heartbeat_s),
+            "fault_flags": tuple(fault_flags),
+        }
+
+    def _read_q_meas(self) -> tuple[float, ...]:
+        return tuple(float(value) for value in self._backend.read_joint_state().q_meas)
+
+
 def _actual_send_hz(sent_times: Sequence[float]) -> float | None:
     if len(sent_times) < 2:
         return None
@@ -430,6 +637,60 @@ def _actual_send_hz(sent_times: Sequence[float]) -> float | None:
     if elapsed_s <= 0.0:
         return None
     return (len(sent_times) - 1) / elapsed_s
+
+
+def _raise_if_not_close(
+    q_meas: tuple[float, ...],
+    q_expected: tuple[float, ...],
+    *,
+    max_error_rad: float,
+    message: str,
+) -> None:
+    if len(q_meas) != len(q_expected):
+        raise ArmRuntimeError(
+            f"{message}: length mismatch {len(q_meas)} != {len(q_expected)}"
+        )
+    if max_error_rad < 0.0:
+        raise ValueError("max_error_rad must be non-negative")
+    max_abs_error = max(
+        (abs(measured - expected) for measured, expected in zip(q_meas, q_expected)),
+        default=0.0,
+    )
+    if max_abs_error > max_error_rad:
+        raise ArmRuntimeError(
+            f"{message}: max_abs_error_rad={max_abs_error:.6f} "
+            f"> max_error_rad={max_error_rad:.6f}"
+        )
+
+
+def _linear_recovery_trajectory(
+    *,
+    q_start: tuple[float, ...],
+    q_target: tuple[float, ...],
+    send_hz: float,
+    max_joint_step_rad: float,
+) -> list[JointTrajectoryPoint]:
+    if send_hz <= 0.0:
+        raise ValueError("send_hz must be positive")
+    if max_joint_step_rad <= 0.0:
+        raise ValueError("max_joint_step_rad must be positive")
+    if len(q_start) != len(q_target):
+        raise ValueError("q_start and q_target lengths must match")
+    max_delta = max(
+        (abs(target - start) for start, target in zip(q_start, q_target)),
+        default=0.0,
+    )
+    step_count = max(1, int(math.ceil(max_delta / max_joint_step_rad)))
+    return [
+        JointTrajectoryPoint(
+            time_s=step_index / float(send_hz),
+            q=tuple(
+                start + (target - start) * (step_index / step_count)
+                for start, target in zip(q_start, q_target)
+            ),
+        )
+        for step_index in range(step_count + 1)
+    ]
 
 
 def _motion_execution_result(
