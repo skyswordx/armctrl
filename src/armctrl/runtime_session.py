@@ -12,6 +12,7 @@ from pathlib import Path
 import importlib.util
 import json
 import time
+from uuid import uuid4
 from typing import Sequence
 
 from armctrl.motion_runtime import (
@@ -479,6 +480,10 @@ def watchdog_tick_from_artifact(
     owner_lease = payload.get("owner_lease")
     if payload.get("owner") is None or not isinstance(owner_lease, dict):
         return payload
+    agent_watchdog = _agent_intent_watchdog_event(payload, owner_lease)
+    if agent_watchdog is not None:
+        _write_json_atomic(session_artifact_path, agent_watchdog)
+        return agent_watchdog
     heartbeat_wall_time_s = _float_or_none(owner_lease.get("heartbeat_wall_time_s"))
     heartbeat_timeout_s = _float_or_none(owner_lease.get("heartbeat_timeout_s"))
     now_s = time.time()
@@ -508,7 +513,80 @@ def watchdog_tick_from_artifact(
         max_heartbeat_age_s=float(max_heartbeat_age_s),
     )
     updated["readiness"] = runtime_readiness(updated)
+    _write_json_atomic(session_artifact_path, updated)
     return updated
+
+
+def _agent_intent_watchdog_event(
+    payload: dict[str, object],
+    owner_lease: dict[str, object],
+) -> dict[str, object] | None:
+    if (
+        payload.get("owner") != "agent"
+        or owner_lease.get("mode") != MotionMode.AGENT_SERVO.value
+    ):
+        return None
+    last_intent_wall_time_s = _float_or_none(owner_lease.get("last_intent_wall_time_s"))
+    missed_intent_timeout_s = _float_or_none(
+        owner_lease.get("missed_intent_timeout_s")
+    )
+    fault_timeout_s = _float_or_none(owner_lease.get("fault_timeout_s"))
+    if (
+        last_intent_wall_time_s is None
+        or missed_intent_timeout_s is None
+        or fault_timeout_s is None
+    ):
+        return None
+    now_s = time.time()
+    intent_age_s = max(0.0, now_s - last_intent_wall_time_s)
+    owner = payload.get("owner")
+    if intent_age_s >= fault_timeout_s:
+        updated = dict(payload)
+        updated["status"] = "faulted"
+        updated["mode"] = MotionMode.DAMPING.value
+        updated["owner"] = None
+        updated["owner_lease"] = None
+        updated["owner_deadman"] = None
+        updated["watchdog"] = {
+            "owner": owner,
+            "landing_mode": MotionMode.DAMPING.value,
+            "reason": "agent_intent_fault_timeout",
+            "intent_age_s": intent_age_s,
+            "fault_timeout_s": fault_timeout_s,
+        }
+        updated["heartbeat"] = _heartbeat_status(
+            {"wall_time_s": now_s},
+            max_heartbeat_age_s=max(1.0, fault_timeout_s),
+        )
+        updated["readiness"] = runtime_readiness(updated)
+        return updated
+    if (
+        owner_lease.get("missed_intent_held") is not True
+        and intent_age_s >= missed_intent_timeout_s
+    ):
+        updated = dict(payload)
+        updated["status"] = "ok"
+        updated["mode"] = ArmRuntimeMode.HOLD_SAFE.value
+        updated["owner"] = None
+        updated["owner_lease"] = None
+        updated["owner_deadman"] = None
+        updated["last_hold_wall_time_s"] = now_s
+        updated["hold_fresh"] = True
+        updated["hold_age_s"] = 0.0
+        updated["watchdog"] = {
+            "owner": owner,
+            "landing_mode": MotionMode.HOLD.value,
+            "reason": "missed_agent_intent_timeout",
+            "intent_age_s": intent_age_s,
+            "missed_intent_timeout_s": missed_intent_timeout_s,
+        }
+        updated["heartbeat"] = _heartbeat_status(
+            {"wall_time_s": now_s},
+            max_heartbeat_age_s=max(1.0, missed_intent_timeout_s),
+        )
+        updated["readiness"] = runtime_readiness(updated)
+        return updated
+    return None
 
 
 def refresh_runtime_status_payload(
@@ -737,3 +815,12 @@ def _read_json_object(path: Path) -> dict[str, object]:
     if not isinstance(payload, dict):
         raise ValueError(f"{path} does not contain a JSON object")
     return payload
+
+
+def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
+    tmp_path = path.with_name(f"{path.name}.{uuid4().hex}.tmp")
+    tmp_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    tmp_path.replace(path)

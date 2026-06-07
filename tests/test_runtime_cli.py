@@ -19,6 +19,7 @@ from armctrl.runtime_session import record_runtime_hold_tick
 from armctrl.runtime_session import refresh_runtime_status_payload
 from armctrl.runtime_session import start_fake_runtime_session, stop_runtime_session_from_artifact
 from armctrl.runtime_session import start_arx5_runtime_session
+from armctrl.runtime_session import watchdog_tick_from_artifact
 from armctrl.runtime_ipc import (
     execute_pending_runtime_commands,
     submit_intent_command,
@@ -576,6 +577,85 @@ def test_runtime_serve_loop_lands_stale_owner_deadman_in_damping(
     assert result["watchdog"]["owner"] == "agent"
     assert result["watchdog"]["reason"] == "owner_heartbeat_timeout"
     assert faulted == result
+
+
+def test_runtime_watchdog_holds_missed_agent_intent_before_fault_timeout(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    now_s = 100.0
+    payload = start_fake_runtime_session(
+        q_current=(0.0, 0.3, 0.3),
+        safe_center=(0.0, 0.3, 0.3),
+        send_hz=50.0,
+        hold_hz=50.0,
+        max_joint_step_rad=0.01,
+        max_heartbeat_age_s=1.0,
+    )
+    payload["status"] = "ok"
+    payload["mode"] = "agent_servo"
+    payload["owner"] = "agent"
+    payload["q_hold"] = [0.01, 0.3, 0.3]
+    payload["q_meas"] = [0.01, 0.3, 0.3]
+    payload["owner_lease"] = {
+        "schema": "armctrl.arm_runtime_owner_lease.v1",
+        "runtime_session_id": payload["runtime_session_id"],
+        "owner": "agent",
+        "mode": "agent_servo",
+        "heartbeat_timeout_s": 1.0,
+        "heartbeat_wall_time_s": now_s - 0.31,
+        "acquired_wall_time_s": now_s - 0.5,
+        "last_intent_wall_time_s": now_s - 0.31,
+        "missed_intent_timeout_s": 0.3,
+        "fault_timeout_s": 1.0,
+        "missed_intent_held": False,
+        "landing_policy": "missed_intent_hold_then_damping",
+    }
+    payload["heartbeat"] = {"wall_time_s": now_s, "age_s": 0.0, "fresh": True}
+    session_artifact.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("armctrl.runtime_session.time.time", lambda: now_s)
+
+    held = watchdog_tick_from_artifact(
+        session_artifact_path=session_artifact,
+        max_heartbeat_age_s=1.0,
+    )
+
+    assert held["status"] == "ok"
+    assert held["mode"] == "hold_safe"
+    assert held["owner"] is None
+    assert held["owner_lease"] is None
+    assert held["q_hold"] == [0.01, 0.3, 0.3]
+    assert held["watchdog"] == {
+        "owner": "agent",
+        "landing_mode": "hold",
+        "reason": "missed_agent_intent_timeout",
+        "intent_age_s": pytest.approx(0.31),
+        "missed_intent_timeout_s": 0.3,
+    }
+    assert json.loads(session_artifact.read_text(encoding="utf-8")) == held
+
+    held["mode"] = "agent_servo"
+    held["owner"] = "agent"
+    held["owner_lease"] = dict(payload["owner_lease"])
+    held["owner_lease"]["heartbeat_wall_time_s"] = now_s - 1.01
+    held["owner_lease"]["last_intent_wall_time_s"] = now_s - 1.01
+    held["owner_lease"]["missed_intent_held"] = True
+    session_artifact.write_text(json.dumps(held), encoding="utf-8")
+
+    damping = watchdog_tick_from_artifact(
+        session_artifact_path=session_artifact,
+        max_heartbeat_age_s=1.0,
+    )
+
+    assert damping["status"] == "faulted"
+    assert damping["mode"] == "damping"
+    assert damping["owner"] is None
+    assert damping["watchdog"]["reason"] == "agent_intent_fault_timeout"
+    assert damping["watchdog"]["landing_mode"] == "damping"
 
 
 def test_cli_runtime_status_blocks_stale_heartbeat(tmp_path: Path) -> None:
@@ -1714,6 +1794,7 @@ def test_runtime_queue_passes_owner_watchdog_into_motion_loop(
 
 def test_runtime_queue_agent_intent_records_frequency_and_missed_intent_policy(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
     session_artifact = tmp_path / "runtime_session.json"
     _start_fake_hold_session(session_artifact)
@@ -1734,6 +1815,22 @@ def test_runtime_queue_agent_intent_records_frequency_and_missed_intent_policy(
         sleep=clock.sleep,
     )
     runtime.mark_hold_safe(q_hold=tuple(float(value) for value in session["q_hold"]))
+    observed_owner_leases: list[dict[str, object]] = []
+    from armctrl import runtime_ipc
+
+    original_refresh = runtime_ipc._refresh_active_owner_session
+
+    def capture_active_owner_refresh(*args, **kwargs):
+        observed_owner_leases.append(
+            json.loads(session_artifact.read_text(encoding="utf-8"))["owner_lease"]
+        )
+        return original_refresh(*args, **kwargs)
+
+    monkeypatch.setattr(
+        runtime_ipc,
+        "_refresh_active_owner_session",
+        capture_active_owner_refresh,
+    )
     submitted = submit_intent_command(
         session_artifact_path=session_artifact,
         owner="agent",
@@ -1770,6 +1867,12 @@ def test_runtime_queue_agent_intent_records_frequency_and_missed_intent_policy(
     assert result["motion"]["samples"][0]["q_cmd"] == [0.0, 0.3, 0.3]
     assert result["motion"]["samples"][-1]["q_cmd"] == [0.01, 0.3, 0.3]
     assert result_artifact["motion"]["missed_intent_policy"] == "hold_then_damping"
+    assert observed_owner_leases
+    assert observed_owner_leases[0]["landing_policy"] == "missed_intent_hold_then_damping"
+    assert observed_owner_leases[0]["last_intent_wall_time_s"] is not None
+    assert observed_owner_leases[0]["missed_intent_timeout_s"] == pytest.approx(0.3)
+    assert observed_owner_leases[0]["fault_timeout_s"] == pytest.approx(1.0)
+    assert observed_owner_leases[0]["missed_intent_held"] is False
 
 
 def test_cli_runtime_serve_executes_queued_trajectory_and_returns_to_hold(

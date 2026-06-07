@@ -298,6 +298,8 @@ def execute_runtime_command(
             "acquired_wall_time_s": owner_wall_time_s,
             "landing_policy": "watchdog_to_damping_release_to_hold_safe",
         }
+        if command.get("kind") == "intent":
+            session["owner_lease"].update(_intent_owner_watchdog_contract(command))
         session["owner_deadman"] = {
             "owner": lease.owner,
             "mode": lease.mode,
@@ -569,6 +571,16 @@ def _refresh_active_owner_session(
         "acquired_wall_time_s": acquired_wall_time_s,
         "landing_policy": "watchdog_to_damping_release_to_hold_safe",
     }
+    if mode == MotionMode.AGENT_SERVO.value and isinstance(owner_lease, dict):
+        for key in (
+            "last_intent_wall_time_s",
+            "missed_intent_timeout_s",
+            "fault_timeout_s",
+            "missed_intent_held",
+            "landing_policy",
+        ):
+            if key in owner_lease:
+                updated["owner_lease"][key] = owner_lease[key]
     updated["owner_deadman"] = {
         "owner": owner,
         "mode": mode,
@@ -864,6 +876,17 @@ def _intent_motion_contract(command: dict[str, object]) -> dict[str, object]:
         "missed_intent_policy": "hold_then_damping",
         "missed_intent_timeout_s": 0.3,
         "fault_timeout_s": _optional_float(command.get("heartbeat_timeout_s")),
+    }
+
+
+def _intent_owner_watchdog_contract(command: dict[str, object]) -> dict[str, object]:
+    now_s = time.time()
+    return {
+        "landing_policy": "missed_intent_hold_then_damping",
+        "last_intent_wall_time_s": now_s,
+        "missed_intent_timeout_s": 0.3,
+        "fault_timeout_s": _optional_float(command.get("heartbeat_timeout_s")),
+        "missed_intent_held": False,
     }
 
 
