@@ -222,6 +222,7 @@ def stop_runtime_session_from_artifact(
     stopped["mode"] = MotionMode.DAMPING.value
     stopped["owner"] = None
     stopped["owner_lease"] = None
+    stopped["owner_deadman"] = None
     stopped["landing_mode"] = MotionMode.DAMPING.value
     stopped["heartbeat"] = _heartbeat_status(
         {"wall_time_s": now_s},
@@ -367,6 +368,7 @@ def acquire_owner_from_artifact(
         "acquired_wall_time_s": now_s,
         "landing_policy": "watchdog_to_damping_release_to_hold_safe",
     }
+    updated["owner_deadman"] = _owner_deadman_status(updated)
     updated["heartbeat"] = _heartbeat_status(
         {"wall_time_s": now_s},
         max_heartbeat_age_s=float(max_heartbeat_age_s),
@@ -394,6 +396,7 @@ def release_owner_from_artifact(
     updated["mode"] = ArmRuntimeMode.HOLD_SAFE.value
     updated["owner"] = None
     updated["owner_lease"] = None
+    updated["owner_deadman"] = None
     updated["q_hold"] = q_meas
     updated["heartbeat"] = _heartbeat_status(
         {"wall_time_s": now_s},
@@ -422,6 +425,7 @@ def owner_heartbeat_from_artifact(
     updated_lease = dict(owner_lease)
     updated_lease["heartbeat_wall_time_s"] = now_s
     updated["owner_lease"] = updated_lease
+    updated["owner_deadman"] = _owner_deadman_status(updated)
     updated["heartbeat"] = _heartbeat_status(
         {"wall_time_s": now_s},
         max_heartbeat_age_s=float(max_heartbeat_age_s),
@@ -460,6 +464,7 @@ def watchdog_tick_from_artifact(
     updated["mode"] = MotionMode.DAMPING.value
     updated["owner"] = None
     updated["owner_lease"] = None
+    updated["owner_deadman"] = None
     updated["watchdog"] = {
         "owner": owner,
         "landing_mode": MotionMode.DAMPING.value,
@@ -488,6 +493,7 @@ def refresh_runtime_status_payload(
         max_heartbeat_age_s=float(max_heartbeat_age_s),
     )
     refreshed["heartbeat"] = heartbeat
+    refreshed["owner_deadman"] = _owner_deadman_status(refreshed)
     readiness = runtime_readiness(refreshed)
     refreshed["readiness"] = readiness
     if readiness["agent_sysid_smoke_allowed"] is not True:
@@ -587,6 +593,33 @@ def runtime_status_payload(
     if payload["readiness"]["agent_sysid_smoke_allowed"] is not True:
         payload["status"] = "blocked"
     return payload
+
+
+def _owner_deadman_status(payload: dict[str, object]) -> dict[str, object] | None:
+    owner_lease = payload.get("owner_lease")
+    owner = payload.get("owner")
+    if owner is None or not isinstance(owner_lease, dict):
+        return None
+    heartbeat_wall_time_s = _float_or_none(owner_lease.get("heartbeat_wall_time_s"))
+    heartbeat_timeout_s = _float_or_none(owner_lease.get("heartbeat_timeout_s"))
+    now_s = time.time()
+    heartbeat_age_s = (
+        None
+        if heartbeat_wall_time_s is None
+        else max(0.0, now_s - heartbeat_wall_time_s)
+    )
+    return {
+        "owner": owner,
+        "mode": owner_lease.get("mode"),
+        "heartbeat_wall_time_s": heartbeat_wall_time_s,
+        "heartbeat_age_s": heartbeat_age_s,
+        "heartbeat_timeout_s": heartbeat_timeout_s,
+        "fresh": (
+            heartbeat_age_s is not None
+            and heartbeat_timeout_s is not None
+            and heartbeat_age_s < heartbeat_timeout_s
+        ),
+    }
 
 
 def _heartbeat_status(

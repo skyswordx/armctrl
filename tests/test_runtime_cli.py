@@ -495,6 +495,43 @@ def test_cli_runtime_status_blocks_stale_heartbeat(tmp_path: Path) -> None:
     assert payload["readiness"]["failed_checks"] == ["heartbeat_fresh"]
 
 
+def test_cli_runtime_status_reports_active_owner_deadman(tmp_path: Path) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    _acquire_owner(
+        session_artifact,
+        owner="agent",
+        mode="agent_servo",
+        heartbeat_timeout_s=5.0,
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "runtime",
+            "status",
+            "--session-artifact",
+            str(session_artifact),
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(completed.stdout)
+
+    assert completed.returncode == 3
+    assert payload["status"] == "blocked"
+    assert payload["mode"] == "agent_servo"
+    assert payload["owner"] == "agent"
+    assert payload["owner_deadman"]["owner"] == "agent"
+    assert payload["owner_deadman"]["mode"] == "agent_servo"
+    assert payload["owner_deadman"]["heartbeat_timeout_s"] == 5.0
+    assert payload["owner_deadman"]["heartbeat_age_s"] >= 0.0
+    assert payload["owner_deadman"]["fresh"] is True
+
+
 def test_cli_runtime_recover_fake_returns_session_to_hold_safe(
     tmp_path: Path,
 ) -> None:
