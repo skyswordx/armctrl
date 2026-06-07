@@ -280,6 +280,27 @@ Expected result:
 - A runtime command result artifact should appear under the session command queue.
 - The arm should execute the reviewed Recipe trajectory, then return to active hold.
 
+Inspect the live runtime result:
+
+```bash
+uv run armctrl runtime result-check \
+  --run-dir "$RUN_DIR" \
+  --expect-owner recipe \
+  --expect-mode trajectory_replay \
+  --max-jitter-p99-ms 5 \
+  --json
+```
+
+Expected runtime result checks:
+
+- `status == "pass"`
+- `owner == "recipe"`
+- `mode == "trajectory_replay"`
+- `checks.acceptance_passed == true`
+- `checks.timing_gate_passed == true`
+- `checks.status_publish_gate_passed == true`
+- `metrics.actual_send_hz`, `metrics.send_jitter_ms_p99`, and `metrics.dt_max_s` are present
+
 Do not pass `--runtime-session-artifact` to `recipe runtime-smoke-fake`; that command is pure fake/local validation only.
 
 ## 6. Stop Runtime
