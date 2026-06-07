@@ -104,6 +104,12 @@ def _install_fake_submit_trajectory_command(monkeypatch, cli, tmp_path: Path) ->
                 "q_hold": list(kwargs["expected_q_start"]),
             },
         }
+        if kwargs.get("max_tracking_error_rad") is not None:
+            command_payload["max_tracking_error_rad"] = kwargs[
+                "max_tracking_error_rad"
+            ]
+        if kwargs.get("max_tau_abs") is not None:
+            command_payload["max_tau_abs"] = kwargs["max_tau_abs"]
         command_path.write_text(
             json.dumps(command_payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -915,6 +921,7 @@ def test_cli_sysid_run_sdk_with_runtime_blocks_until_live_queue_exists(
             raise AssertionError("sdk sysid must not open SDK outside runtime")
 
     monkeypatch.setattr(cli, "Arx5InterfaceCollectionBackend", ForbiddenBackendFactory)
+    _install_fake_submit_trajectory_command(monkeypatch, cli, tmp_path)
 
     exit_code = cli.main(
         [
