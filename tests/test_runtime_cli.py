@@ -1115,6 +1115,12 @@ def test_cli_runtime_serve_executes_queued_trajectory_and_returns_to_hold(
         assert result["mode"] == "trajectory_replay"
         assert result["motion"]["status"] == "completed"
         assert result["motion"]["sample_count"] == 2
+        assert result["motion"]["samples"][0]["q_cmd"] == [0.0, 0.3, 0.3]
+        assert result["motion"]["samples"][0]["q_meas"] == [0.0, 0.3, 0.3]
+        assert result["motion"]["samples"][0]["fault_flags"] == []
+        assert result["motion"]["samples"][0]["producer"] == "sysid"
+        assert result["motion"]["samples"][0]["mode"] == "trajectory_replay"
+        assert result["motion"]["samples"][1]["q_cmd"] == [0.01, 0.3, 0.3]
         assert result["landing_mode"] == "hold"
         assert session["mode"] == "hold_safe"
         assert session["owner"] is None

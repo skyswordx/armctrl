@@ -14,6 +14,7 @@ from armctrl.motion_runtime import (
     JointIntentFrame,
     JointTrajectoryPoint,
     MotionBackend,
+    MotionAuditSample,
     MotionExecutionResult,
     MotionMode,
     MotionRuntime,
@@ -443,6 +444,7 @@ def _command_result_payload(
             "send_jitter_ms_p99": motion.send_jitter_ms_p99,
             "controller_dt_s": motion.controller_dt_s,
             "sample_count": len(motion.samples),
+            "samples": [_motion_sample_manifest(sample) for sample in motion.samples],
             "landing_mode": motion.landing_mode,
             "error": motion.error,
         },
@@ -450,6 +452,19 @@ def _command_result_payload(
     if watchdog is not None:
         payload["watchdog"] = watchdog
     return payload
+
+
+def _motion_sample_manifest(sample: MotionAuditSample) -> dict[str, object]:
+    return {
+        "sent_monotonic_s": sample.sent_monotonic_s,
+        "q_cmd": list(sample.q_cmd),
+        "q_meas": list(sample.q_meas),
+        "dq_meas": list(sample.dq_meas),
+        "tau_meas": list(sample.tau_meas),
+        "fault_flags": list(sample.fault_flags),
+        "producer": sample.producer,
+        "mode": sample.mode,
+    }
 
 
 def _owner_timeout_watchdog(
