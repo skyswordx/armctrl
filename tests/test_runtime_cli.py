@@ -10,7 +10,7 @@ from armctrl.motion_runtime import (
     JointStateSnapshot,
     MotionMode,
 )
-from armctrl.cli import _serve_runtime_session_until_stopped
+from armctrl.cli import _runtime_stop_request_path, _serve_runtime_session_until_stopped
 from armctrl.runtime_session import heartbeat_runtime_session_payload
 from armctrl.runtime_session import ARX5_RUNTIME_START_CONFIRMATION
 from armctrl.runtime_session import start_fake_runtime_session, stop_runtime_session_from_artifact
@@ -435,6 +435,88 @@ def test_runtime_serve_loop_does_not_overwrite_concurrent_stop(
     assert stopped["status"] == "stopped"
     assert stopped["mode"] == "damping"
     assert stop_writes == 1
+
+
+def test_runtime_serve_loop_honors_stop_request_marker(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    payload = start_fake_runtime_session(
+        q_current=(0.0, 0.3, 0.3),
+        safe_center=(0.0, 0.3, 0.3),
+        send_hz=50.0,
+        hold_hz=50.0,
+        max_joint_step_rad=0.01,
+        max_heartbeat_age_s=1.0,
+    )
+    session_artifact.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    stop_request = _runtime_stop_request_path(session_artifact)
+    stop_request.write_text("stop\n", encoding="utf-8")
+    monkeypatch.setattr("armctrl.cli.time.sleep", lambda _seconds: None)
+
+    result = _serve_runtime_session_until_stopped(
+        session_artifact_path=session_artifact,
+        heartbeat_period_s=0.01,
+        max_heartbeat_age_s=1.0,
+    )
+    stopped = json.loads(session_artifact.read_text(encoding="utf-8"))
+
+    assert result["status"] == "stopped"
+    assert result["mode"] == "damping"
+    assert stopped == result
+    assert not stop_request.exists()
+
+
+def test_runtime_serve_loop_lands_stale_owner_deadman_in_damping(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    payload = start_fake_runtime_session(
+        q_current=(0.0, 0.3, 0.3),
+        safe_center=(0.0, 0.3, 0.3),
+        send_hz=50.0,
+        hold_hz=50.0,
+        max_joint_step_rad=0.01,
+        max_heartbeat_age_s=1.0,
+    )
+    payload["mode"] = "agent_servo"
+    payload["owner"] = "agent"
+    payload["owner_lease"] = {
+        "schema": "armctrl.arm_runtime_owner_lease.v1",
+        "runtime_session_id": payload["runtime_session_id"],
+        "owner": "agent",
+        "mode": "agent_servo",
+        "heartbeat_timeout_s": 0.1,
+        "heartbeat_wall_time_s": time.time() - 1.0,
+        "acquired_wall_time_s": time.time() - 1.0,
+        "landing_policy": "watchdog_to_damping_release_to_hold_safe",
+    }
+    session_artifact.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("armctrl.cli.time.sleep", lambda _seconds: None)
+
+    result = _serve_runtime_session_until_stopped(
+        session_artifact_path=session_artifact,
+        heartbeat_period_s=0.01,
+        max_heartbeat_age_s=1.0,
+    )
+    faulted = json.loads(session_artifact.read_text(encoding="utf-8"))
+
+    assert result["status"] == "faulted"
+    assert result["mode"] == "damping"
+    assert result["owner"] is None
+    assert result["owner_lease"] is None
+    assert result["owner_deadman"] is None
+    assert result["watchdog"]["owner"] == "agent"
+    assert result["watchdog"]["reason"] == "owner_heartbeat_timeout"
+    assert faulted == result
 
 
 def test_cli_runtime_status_blocks_stale_heartbeat(tmp_path: Path) -> None:

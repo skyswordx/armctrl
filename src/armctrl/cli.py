@@ -1423,6 +1423,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0 if payload.get("status") == "ok" else 3
 
     if args.command == "runtime" and args.runtime_command == "stop":
+        _write_runtime_stop_request(Path(args.session_artifact))
         payload = stop_runtime_session_from_artifact(
             session_artifact_path=Path(args.session_artifact),
             max_heartbeat_age_s=args.max_heartbeat_age_s,
@@ -3845,7 +3846,25 @@ def _serve_runtime_session_until_stopped(
         raise ValueError("heartbeat_period_s must be positive")
     while True:
         payload = _read_json_retry(session_artifact_path)
+        if _runtime_stop_requested(session_artifact_path):
+            stopped = stop_runtime_session_from_artifact(
+                session_artifact_path=session_artifact_path,
+                max_heartbeat_age_s=max_heartbeat_age_s,
+            )
+            _write_json_atomic(session_artifact_path, stopped)
+            _clear_runtime_stop_request(session_artifact_path)
+            return stopped
         if payload.get("status") == "stopped" or payload.get("mode") == "damping":
+            return payload
+        payload = watchdog_tick_from_artifact(
+            session_artifact_path=session_artifact_path,
+            max_heartbeat_age_s=max_heartbeat_age_s,
+        )
+        latest = _read_json_retry(session_artifact_path)
+        if latest.get("status") == "stopped" or latest.get("mode") == "damping":
+            return latest
+        if payload.get("status") == "faulted" or payload.get("mode") == "damping":
+            _write_json_atomic(session_artifact_path, payload)
             return payload
         if backend is not None:
             execute_pending_runtime_commands(
@@ -3871,6 +3890,26 @@ def _serve_runtime_session_until_stopped(
             return latest
         _write_json_atomic(session_artifact_path, payload)
         time.sleep(float(heartbeat_period_s))
+
+
+def _runtime_stop_request_path(session_artifact_path: Path) -> Path:
+    return session_artifact_path.with_name(f"{session_artifact_path.name}.stop")
+
+
+def _write_runtime_stop_request(session_artifact_path: Path) -> None:
+    stop_request_path = _runtime_stop_request_path(session_artifact_path)
+    stop_request_path.write_text("stop\n", encoding="utf-8")
+
+
+def _runtime_stop_requested(session_artifact_path: Path) -> bool:
+    return _runtime_stop_request_path(session_artifact_path).exists()
+
+
+def _clear_runtime_stop_request(session_artifact_path: Path) -> None:
+    try:
+        _runtime_stop_request_path(session_artifact_path).unlink()
+    except FileNotFoundError:
+        pass
 
 
 def _live_runtime_from_session_payload(
