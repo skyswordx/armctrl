@@ -74,6 +74,17 @@ class FakeArx5RuntimeBackend(FakeMotionBackend):
         )
 
 
+class ManualClock:
+    def __init__(self) -> None:
+        self.now_s = 0.0
+
+    def monotonic(self) -> float:
+        return self.now_s
+
+    def sleep(self, seconds: float) -> None:
+        self.now_s += max(0.0, seconds)
+
+
 def test_start_arx5_runtime_session_recovers_and_exports_live_hold_status() -> None:
     backend = FakeArx5RuntimeBackend(q_start=(0.8, 0.0, 0.0))
 
@@ -805,6 +816,7 @@ def test_runtime_queue_executes_with_live_arm_runtime(
     session_artifact = tmp_path / "runtime_session.json"
     _start_fake_hold_session(session_artifact)
     session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    clock = ManualClock()
     backend = FakeMotionBackend()
     backend.send_joint_command(
         tuple(float(value) for value in session["q_meas"]),
@@ -816,6 +828,8 @@ def test_runtime_queue_executes_with_live_arm_runtime(
         backend=backend,
         safe_center=tuple(float(value) for value in session["safe_center"]),
         runtime_session_id=str(session["runtime_session_id"]),
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
     )
     runtime.mark_hold_safe(q_hold=tuple(float(value) for value in session["q_hold"]))
     submitted = submit_trajectory_command(
@@ -846,7 +860,12 @@ def test_runtime_queue_executes_with_live_arm_runtime(
     assert updated_session["owner"] is None
     assert updated_session["q_hold"] == [0.02, 0.3, 0.3]
     assert runtime.status()["q_hold"] == (0.02, 0.3, 0.3)
-    assert json.loads(Path(submitted["artifacts"]["result"]).read_text())["status"] == "completed"
+    result_artifact = json.loads(Path(submitted["artifacts"]["result"]).read_text())
+    assert result_artifact["status"] == "completed"
+    assert [
+        sample["sent_monotonic_s"]
+        for sample in result_artifact["motion"]["samples"]
+    ] == [0.0, 0.02]
 
 
 def test_runtime_queue_writes_owner_active_status_before_motion(
@@ -882,9 +901,9 @@ def test_runtime_queue_writes_owner_active_status_before_motion(
     observed: dict[str, object] = {}
     from armctrl.runtime_ipc import _execute_motion_command as original_execute_motion
 
-    def observe_active_status(command: dict[str, object], *, backend, **kwargs):
+    def observe_active_status(command: dict[str, object], *, runtime, **kwargs):
         observed.update(json.loads(session_artifact.read_text(encoding="utf-8")))
-        return original_execute_motion(command, backend=backend, **kwargs)
+        return original_execute_motion(command, runtime=runtime, **kwargs)
 
     monkeypatch.setattr(
         "armctrl.runtime_ipc._execute_motion_command",
@@ -939,8 +958,8 @@ def test_runtime_queue_owner_heartbeat_timeout_lands_damping(
     )
     from armctrl.runtime_ipc import _execute_motion_command as original_execute_motion
 
-    def age_owner_lease(command: dict[str, object], *, backend, **kwargs):
-        motion = original_execute_motion(command, backend=backend, **kwargs)
+    def age_owner_lease(command: dict[str, object], *, runtime, **kwargs):
+        motion = original_execute_motion(command, runtime=runtime, **kwargs)
         active = json.loads(session_artifact.read_text(encoding="utf-8"))
         active["owner_lease"]["heartbeat_wall_time_s"] = time.time() - 1.0
         session_artifact.write_text(json.dumps(active), encoding="utf-8")

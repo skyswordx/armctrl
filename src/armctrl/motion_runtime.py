@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 import math
 from uuid import uuid4
@@ -670,6 +670,52 @@ class ArmRuntime:
             "reason": "owner_heartbeat_timeout",
         }
 
+    def execute_owner_trajectory(
+        self,
+        trajectory: Iterable[JointTrajectoryPoint],
+        *,
+        owner: str,
+        trajectory_sample_hz: float,
+        watchdog: Callable[[], dict[str, object] | None] | None = None,
+    ) -> MotionExecutionResult:
+        self._raise_if_not_owned(owner=owner, mode=MotionMode.TRAJECTORY_REPLAY)
+        motion = MotionRuntime(
+            backend=self._backend,
+            monotonic=self._monotonic,
+            sleep=self._sleep,
+        )
+        result = motion.execute_trajectory(
+            trajectory,
+            producer=owner,
+            trajectory_sample_hz=trajectory_sample_hz,
+            hold_after=False,
+            watchdog=watchdog,
+        )
+        return self._finish_owner_motion(owner=owner, result=result)
+
+    def execute_owner_intent_frame(
+        self,
+        intent: JointIntentFrame,
+        *,
+        owner: str,
+        send_hz: float,
+        watchdog: Callable[[], dict[str, object] | None] | None = None,
+    ) -> MotionExecutionResult:
+        self._raise_if_not_owned(owner=owner, mode=MotionMode.AGENT_SERVO)
+        motion = MotionRuntime(
+            backend=self._backend,
+            monotonic=self._monotonic,
+            sleep=self._sleep,
+        )
+        result = motion.execute_intent_frame(
+            intent,
+            producer=owner,
+            send_hz=send_hz,
+            hold_after=False,
+            watchdog=watchdog,
+        )
+        return self._finish_owner_motion(owner=owner, result=result)
+
     def status(self) -> dict[str, object]:
         q_meas = self._read_q_meas()
         now_s = self._monotonic()
@@ -687,6 +733,31 @@ class ArmRuntime:
             "heartbeat_age_s": max(0.0, now_s - self._last_heartbeat_s),
             "fault_flags": tuple(fault_flags),
         }
+
+    def _raise_if_not_owned(self, *, owner: str, mode: MotionMode) -> None:
+        if self._owner != owner:
+            raise ArmRuntimeError(f"runtime is not owned by {owner}")
+        if self._owner_mode != mode or self._mode != mode.value:
+            raise ArmRuntimeError(
+                f"runtime owner mode must be {mode.value}, got {self._mode}"
+            )
+
+    def _finish_owner_motion(
+        self,
+        *,
+        owner: str,
+        result: MotionExecutionResult,
+    ) -> MotionExecutionResult:
+        if result.status == "completed":
+            self.release_owner(owner=owner)
+            return replace(result, landing_mode=MotionMode.HOLD.value)
+        self._owner = None
+        self._owner_mode = None
+        self._owner_heartbeat_timeout_s = None
+        self._last_owner_heartbeat_s = None
+        self._mode = MotionMode.DAMPING.value
+        self._last_heartbeat_s = self._monotonic()
+        return result
 
     def _read_q_meas(self) -> tuple[float, ...]:
         return tuple(float(value) for value in self._backend.read_joint_state().q_meas)

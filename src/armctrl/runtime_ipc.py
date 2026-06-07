@@ -276,7 +276,7 @@ def execute_runtime_command(
         _write_json_atomic(session_artifact_path, session)
         motion = _execute_motion_command(
             command,
-            backend=backend,
+            runtime=live_runtime,
             watchdog=lambda: _owner_timeout_watchdog(
                 session_artifact_path=session_artifact_path,
                 owner=owner,
@@ -305,7 +305,6 @@ def execute_runtime_command(
                 watchdog=watchdog,
             )
         if motion.status == "completed":
-            lease.release()
             status = live_runtime.status()
             session = _session_from_runtime_status(
                 session,
@@ -344,10 +343,9 @@ def execute_runtime_command(
 def _execute_motion_command(
     command: dict[str, object],
     *,
-    backend: MotionBackend,
+    runtime: ArmRuntime,
     watchdog=None,
 ) -> MotionExecutionResult:
-    motion = MotionRuntime(backend=backend)
     kind = command.get("kind")
     send_hz = float(command.get("send_hz", 50.0))
     if kind == "trajectory":
@@ -361,15 +359,14 @@ def _execute_motion_command(
             )
             for index, q_point in enumerate(q_points)
         ]
-        return motion.execute_trajectory(
+        return runtime.execute_owner_trajectory(
             points,
-            producer=str(command.get("owner")),
+            owner=str(command.get("owner")),
             trajectory_sample_hz=send_hz,
-            hold_after=True,
             watchdog=watchdog,
         )
     if kind == "intent":
-        return motion.execute_intent_frame(
+        return runtime.execute_owner_intent_frame(
             JointIntentFrame(
                 q_start=tuple(_object_float_list(command.get("expected_q_start"))),
                 q_target=tuple(_object_float_list(command.get("q_target"))),
@@ -380,9 +377,8 @@ def _execute_motion_command(
                     else float(command.get("max_joint_delta_rad"))
                 ),
             ),
-            producer=str(command.get("owner")),
+            owner=str(command.get("owner")),
             send_hz=send_hz,
-            hold_after=True,
             watchdog=watchdog,
         )
     raise ValueError(f"unsupported runtime command kind: {kind}")
