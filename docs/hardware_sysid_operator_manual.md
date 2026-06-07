@@ -6,32 +6,108 @@
 cd ~/Roboclaw/references/projects/armctrl-clean-n100d
 ```
 
-## 0A. Current real-motion startup sequence
+## 0A. Runtime-first real-motion startup sequence
 
-This section is the current operator-grade gate order for real hardware. It is
-intentionally redundant with later detailed notes so shell operators have one
-short sequence to follow without skipping safety gates.
+This section is the current operator-grade path for real hardware. It is
+runtime-first: one long-lived runtime opens SDK/CAN once, recovers from the
+fresh measured passive/droop pose to `SAFE_CENTER`, then continuously holds the
+arm while Agent/SysID/Recipe submit queued owner commands.
 
-Do not run Agent or SysID hardware smoke until every earlier artifact exists and
-the previous command returned success. Fake success never counts as hardware
-success.
+Do not run Agent or SysID hardware smoke unless live runtime status proves
+`mode == "hold_safe"`, `owner == null`, heartbeat is fresh, `q_meas` is close to
+`q_hold`, and `q_hold` is close to `SAFE_CENTER`. Historical recovery artifacts
+do not prove current readiness.
 
 The formal startup path is now:
 
 ```text
-sdk-doctor -> sdk-hold-damping-check -> sdk-arm-session
-  -> sdk-recover-startup-real -> sdk-arm-session(refresh)
-  -> sdk-jog-real or Agent/SysID smoke
+power on passive/droop
+  -> armctrl runtime start --backend arx5_sdk --serve
+  -> runtime status live readiness
+  -> Agent/SysID/Recipe submit queued owner command
+  -> runtime consumes queue and releases back to hold_safe
+  -> runtime stop
 ```
 
-`sdk-tiny-motion-*` is only a first-bringup SDK diagnostic. It is not the correct
-way to recover from an unpowered droop pose to the active startup pose.
+The old `sysid sdk-*` and `sdk-tiny-motion-*` commands are Bringup Diagnostic
+Only. They are useful for low-level SDK/CAN audits, but they are not the mature
+multi-source control path and must not be used to prove live Agent/SysID
+readiness.
 
 ```bash
 RUN_DIR="runs/real-motion-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$RUN_DIR"
 SAFE_CENTER="0 0.30 0.30 0 0 0"  # active startup recovery target
 ```
+
+Start the long-lived runtime and keep this terminal open:
+
+```bash
+uv run armctrl runtime start \
+  --backend arx5_sdk \
+  --model X5 \
+  --interface can0 \
+  --safe-center $SAFE_CENTER \
+  --send-hz 50 \
+  --hold-hz 50 \
+  --max-joint-step-rad 0.01 \
+  --max-heartbeat-age-s 1.0 \
+  --serve \
+  --confirm "I UNDERSTAND THIS WILL START THE REAL ARM RUNTIME" \
+  --output "$RUN_DIR/runtime_session.json" \
+  --json
+```
+
+Expected observation:
+
+- The arm moves slowly from the freshly measured passive/droop pose to `SAFE_CENTER`.
+- After reaching `SAFE_CENTER`, the runtime keeps streaming hold commands and the arm must not drop.
+- The command keeps running while serving. Use a second terminal for status and submit commands.
+
+Check live readiness from the second terminal:
+
+```bash
+uv run armctrl runtime status \
+  --session-artifact "$RUN_DIR/runtime_session.json" \
+  --max-heartbeat-age-s 1.0 \
+  --output "$RUN_DIR/runtime_status.json" \
+  --json
+```
+
+Required live readiness checks:
+
+- `status == "ok"`
+- `mode == "hold_safe"`
+- `owner == null`
+- `readiness.agent_sysid_smoke_allowed == true`
+- `readiness.failed_checks == []`
+- `q_meas` is close to `q_hold`, and `q_hold` is close to `safe_center`.
+
+Agent/SysID/Recipe real paths must use `--runtime-session-artifact
+"$RUN_DIR/runtime_session.json"` and submit/acquire a runtime owner. They must
+not open SDK/CAN directly.
+
+Stop the runtime explicitly when the lab run is over:
+
+```bash
+uv run armctrl runtime stop \
+  --session-artifact "$RUN_DIR/runtime_session.json" \
+  --max-heartbeat-age-s 1.0 \
+  --output "$RUN_DIR/runtime_stop.json" \
+  --json
+```
+
+Expected observation:
+
+- The serving terminal exits.
+- The runtime artifact shows `status == "stopped"` and `mode == "damping"`.
+- The arm may become passive after damping; be ready for gravity.
+
+## 0B. Bringup Diagnostic Only: legacy sysid sdk-* gates
+
+The following commands are for SDK bringup and API auditing only. Use them when
+debugging low-level SDK/CAN behavior, not as the normal Agent/SysID/Recipe
+control path.
 
 Read-only SDK doctor. This must not send motion commands:
 
@@ -208,15 +284,17 @@ Required real tiny-motion artifact checks:
 - `acceptance.status == "pass"`
 - `acceptance.next_gate == "agent_sysid_smoke_readiness"`
 
-Readiness gate for later Agent/SysID smoke. This command is read-only. If it
-cannot prove readiness, it returns `status == "blocked"` and process exit code
-`3`; do not continue to real smoke from a blocked readiness artifact:
+Legacy readiness compatibility check. For the runtime-first path, prefer
+`armctrl runtime status` from section 0A. If you still need the old
+`sdk-agent-sysid-smoke-readiness` wrapper for compatibility, feed it the live
+runtime status artifact. Do not use startup recovery or tiny-motion history to
+prove current hover readiness:
 
 ```bash
 uv run armctrl sysid sdk-agent-sysid-smoke-readiness \
   --doctor-artifact "$RUN_DIR/sdk_doctor.json" \
   --hold-damping-artifact "$RUN_DIR/hold_damping.json" \
-  --startup-recovery-artifact "$RUN_DIR/startup_recovery.json" \
+  --runtime-status-artifact "$RUN_DIR/runtime_status.json" \
   --output "$RUN_DIR/agent_sysid_readiness.json" \
   --json
 ```
@@ -228,13 +306,15 @@ Required readiness checks:
 - `agent_sysid_smoke_allowed == true`
 - `prerequisites.doctor == "pass"`
 - `prerequisites.hold_damping == "pass"`
-- `prerequisites.startup_recovery == "pass"`
-- `startup_recovery.run_status == "completed"`
+- `prerequisites.runtime_status == "pass"`
+- `runtime_status.mode == "hold_safe"`
+- `runtime_status.owner == null`
+- `runtime_status.readiness.agent_sysid_smoke_allowed == true`
 
-Only after this point may the operator prepare Agent real smoke or SysID smoke.
-Agent real smoke must still use its own confirmation string and the saved
-`$RUN_DIR/agent_sysid_readiness.json`; SysID smoke must still use
-`--readiness-artifact "$RUN_DIR/agent_sysid_readiness.json"`.
+Only after live runtime readiness passes may the operator prepare Agent real
+smoke or SysID smoke. Real control sources must still use
+`--runtime-session-artifact "$RUN_DIR/runtime_session.json"` so the serving
+runtime owns SDK/CAN and executes the queued command.
 
 ## 0. 当前能力边界
 

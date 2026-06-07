@@ -263,14 +263,24 @@ def execute_runtime_command(
             status=live_runtime.status(),
             max_heartbeat_age_s=max_heartbeat_age_s,
         )
+        owner_wall_time_s = time.time()
         session["owner_lease"] = {
             "schema": "armctrl.arm_runtime_owner_lease.v1",
             "runtime_session_id": lease.runtime_session_id,
             "owner": lease.owner,
             "mode": lease.mode,
             "heartbeat_timeout_s": float(command.get("heartbeat_timeout_s", 0.5)),
-            "heartbeat_wall_time_s": time.time(),
+            "heartbeat_wall_time_s": owner_wall_time_s,
+            "acquired_wall_time_s": owner_wall_time_s,
             "landing_policy": "watchdog_to_damping_release_to_hold_safe",
+        }
+        session["owner_deadman"] = {
+            "owner": lease.owner,
+            "mode": lease.mode,
+            "heartbeat_wall_time_s": owner_wall_time_s,
+            "heartbeat_age_s": 0.0,
+            "heartbeat_timeout_s": float(command.get("heartbeat_timeout_s", 0.5)),
+            "fresh": True,
         }
         session["readiness"] = runtime_readiness(session)
         _write_json_atomic(session_artifact_path, session)

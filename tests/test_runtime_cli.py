@@ -312,7 +312,7 @@ def test_cli_runtime_start_fake_serve_refreshes_heartbeat_until_stop(
         first_seen = _wait_for_session_artifact(session_artifact)
         first_wall_time_s = first_seen["heartbeat"]["wall_time_s"]
         time.sleep(0.15)
-        refreshed = json.loads(session_artifact.read_text(encoding="utf-8"))
+        refreshed = _wait_for_session_artifact(session_artifact)
 
         assert refreshed["mode"] == "hold_safe"
         assert refreshed["owner"] is None
@@ -326,7 +326,7 @@ def test_cli_runtime_start_fake_serve_refreshes_heartbeat_until_stop(
         stdout, stderr = server.communicate(timeout=8.0)
         assert server.returncode == 0
         served = json.loads(stdout)
-        stopped = json.loads(session_artifact.read_text(encoding="utf-8"))
+        stopped = _wait_for_runtime_stopped(session_artifact)
         assert stderr == ""
         assert served["status"] == "stopped"
         assert served["mode"] == "damping"
@@ -1029,6 +1029,10 @@ def test_runtime_queue_writes_owner_active_status_before_motion(
     assert observed["owner"] == "sysid"
     assert observed["owner_lease"]["owner"] == "sysid"
     assert observed["owner_lease"]["mode"] == "trajectory_replay"
+    assert observed["owner_lease"]["acquired_wall_time_s"] >= 0.0
+    assert observed["owner_deadman"]["owner"] == "sysid"
+    assert observed["owner_deadman"]["mode"] == "trajectory_replay"
+    assert observed["owner_deadman"]["fresh"] is True
     assert observed["readiness"]["agent_sysid_smoke_allowed"] is False
     assert "no_owner" in observed["readiness"]["failed_checks"]
 
@@ -1293,7 +1297,7 @@ def test_cli_runtime_serve_executes_queued_trajectory_and_returns_to_hold(
         result = _wait_for_runtime_command_result(
             Path(submitted["artifacts"]["result"])
         )
-        session = json.loads(session_artifact.read_text(encoding="utf-8"))
+        session = _wait_for_session_artifact(session_artifact)
 
         assert result["status"] == "completed"
         assert result["owner"] == "sysid"
