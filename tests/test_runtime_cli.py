@@ -1130,6 +1130,15 @@ def test_runtime_queue_executes_with_live_arm_runtime(
     assert result["motion"]["dt_min_s"] == pytest.approx(0.02)
     assert result["motion"]["dt_max_s"] == pytest.approx(0.02)
     assert result["motion"]["dt_avg_s"] == pytest.approx(0.02)
+    assert result["motion"]["send_jitter_ms_summary"]["count"] == 1
+    assert result["motion"]["send_jitter_ms_summary"]["max"] == pytest.approx(0.0)
+    assert result["motion"]["send_jitter_ms_summary"]["buckets"] == {
+        "le_0_5": 1,
+        "le_1": 0,
+        "le_2": 0,
+        "le_5": 0,
+        "gt_5": 0,
+    }
     assert updated_session["runtime_session_id"] == session["runtime_session_id"]
     assert updated_session["mode"] == "hold_safe"
     assert updated_session["owner"] is None
@@ -1257,6 +1266,66 @@ def test_runtime_queue_allows_repeated_trajectory_from_live_hold(
     assert second_result["motion"]["samples"][-1]["q_cmd"] == [0.03, 0.3, 0.3]
 
 
+def test_runtime_queue_resamples_trajectory_when_runtime_send_hz_differs(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    clock = ManualClock()
+    backend = FakeMotionBackend()
+    backend.send_joint_command(
+        tuple(float(value) for value in session["q_meas"]),
+        producer="test_bootstrap",
+        mode=MotionMode.HOLD,
+        monotonic_s=0.0,
+    )
+    runtime = ArmRuntime(
+        backend=backend,
+        safe_center=tuple(float(value) for value in session["safe_center"]),
+        runtime_session_id=str(session["runtime_session_id"]),
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+    runtime.mark_hold_safe(q_hold=tuple(float(value) for value in session["q_hold"]))
+    submitted = submit_trajectory_command(
+        session_artifact_path=session_artifact,
+        owner="sysid",
+        expected_q_start=(0.0, 0.3, 0.3),
+        q_points=[
+            (0.0, 0.3, 0.3),
+            (0.10, 0.3, 0.3),
+            (0.20, 0.3, 0.3),
+        ],
+        send_hz=50.0,
+        trajectory_sample_hz=10.0,
+        max_start_error_rad=0.02,
+        heartbeat_timeout_s=0.5,
+        max_heartbeat_age_s=1.0,
+    )
+
+    result = execute_pending_runtime_commands(
+        session_artifact_path=session_artifact,
+        backend=backend,
+        runtime=runtime,
+        max_heartbeat_age_s=1.0,
+    )
+    result_artifact = json.loads(Path(submitted["artifacts"]["result"]).read_text())
+
+    assert result is not None
+    assert result["status"] == "completed"
+    assert result["motion"]["trajectory_sample_hz"] == 10.0
+    assert result["motion"]["runtime_send_hz"] == 50.0
+    assert result["motion"]["resampling_policy"] == "linear_time_resample"
+    assert result["motion"]["interpolation_policy"] == "linear_joint_position"
+    assert result["motion"]["sample_count"] == 11
+    assert result["motion"]["samples"][0]["q_cmd"] == [0.0, 0.3, 0.3]
+    assert result["motion"]["samples"][5]["q_cmd"] == [0.1, 0.3, 0.3]
+    assert result["motion"]["samples"][-1]["q_cmd"] == [0.2, 0.3, 0.3]
+    assert result["motion"]["send_period_s"]["avg"] == pytest.approx(0.02)
+    assert result_artifact["motion"]["runtime_send_hz"] == 50.0
+
+
 def test_runtime_queue_throttles_owner_status_writes(
     tmp_path: Path,
     monkeypatch,
@@ -1292,7 +1361,7 @@ def test_runtime_queue_throttles_owner_status_writes(
         original_write(path, payload)
 
     monkeypatch.setattr(runtime_ipc, "_write_json_atomic", counting_write)
-    q_points = [(index * 0.001, 0.3, 0.3) for index in range(101)]
+    q_points = [(index * 0.0001, 0.3, 0.3) for index in range(801)]
     submit_trajectory_command(
         session_artifact_path=session_artifact,
         owner="sysid",
@@ -1313,8 +1382,8 @@ def test_runtime_queue_throttles_owner_status_writes(
 
     assert result is not None
     assert result["status"] == "completed"
-    assert result["motion"]["sample_count"] == 101
-    assert write_count < 20
+    assert result["motion"]["sample_count"] == 801
+    assert write_count < 50
 
 
 def test_runtime_queue_writes_owner_active_status_before_motion(

@@ -36,6 +36,7 @@ def submit_trajectory_command(
     expected_q_start: Sequence[float],
     q_points: Sequence[Sequence[float]],
     send_hz: float,
+    trajectory_sample_hz: float | None = None,
     max_start_error_rad: float,
     heartbeat_timeout_s: float,
     max_heartbeat_age_s: float,
@@ -50,6 +51,10 @@ def submit_trajectory_command(
             raise ValueError("all q points must match expected_q_start length")
     if send_hz <= 0.0:
         raise ValueError("send_hz must be positive")
+    if trajectory_sample_hz is None:
+        trajectory_sample_hz = float(send_hz)
+    if trajectory_sample_hz <= 0.0:
+        raise ValueError("trajectory_sample_hz must be positive")
 
     session = _read_json_object(session_artifact_path)
     _ensure_can_queue_command(
@@ -73,6 +78,7 @@ def submit_trajectory_command(
         "max_start_error_rad": float(max_start_error_rad),
         "heartbeat_timeout_s": float(heartbeat_timeout_s),
         "send_hz": float(send_hz),
+        "trajectory_sample_hz": float(trajectory_sample_hz),
         "q_points": points,
         "submitted_wall_time_s": time.time(),
         "session_artifact": str(session_artifact_path),
@@ -420,13 +426,13 @@ def _execute_motion_command(
         q_points = command.get("q_points")
         if not isinstance(q_points, list):
             raise ValueError("trajectory command requires q_points")
-        points = [
-            JointTrajectoryPoint(
-                time_s=index / send_hz,
-                q=tuple(_object_float_list(q_point)),
-            )
-            for index, q_point in enumerate(q_points)
-        ]
+        trajectory_sample_hz = float(command.get("trajectory_sample_hz", send_hz))
+        raw_points = [tuple(_object_float_list(q_point)) for q_point in q_points]
+        points = _runtime_trajectory_points(
+            raw_points,
+            trajectory_sample_hz=trajectory_sample_hz,
+            runtime_send_hz=send_hz,
+        )
         return runtime.execute_owner_trajectory(
             points,
             owner=str(command.get("owner")),
@@ -583,6 +589,18 @@ def _command_result_payload(
         completed_wall_time_s=completed_wall_time_s,
     )
     send_period = _send_period_summary(motion.samples)
+    runtime_send_hz = _command_runtime_send_hz(command, motion)
+    expected_period_s = 1.0 / runtime_send_hz if runtime_send_hz else None
+    trajectory_sample_hz = _command_trajectory_sample_hz(command, motion)
+    resampling_policy = _trajectory_resampling_policy(
+        trajectory_sample_hz=trajectory_sample_hz,
+        runtime_send_hz=runtime_send_hz,
+        kind=str(command.get("kind")),
+    )
+    interpolation_policy = _trajectory_interpolation_policy(
+        resampling_policy=resampling_policy,
+        kind=str(command.get("kind")),
+    )
     payload = {
         "status": status,
         "schema": RUNTIME_COMMAND_RESULT_SCHEMA,
@@ -602,17 +620,17 @@ def _command_result_payload(
             "status": motion.status,
             "producer": motion.producer,
             "mode": motion.mode,
-            "trajectory_sample_hz": motion.trajectory_sample_hz,
-            "runtime_send_hz": motion.trajectory_sample_hz,
-            "resampling_policy": "none_sample_hz_matches_send_hz",
-            "interpolation_policy": (
-                "pre_sampled_joint_positions"
-                if command.get("kind") == "trajectory"
-                else "linear_intent_frame"
-            ),
+            "trajectory_sample_hz": trajectory_sample_hz,
+            "runtime_send_hz": runtime_send_hz,
+            "resampling_policy": resampling_policy,
+            "interpolation_policy": interpolation_policy,
             "actual_send_hz": motion.actual_send_hz,
             "send_jitter_ms_p95": motion.send_jitter_ms_p95,
             "send_jitter_ms_p99": motion.send_jitter_ms_p99,
+            "send_jitter_ms_summary": _send_jitter_summary(
+                motion.samples,
+                expected_period_s=expected_period_s,
+            ),
             "send_period_s": send_period,
             "dt_min_s": send_period["min"],
             "dt_max_s": send_period["max"],
@@ -687,6 +705,134 @@ def _send_period_summary(samples: Sequence[MotionAuditSample]) -> dict[str, obje
         "avg": sum(periods) / len(periods),
         "count": len(periods),
     }
+
+
+def _send_jitter_summary(
+    samples: Sequence[MotionAuditSample],
+    *,
+    expected_period_s: float | None,
+) -> dict[str, object]:
+    if expected_period_s is None or expected_period_s <= 0.0 or len(samples) < 2:
+        return {"min": None, "max": None, "avg": None, "count": 0}
+    jitters_ms = [
+        abs((right.sent_monotonic_s - left.sent_monotonic_s) - expected_period_s)
+        * 1000.0
+        for left, right in zip(samples, samples[1:])
+    ]
+    return {
+        "min": min(jitters_ms),
+        "max": max(jitters_ms),
+        "avg": sum(jitters_ms) / len(jitters_ms),
+        "count": len(jitters_ms),
+        "buckets": _jitter_buckets(jitters_ms),
+    }
+
+
+def _jitter_buckets(jitters_ms: Sequence[float]) -> dict[str, int]:
+    buckets = {"le_0_5": 0, "le_1": 0, "le_2": 0, "le_5": 0, "gt_5": 0}
+    for jitter_ms in jitters_ms:
+        if jitter_ms <= 0.5:
+            buckets["le_0_5"] += 1
+        elif jitter_ms <= 1.0:
+            buckets["le_1"] += 1
+        elif jitter_ms <= 2.0:
+            buckets["le_2"] += 1
+        elif jitter_ms <= 5.0:
+            buckets["le_5"] += 1
+        else:
+            buckets["gt_5"] += 1
+    return buckets
+
+
+def _runtime_trajectory_points(
+    q_points: Sequence[tuple[float, ...]],
+    *,
+    trajectory_sample_hz: float,
+    runtime_send_hz: float,
+) -> list[JointTrajectoryPoint]:
+    if not q_points:
+        raise ValueError("trajectory command requires q_points")
+    if trajectory_sample_hz <= 0.0:
+        raise ValueError("trajectory_sample_hz must be positive")
+    if runtime_send_hz <= 0.0:
+        raise ValueError("send_hz must be positive")
+    if len(q_points) == 1:
+        return [JointTrajectoryPoint(time_s=0.0, q=tuple(q_points[0]))]
+    duration_s = (len(q_points) - 1) / float(trajectory_sample_hz)
+    sample_count = int(round(duration_s * float(runtime_send_hz))) + 1
+    sample_count = max(2, sample_count)
+    return [
+        JointTrajectoryPoint(
+            time_s=index / float(runtime_send_hz),
+            q=_sample_linear_joint_trajectory(
+                q_points,
+                trajectory_sample_hz=trajectory_sample_hz,
+                sample_time_s=min(duration_s, index / float(runtime_send_hz)),
+            ),
+        )
+        for index in range(sample_count)
+    ]
+
+
+def _sample_linear_joint_trajectory(
+    q_points: Sequence[tuple[float, ...]],
+    *,
+    trajectory_sample_hz: float,
+    sample_time_s: float,
+) -> tuple[float, ...]:
+    if sample_time_s <= 0.0:
+        return tuple(q_points[0])
+    raw_index = sample_time_s * float(trajectory_sample_hz)
+    left_index = min(int(raw_index), len(q_points) - 1)
+    right_index = min(left_index + 1, len(q_points) - 1)
+    if left_index == right_index:
+        return tuple(q_points[left_index])
+    ratio = raw_index - left_index
+    return tuple(
+        left + (right - left) * ratio
+        for left, right in zip(q_points[left_index], q_points[right_index], strict=True)
+    )
+
+
+def _command_runtime_send_hz(
+    command: dict[str, object],
+    motion: MotionExecutionResult,
+) -> float | None:
+    return _optional_float(command.get("send_hz")) or motion.trajectory_sample_hz
+
+
+def _command_trajectory_sample_hz(
+    command: dict[str, object],
+    motion: MotionExecutionResult,
+) -> float | None:
+    if command.get("kind") != "trajectory":
+        return motion.trajectory_sample_hz
+    return _optional_float(command.get("trajectory_sample_hz")) or motion.trajectory_sample_hz
+
+
+def _trajectory_resampling_policy(
+    *,
+    trajectory_sample_hz: float | None,
+    runtime_send_hz: float | None,
+    kind: str,
+) -> str:
+    if kind != "trajectory":
+        return "intent_frame_to_runtime_send_hz"
+    if (
+        trajectory_sample_hz is not None
+        and runtime_send_hz is not None
+        and abs(trajectory_sample_hz - runtime_send_hz) <= 1e-9
+    ):
+        return "none_sample_hz_matches_send_hz"
+    return "linear_time_resample"
+
+
+def _trajectory_interpolation_policy(*, resampling_policy: str, kind: str) -> str:
+    if kind != "trajectory":
+        return "linear_intent_frame"
+    if resampling_policy == "linear_time_resample":
+        return "linear_joint_position"
+    return "pre_sampled_joint_positions"
 
 
 def _optional_float(value: object) -> float | None:
