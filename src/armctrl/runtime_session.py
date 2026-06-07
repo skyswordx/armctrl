@@ -9,6 +9,7 @@ shape without changing callers.
 from __future__ import annotations
 
 from pathlib import Path
+import importlib.util
 import json
 import time
 from typing import Sequence
@@ -22,6 +23,9 @@ from armctrl.motion_runtime import (
 
 RUNTIME_SESSION_SCHEMA = "armctrl.arm_runtime_session.v1"
 RUNTIME_STATUS_SCHEMA = "armctrl.arm_runtime_status.v1"
+ARX5_RUNTIME_START_CONFIRMATION = (
+    "I UNDERSTAND THIS WILL START THE REAL ARM RUNTIME"
+)
 
 
 class RuntimeSessionError(RuntimeError):
@@ -192,6 +196,63 @@ def heartbeat_runtime_session_payload(
             else "blocked"
         )
     return refreshed
+
+
+def reject_arx5_runtime_start_without_confirmation(
+    *,
+    model: str,
+    interface: str,
+) -> dict[str, object]:
+    return _arx5_runtime_start_rejection(
+        model=model,
+        interface=interface,
+        reason="arx5 runtime start requires explicit operator confirmation",
+        next_gate="confirm arx5 runtime start on the robot host",
+    )
+
+
+def arx5_runtime_start_preflight(
+    *,
+    model: str,
+    interface: str,
+    confirm: str | None,
+) -> dict[str, object] | None:
+    if confirm != ARX5_RUNTIME_START_CONFIRMATION:
+        return reject_arx5_runtime_start_without_confirmation(
+            model=model,
+            interface=interface,
+        )
+    if importlib.util.find_spec("arx5_interface") is None:
+        return _arx5_runtime_start_rejection(
+            model=model,
+            interface=interface,
+            reason="arx5_interface is not importable in this environment",
+            next_gate="run on the robot host with arx5_interface installed",
+        )
+    return None
+
+
+def _arx5_runtime_start_rejection(
+    *,
+    model: str,
+    interface: str,
+    reason: str,
+    next_gate: str,
+) -> dict[str, object]:
+    return {
+        "status": "rejected",
+        "schema": RUNTIME_SESSION_SCHEMA,
+        "backend": "arx5_sdk",
+        "model": model,
+        "interface": interface,
+        "reason": reason,
+        "requires_confirm": ARX5_RUNTIME_START_CONFIRMATION,
+        "hardware_motion": True,
+        "movement_command_sent": False,
+        "sdk_opened": False,
+        "fault_landing_mode": MotionMode.DAMPING.value,
+        "next_gate": next_gate,
+    }
 
 
 def acquire_owner_from_artifact(

@@ -33,8 +33,10 @@ from armctrl.recipe_runtime import (
     RecipeRuntimeSmoker,
 )
 from armctrl.runtime_session import (
+    ARX5_RUNTIME_START_CONFIRMATION,
     RuntimeSessionError,
     acquire_owner_from_artifact,
+    arx5_runtime_start_preflight,
     heartbeat_runtime_session_payload,
     recover_runtime_session_from_artifact,
     refresh_runtime_status_payload,
@@ -153,12 +155,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     runtime_start_parser = runtime_subparsers.add_parser("start")
-    runtime_start_parser.add_argument("--backend", choices=["fake"], default="fake")
+    runtime_start_parser.add_argument(
+        "--backend",
+        choices=["fake", "arx5_sdk"],
+        default="fake",
+    )
+    runtime_start_parser.add_argument("--model", default="X5")
+    runtime_start_parser.add_argument("--interface", default="can0")
     runtime_start_parser.add_argument(
         "--q-current",
         nargs="+",
         type=float,
-        required=True,
     )
     runtime_start_parser.add_argument(
         "--safe-center",
@@ -184,6 +191,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=float,
         default=0.05,
     )
+    runtime_start_parser.add_argument("--confirm")
     runtime_start_parser.add_argument("--output", required=True)
     runtime_start_parser.add_argument("--json", action="store_true", dest="as_json")
 
@@ -1126,6 +1134,43 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "runtime" and args.runtime_command == "start":
         if args.serve and args.output is None:
             parser.error("runtime start --serve requires --output")
+        if args.backend == "arx5_sdk":
+            rejected = arx5_runtime_start_preflight(
+                model=args.model,
+                interface=args.interface,
+                confirm=args.confirm,
+            )
+            if rejected is not None:
+                payload = _attach_output_artifact(
+                    rejected,
+                    args.output,
+                    artifact_key="runtime_session",
+                )
+                _emit(payload, as_json=args.as_json)
+                return 3
+            payload = {
+                "status": "blocked",
+                "schema": "armctrl.arm_runtime_session.v1",
+                "backend": "arx5_sdk",
+                "model": args.model,
+                "interface": args.interface,
+                "requires_confirm": ARX5_RUNTIME_START_CONFIRMATION,
+                "hardware_motion": True,
+                "movement_command_sent": False,
+                "sdk_opened": False,
+                "reason": "arx5 runtime start backend is not implemented yet",
+                "fault_landing_mode": "damping",
+                "next_gate": "implement long-lived arx5 SDK runtime using audited SDK backend",
+            }
+            payload = _attach_output_artifact(
+                payload,
+                args.output,
+                artifact_key="runtime_session",
+            )
+            _emit(payload, as_json=args.as_json)
+            return 3
+        if args.q_current is None:
+            parser.error("runtime start --backend fake requires --q-current")
         payload = start_fake_runtime_session(
             q_current=tuple(args.q_current),
             safe_center=tuple(args.safe_center),

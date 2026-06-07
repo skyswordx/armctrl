@@ -4,6 +4,8 @@ import sys
 import time
 from pathlib import Path
 
+from armctrl.runtime_session import ARX5_RUNTIME_START_CONFIRMATION
+
 
 def _passing_doctor_artifact() -> dict[str, object]:
     return {
@@ -90,6 +92,104 @@ def test_cli_runtime_start_fake_recovers_to_hold_safe_session(tmp_path: Path) ->
     assert payload["readiness"]["agent_sysid_smoke_allowed"] is True
     assert payload["runtime_session_id"]
     assert payload["artifacts"]["runtime_session"] == str(session_artifact)
+    assert json.loads(session_artifact.read_text(encoding="utf-8")) == payload
+
+
+def test_cli_runtime_start_arx5_sdk_requires_runtime_confirmation(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "runtime",
+            "start",
+            "--backend",
+            "arx5_sdk",
+            "--model",
+            "X5",
+            "--interface",
+            "can0",
+            "--safe-center",
+            "0.0",
+            "0.3",
+            "0.3",
+            "0.0",
+            "0.0",
+            "0.0",
+            "--output",
+            str(session_artifact),
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+
+    assert completed.returncode == 3
+    assert payload["status"] == "rejected"
+    assert payload["schema"] == "armctrl.arm_runtime_session.v1"
+    assert payload["backend"] == "arx5_sdk"
+    assert payload["reason"] == "arx5 runtime start requires explicit operator confirmation"
+    assert payload["requires_confirm"] == ARX5_RUNTIME_START_CONFIRMATION
+    assert payload["hardware_motion"] is True
+    assert payload["movement_command_sent"] is False
+    assert payload["sdk_opened"] is False
+    assert payload["fault_landing_mode"] == "damping"
+    assert payload["next_gate"] == "confirm arx5 runtime start on the robot host"
+    assert json.loads(session_artifact.read_text(encoding="utf-8")) == payload
+
+
+def test_cli_runtime_start_arx5_sdk_rejects_missing_sdk_after_confirmation(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "runtime",
+            "start",
+            "--backend",
+            "arx5_sdk",
+            "--model",
+            "X5",
+            "--interface",
+            "can0",
+            "--safe-center",
+            "0.0",
+            "0.3",
+            "0.3",
+            "0.0",
+            "0.0",
+            "0.0",
+            "--confirm",
+            ARX5_RUNTIME_START_CONFIRMATION,
+            "--output",
+            str(session_artifact),
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+
+    assert completed.returncode == 3
+    assert payload["status"] == "rejected"
+    assert payload["schema"] == "armctrl.arm_runtime_session.v1"
+    assert payload["backend"] == "arx5_sdk"
+    assert payload["reason"] == "arx5_interface is not importable in this environment"
+    assert payload["requires_confirm"] == ARX5_RUNTIME_START_CONFIRMATION
+    assert payload["sdk_opened"] is False
+    assert payload["movement_command_sent"] is False
+    assert payload["next_gate"] == "run on the robot host with arx5_interface installed"
     assert json.loads(session_artifact.read_text(encoding="utf-8")) == payload
 
 
