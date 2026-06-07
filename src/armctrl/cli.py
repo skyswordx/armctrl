@@ -271,6 +271,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     recipe_runtime_smoke_parser = recipe_subparsers.add_parser("runtime-smoke-fake")
     recipe_runtime_smoke_parser.add_argument("--plan-dir", required=True)
+    recipe_runtime_smoke_parser.add_argument("--runtime-session-artifact")
     recipe_runtime_smoke_parser.add_argument("--output")
     recipe_runtime_smoke_parser.add_argument(
         "--json", action="store_true", dest="as_json"
@@ -1273,7 +1274,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "recipe" and args.recipe_command == "runtime-smoke-fake":
         try:
             result = RecipeRuntimeSmoker().run(
-                RecipeRuntimeSmokeRequest(plan_dir=Path(args.plan_dir))
+                RecipeRuntimeSmokeRequest(
+                    plan_dir=Path(args.plan_dir),
+                    runtime_session_artifact_path=(
+                        Path(args.runtime_session_artifact)
+                        if args.runtime_session_artifact
+                        else None
+                    ),
+                )
             )
         except FileNotFoundError as error:
             payload = {
@@ -1284,6 +1292,26 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "reason": str(error),
                 "plan_dir": str(Path(args.plan_dir)),
                 "next_gate": "run armctrl recipe plan <name> --output <dir> --json before runtime smoke",
+            }
+            payload = _attach_output_artifact(payload, args.output)
+            _emit(payload, as_json=args.as_json)
+            return 3
+        except RuntimeSessionError as error:
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.recipe_runtime_smoke.v1",
+                "movement_allowed": False,
+                "hardware_motion": False,
+                "reason": str(error),
+                "plan_dir": str(Path(args.plan_dir)),
+                "runtime": {
+                    "single_owner_runtime_session": True,
+                    "runtime_session_id": error.payload.get("runtime_session_id"),
+                    "mode": error.payload.get("mode"),
+                    "owner": error.payload.get("owner"),
+                    "readiness": error.payload.get("readiness"),
+                },
+                "next_gate": "release active runtime owner or recover runtime to hold_safe before recipe smoke",
             }
             payload = _attach_output_artifact(payload, args.output)
             _emit(payload, as_json=args.as_json)

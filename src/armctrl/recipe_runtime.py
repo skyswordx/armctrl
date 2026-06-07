@@ -14,6 +14,10 @@ from armctrl.motion_runtime import (
     MotionRuntime,
 )
 from armctrl.recipes import Recipe, RecipeCatalog
+from armctrl.runtime_session import (
+    acquire_owner_from_artifact,
+    release_owner_from_artifact,
+)
 from armctrl.simulation import TrajectoryPreviewer
 from armctrl.workspace import WorkspaceSafetyConfig, evaluate_workspace_fk_clearance
 
@@ -46,6 +50,7 @@ class RecipeAgentPresetContractRequest:
 @dataclass(frozen=True)
 class RecipeRuntimeSmokeRequest:
     plan_dir: Path
+    runtime_session_artifact_path: Path | None = None
 
 
 class RecipePlanner:
@@ -309,6 +314,22 @@ class RecipeRuntimeSmoker:
             raise RuntimeError("recipe plan safety gate is not passed")
         sample_hz = float(manifest["request"]["sample_hz"])
         points = _trajectory_points_from_csv(trajectory_path)
+        runtime_owner_lease = None
+        runtime_session_after_release = None
+        if request.runtime_session_artifact_path is not None:
+            runtime_owner_lease = acquire_owner_from_artifact(
+                session_artifact_path=request.runtime_session_artifact_path,
+                owner="recipe",
+                mode="trajectory_replay",
+                expected_q_start=points[0].q,
+                max_start_error_rad=0.02,
+                heartbeat_timeout_s=max(1.0, 2.0 / sample_hz),
+                max_heartbeat_age_s=5.0,
+            )
+            request.runtime_session_artifact_path.write_text(
+                json.dumps(runtime_owner_lease, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
         clock = _ManualRuntimeClock()
         backend = FakeMotionBackend()
         runtime = MotionRuntime(
@@ -322,6 +343,20 @@ class RecipeRuntimeSmoker:
             trajectory_sample_hz=sample_hz,
             hold_after=True,
         )
+        if request.runtime_session_artifact_path is not None:
+            runtime_session_after_release = release_owner_from_artifact(
+                session_artifact_path=request.runtime_session_artifact_path,
+                owner="recipe",
+                max_heartbeat_age_s=5.0,
+            )
+            request.runtime_session_artifact_path.write_text(
+                json.dumps(
+                    runtime_session_after_release,
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
         return {
             "schema": "armctrl.recipe_runtime_smoke.v1",
             "movement_allowed": False,
@@ -333,8 +368,32 @@ class RecipeRuntimeSmoker:
             "safety": safety,
             "runtime": {
                 "backend": "fake",
-                "owner": "motion_runtime",
+                "owner": (
+                    "recipe"
+                    if runtime_owner_lease is not None
+                    else "motion_runtime"
+                ),
                 "mode": result.mode,
+                "single_owner_runtime_session": runtime_owner_lease is not None,
+                "runtime_session_id": (
+                    runtime_owner_lease.get("runtime_session_id")
+                    if runtime_owner_lease is not None
+                    else None
+                ),
+                "owner_lease": (
+                    runtime_owner_lease.get("owner_lease")
+                    if runtime_owner_lease is not None
+                    else None
+                ),
+                "release": (
+                    {
+                        "mode": runtime_session_after_release.get("mode"),
+                        "owner": runtime_session_after_release.get("owner"),
+                        "readiness": runtime_session_after_release.get("readiness"),
+                    }
+                    if runtime_session_after_release is not None
+                    else None
+                ),
             },
             "motion_runtime": _motion_runtime_manifest(result),
             "next_gate": (
