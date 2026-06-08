@@ -1,0 +1,343 @@
+{
+  "schema": "armctrl.ident_plan_manifest.v1",
+  "profile": {
+    "name": "fourier_multisine",
+    "purpose": "dynamic coupled excitation for offline rigid-body identification",
+    "tool_boundary": {
+      "trajectory_optimization": "FIGAROH",
+      "regressor_solver": "Pinocchio",
+      "base_parameter_extraction": "FIGAROH",
+      "dataset_interface": "LeRobot-compatible metadata"
+    }
+  },
+  "request": {
+    "dof": 6,
+    "sample_hz": 20.0,
+    "duration_s": 2.0,
+    "amplitude_rad": 0.45,
+    "q_center": [
+      0.0,
+      0.3,
+      0.3,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "urdf_path": "configs/models/X5_camera.urdf",
+    "safe_config_path": "runs/oed-structural-metric-contract-20260606/attempt-001/x5.safe.yaml"
+  },
+  "safety": {
+    "allowed": true,
+    "reason": "plan-only sysid preview",
+    "checks": {
+      "urdf_limit_check": {
+        "status": "pass",
+        "violations": []
+      },
+      "sysid_parameter_check": {
+        "status": "pass",
+        "violations": []
+      },
+      "trajectory_step_check": {
+        "status": "pass",
+        "trajectory": "execution_trajectory",
+        "violations": []
+      },
+      "trajectory_velocity_check": {
+        "status": "pass",
+        "trajectory": "execution_trajectory",
+        "violations": []
+      },
+      "trajectory_acceleration_check": {
+        "status": "pass",
+        "trajectory": "execution_trajectory",
+        "violations": []
+      },
+      "joint_relation_check": {
+        "status": "pass",
+        "constraints": [],
+        "violations": []
+      },
+      "workspace_clearance_check": {
+        "status": "pass",
+        "method": "urdf_fk_frame_clearance",
+        "violations": []
+      },
+      "simulation_check": {
+        "status": "pass",
+        "backend": {
+          "requested": "auto",
+          "selected": "pinocchio_coal",
+          "result": {
+            "status": "pass",
+            "method": "pinocchio_coal",
+            "checked_samples": 196,
+            "ignored_allowed_collision_pairs": [
+              {
+                "first": "base_link",
+                "second": "link1"
+              },
+              {
+                "first": "link1",
+                "second": "link2"
+              },
+              {
+                "first": "link5",
+                "second": "link6"
+              }
+            ]
+          },
+          "attempts": [
+            {
+              "backend": "pinocchio_coal",
+              "result": {
+                "status": "pass",
+                "method": "pinocchio_coal",
+                "checked_samples": 196,
+                "ignored_allowed_collision_pairs": [
+                  {
+                    "first": "base_link",
+                    "second": "link1"
+                  },
+                  {
+                    "first": "link1",
+                    "second": "link2"
+                  },
+                  {
+                    "first": "link5",
+                    "second": "link6"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "zone_check": {
+          "status": "pass",
+          "method": "workspace_box_zones",
+          "violations": []
+        },
+        "clearance_check": {
+          "status": "pass",
+          "method": "urdf_fk_frame_clearance",
+          "violations": []
+        }
+      },
+      "hardware_execution": "not_requested"
+    }
+  },
+  "trajectory_backend": {
+    "requested": "figaroh_optimal_trajectory",
+    "selected": "external_oed_command",
+    "status": "external_candidate",
+    "profile": "fourier_multisine",
+    "profile_role": "oed",
+    "oed_valid": false,
+    "hardware_execution_eligible": false,
+    "next_gate": "improve_figaroh_oed_until_regressor_quality_gate_passes",
+    "implementation_boundary": "armctrl orchestrates; FIGAROH owns optimal excitation math",
+    "figaroh_vendor_reference": {
+      "class": "figaroh.optimal.BaseOptimalTrajectory",
+      "source_path": "/home/circlemoon/armctrl-clean-oed-structural-code-ed9ce27/vendor/figaroh/src/figaroh/optimal/base_optimal_trajectory.py",
+      "trajectory_parameterization": "cubic spline",
+      "objective": "base regressor condition number",
+      "constraints": [
+        "joint_position",
+        "joint_velocity",
+        "joint_torque",
+        "collision"
+      ],
+      "optimizer": "IPOPT/cyipopt"
+    },
+    "dependency_status": {
+      "figaroh": {
+        "status": "available",
+        "module": "figaroh"
+      },
+      "pinocchio": {
+        "status": "available",
+        "module": "pinocchio"
+      },
+      "cyipopt": {
+        "status": "available",
+        "module": "cyipopt"
+      }
+    },
+    "base_regressor_score": {
+      "status": "computed",
+      "condition_number": 68.43362806845255,
+      "row_count": 240,
+      "column_count": 36,
+      "base_parameter_count": 36
+    },
+    "regressor_score": {
+      "backend": "pinocchio",
+      "status": "computed",
+      "objective": "effective_condition_number",
+      "row_count": 240,
+      "column_count": 60,
+      "rank": 36,
+      "effective_condition_number": 77.56547530743994
+    },
+    "condition_metric": "figaroh_base_regressor",
+    "condition_number": 68.43362806845255,
+    "figaroh_base_condition_number": 68.43362806845255,
+    "pinocchio_effective_condition_number": 77.56547530743994,
+    "rank": 36,
+    "objective": "effective_condition_number",
+    "oed_quality_gate": {
+      "status": "fail",
+      "reasons": [
+        "optimizer_not_converged"
+      ],
+      "primary_metric": "figaroh_base_regressor",
+      "condition_number_threshold": 500.0,
+      "note": "This gate is for offline OED quality only. Passing simulation safety does not imply identified parameters are valid."
+    },
+    "timing_contract": {
+      "planning_sample_hz": 20.0,
+      "planning_sample_period_s": 0.05,
+      "execution_sample_hz": 100.0,
+      "execution_sample_period_s": 0.01,
+      "n_wps": 7,
+      "stack_reps": 1,
+      "requested_duration_s": 2.0,
+      "requested_segment_duration_s": 2.0,
+      "minimum_waypoint_duration_s": 0.0,
+      "waypoint_duration_s": 0.333333333333,
+      "segment_duration_s": 2.0,
+      "effective_duration_s": 2.0,
+      "duration_adjusted_for_safety": false,
+      "duration_adjustment_reason": "requested_duration_satisfied"
+    },
+    "sampling_contract": {
+      "sample_hz": 20.0,
+      "planning_sample_hz": 20.0,
+      "execution_sample_hz": 100.0,
+      "duration_s": 2.0,
+      "requested_sample_count": 41,
+      "effective_duration_s": 2.0,
+      "effective_sample_count": 41,
+      "execution_sample_count": 201,
+      "sample_count": 41
+    },
+    "artifacts": {
+      "figaroh_config": "runs/oed-structural-metric-contract-20260606/attempt-001/figaroh_trajectory_request.json"
+    },
+    "fallback": {
+      "name": "deterministic_smoke_probe",
+      "status": "not_used",
+      "reason": "external candidate trajectory was provided"
+    },
+    "candidate_source": {
+      "path": "runs/oed-structural-metric-contract-20260606/attempt-001/external_candidate_trajectory.csv",
+      "format": "csv",
+      "required_columns": [
+        "time_s",
+        "q_cmd_1",
+        "q_cmd_2",
+        "q_cmd_3",
+        "q_cmd_4",
+        "q_cmd_5",
+        "q_cmd_6"
+      ],
+      "sample_count": 40,
+      "raw_sample_count": 40,
+      "resampled_to_sample_hz": 20.0,
+      "generated_by": {
+        "command_argv": [
+          "/home/circlemoon/.local/bin/uv",
+          "run",
+          "python",
+          "scripts/x5_figaroh_oed.py"
+        ],
+        "exit_code": 0,
+        "stdout": "******************************************************************************\nThis program contains Ipopt, a library for large-scale nonlinear optimization.\n Ipopt is released as open source code under the Eclipse Public License (EPL).\n         For more information visit http://projects.coin-or.org/Ipopt\n******************************************************************************\n\nThis is Ipopt version 3.11.9, running with linear solver mumps.\nNOTE: Other linear solvers might be more efficient (see Ipopt documentation).\n\nNumber of nonzeros in equality constraint Jacobian...:        0\nNumber of nonzeros in inequality constraint Jacobian.:    18576\nNumber of nonzeros in Lagrangian Hessian.............:        0\n\nTotal number of variables............................:       36\n                     variables with only lower bounds:        0\n                variables with lower and upper bounds:       36\n                     variables with only upper bounds:        0\nTotal number of equality constraints.................:        0\nTotal number of inequality constraints...............:      516\n        inequality constraints with only lower bounds:        0\n   inequality constraints with lower and upper bounds:      516\n        inequality constraints with only upper bounds:        0\n\niter    objective    inf_pr   inf_du lg(mu)  ||d||  lg(rg) alpha_du alpha_pr  ls\n   0  2.2058076e+03 0.00e+00 1.91e+02   0.0 0.00e+00    -  0.00e+00 0.00e+00   0\n   1  1.1492258e+03 0.00e+00 5.31e+01  -7.5 2.90e+03    -  2.05e-04 1.83e-04f  1\n   2  1.0164350e+03 0.00e+00 6.41e+01  -2.6 7.74e-01    -  1.00e+00 6.65e-01h  1\n   3  9.6760901e+02 0.00e+00 1.10e+02  -0.8 1.71e+00    -  9.18e-01 1.00e+00f  1\n   4  6.3392555e+02 0.00e+00 4.13e+01  -1.7 8.78e-01    -  6.65e-01 9.50e-01f  1\n   5  5.1001394e+02 0.00e+00 2.15e+01  -1.2 1.99e+00    -  8.39e-01 2.50e-01f  1\n   6  4.2849548e+02 0.00e+00 2.03e+01  -1.8 4.12e-01    -  8.10e-01 1.00e+00f  1\n   7  3.8129091e+02 0.00e+00 1.51e+01  -1.2 4.01e+00    -  5.28e-01 4.41e-01f  1\n   8  3.1927669e+02 0.00e+00 1.26e+01  -1.5 1.30e+00    -  8.99e-01 5.36e-01f  1\n   9  2.7069293e+02 0.00e+00 7.51e+00  -1.5 4.05e+00    -  7.28e-01 4.31e-01f  1\niter    objective    inf_pr   inf_du lg(mu)  ||d||  lg(rg) alpha_du alpha_pr  ls\n  10  2.3827821e+02 0.00e+00 1.31e+01  -1.6 1.04e+00    -  9.97e-01 9.54e-01f  1\n  11  2.0700180e+02 0.00e+00 3.94e+00  -1.9 1.24e+00    -  1.00e+00 1.00e+00f  1\n  12  1.8899506e+02 0.00e+00 3.94e+00  -1.6 1.18e+00    -  1.00e+00 7.20e-01h  1\n  13  1.5594253e+02 0.00e+00 6.42e+00  -2.2 1.27e+00    -  7.86e-01 7.07e-01h  1\n  14  1.3148389e+02 0.00e+00 2.15e+00  -2.6 4.93e-01    -  9.99e-01 1.00e+00h  1\n  15  1.1958381e+02 0.00e+00 1.71e+00  -2.3 9.01e-01    -  8.99e-01 5.41e-01h  1\n  16  1.1425819e+02 0.00e+00 1.26e+00  -2.3 4.45e-01    -  6.54e-01 1.00e+00f  1\n  17  1.0834983e+02 0.00e+00 1.48e+00  -2.1 7.74e-01    -  7.39e-01 1.00e+00h  1\n  18  1.0704183e+02 0.00e+00 3.88e+00  -2.4 6.90e-01    -  8.10e-01 8.50e-01h  1\n  19  9.0950903e+01 0.00e+00 1.37e+00  -2.6 7.77e-01    -  1.00e+00 5.98e-01h  1\niter    objective    inf_pr   inf_du lg(mu)  ||d||  lg(rg) alpha_du alpha_pr  ls\n  20  8.6709247e+01 0.00e+00 1.85e+00  -8.6 4.60e-01    -  5.14e-01 3.11e-01h  1\n  21  8.4348220e+01 0.00e+00 1.57e+00  -2.9 4.49e-01    -  7.47e-01 3.84e-01h  1\n  22  8.1988083e+01 0.00e+00 1.21e+00  -3.4 7.97e-02    -  1.00e+00 9.35e-01h  1\n  23  8.1671155e+01 0.00e+00 1.74e+00  -3.5 1.68e+00    -  1.00e+00 6.74e-02h  2\n  24  8.0890116e+01 0.00e+00 1.56e+00  -4.6 1.42e-01    -  1.00e+00 3.05e-01h  1\n  25  8.7537710e+01 0.00e+00 1.09e+00  -2.5 1.49e+00    -  3.99e-01 3.59e-01f  2\n  26  7.9660910e+01 0.00e+00 1.52e+00  -3.0 3.03e-01    -  1.00e+00 1.00e+00h  1\n  27  7.8646508e+01 0.00e+00 9.32e-01  -3.5 7.27e-01    -  1.00e+00 2.43e-01h  1\n  28  7.7285508e+01 0.00e+00 6.79e-01  -4.3 1.41e-01    -  1.00e+00 4.93e-01h  1\n  29  1.0042266e+02 0.00e+00 2.00e+00  -2.4 2.02e+00    -  3.43e-01 1.00e+00f  1\niter    objective    inf_pr   inf_du lg(mu)  ||d||  lg(rg) alpha_du alpha_pr  ls\n  30  8.2147866e+01 0.00e+00 1.92e+00  -3.0 1.83e+00    -  1.00e+00 5.49e-01h  1\n  31  7.9247961e+01 0.00e+00 8.16e-01  -3.0 9.19e-01    -  4.70e-01 2.29e-01h  1\n  32  7.7711816e+01 0.00e+00 8.87e-01  -3.0 1.38e-01    -  1.00e+00 1.00e+00h  1\n  33  7.7487173e+01 0.00e+00 2.17e-02  -3.0 2.71e-01    -  9.98e-01 1.00e+00H  1\n  34  7.5464481e+01 0.00e+00 5.84e-01  -3.8 4.17e-01    -  9.98e-01 3.96e-01f  1\n  35  7.4462547e+01 0.00e+00 6.91e-01  -3.8 2.11e-01    -  1.00e+00 7.47e-01h  1\n  36  7.7217595e+01 0.00e+00 2.22e+00  -3.4 5.46e-01    -  8.53e-01 9.35e-01h  1\n  37  7.5617124e+01 0.00e+00 1.94e+00  -3.6 3.90e-01    -  1.00e+00 5.39e-01h  1\n  38  7.4498977e+01 0.00e+00 1.78e+00  -3.6 8.30e-01    -  2.59e-01 1.98e-01f  1\n  39  7.4329456e+01 0.00e+00 6.94e-01  -3.3 1.59e+00    -  1.00e+00 1.61e-01f  2\niter    objective    inf_pr   inf_du lg(mu)  ||d||  lg(rg) alpha_du alpha_pr  ls\n  40  7.3958885e+01 0.00e+00 5.29e-01  -3.3 1.46e-01    -  1.00e+00 1.00e+00h  1\n  41  7.3601940e+01 0.00e+00 3.51e-01  -4.0 2.63e-01    -  1.00e+00 2.65e-01h  1\n  42  7.3024251e+01 0.00e+00 3.37e-01  -4.2 7.99e-02    -  1.00e+00 6.74e-01h  1\n  43  7.2924436e+01 0.00e+00 5.41e-01  -3.7 1.90e+00    -  8.49e-01 4.56e-02h  2\n  44  7.2846647e+01 0.00e+00 8.79e-01  -3.7 3.80e-01    -  4.76e-01 2.63e-01h  2\n  45  7.2259976e+01 0.00e+00 7.76e-01  -4.1 1.56e-01    -  9.28e-01 5.98e-01h  1\n  46  7.2111593e+01 0.00e+00 1.82e+00  -4.2 3.31e-01    -  1.00e+00 3.53e-01h  1\n  47  7.1852265e+01 0.00e+00 1.19e+00  -5.2 2.24e-01    -  1.00e+00 2.32e-01h  1\n  48  7.1515170e+01 0.00e+00 3.12e-01  -5.1 9.44e-02    -  1.00e+00 5.96e-01h  1\n  49  7.1158501e+01 0.00e+00 2.58e-01  -5.5 3.18e-01    -  1.00e+00 2.82e-01h  1\niter    objective    inf_pr   inf_du lg(mu)  ||d||  lg(rg) alpha_du alpha_pr  ls\n  50  7.0658149e+01 0.00e+00 6.43e-01  -3.5 1.04e+01    -  7.87e-01 4.73e-02f  1\n  51  7.0202627e+01 0.00e+00 5.30e-01  -4.1 8.69e-01    -  7.19e-01 3.15e-01h  1\n  52  7.2474183e+01 0.00e+00 6.12e-01  -3.2 3.84e-01    -  7.02e-01 1.00e+00h  1\n  53  7.1407127e+01 0.00e+00 8.91e-01  -3.4 5.75e-01    -  1.00e+00 3.41e-01h  1\n  54  7.0117286e+01 0.00e+00 7.93e-01  -3.4 3.60e-01    -  9.81e-01 6.12e-01f  1\n  55  6.9959467e+01 0.00e+00 5.53e-01  -3.6 1.72e+00    -  1.00e+00 4.57e-02h  2\n  56  7.0403604e+01 0.00e+00 7.86e-01  -3.3 1.72e-01    -  1.00e+00 1.00e+00h  1\n  57  6.9259735e+01 0.00e+00 4.33e-01  -4.7 1.20e-01    -  1.00e+00 7.18e-01h  1\n  58  6.9025718e+01 0.00e+00 9.00e-01  -4.3 4.41e-01    -  1.00e+00 3.23e-01h  1\n  59  6.8662666e+01 0.00e+00 9.90e-01  -4.5 2.40e-01    -  1.00e+00 5.81e-01h  1\niter    objective    inf_pr   inf_du lg(mu)  ||d||  lg(rg) alpha_du alpha_pr  ls\n  60  6.8434289e+01 0.00e+00 4.26e-01  -3.6 6.19e+00    -  4.41e-01 2.09e-02h  3\n\nNumber of Iterations....: 60\n\n                                   (scaled)                 (unscaled)\nObjective...............:   6.0226235305506504e-01    6.8434288540180205e+01\nDual infeasibility......:   4.2612282311885891e-01    4.8419782646128510e+01\nConstraint violation....:   0.0000000000000000e+00    0.0000000000000000e+00\nComplementarity.........:   2.5850985858796822e-04    2.9374139298845914e-02\nOverall NLP error.......:   4.2612282311885891e-01    4.8419782646128510e+01\n\n\nNumber of objective function evaluations             = 83\nNumber of objective gradient evaluations             = 61\nNumber of equality constraint evaluations            = 0\nNumber of inequality constraint evaluations          = 84\nNumber of equality constraint Jacobian evaluations   = 0\nNumber of inequality constraint Jacobian evaluations = 61\nNumber of Lagrangian Hessian evaluations             = 0\nTotal CPU secs in IPOPT (w/o function evaluations)   =      2.105\nTotal CPU secs in NLP function evaluations           =     68.117\n\nEXIT: Maximum Number of Iterations Exceeded.\n{\"schema\": \"armctrl.x5_figaroh_oed_result.v1\", \"status\": \"ok\", \"source_backend\": \"figaroh\", \"request\": \"runs/oed-structural-metric-contract-20260606/attempt-001/figaroh_trajectory_request.json\", \"candidate_trajectory\": \"runs/oed-structural-metric-contract-20260606/attempt-001/external_candidate_trajectory.csv\", \"sample_count\": 40, \"stack_reps\": 1, \"random_seed\": 2, \"final_regressor_shape\": null, \"initialization\": {\"strategy\": \"armctrl_velocity_feasible\", \"attempts\": 1}, \"base_regressor_score\": {\"status\": \"computed\", \"condition_number\": 68.43362806845255, \"row_count\": 240, \"column_count\": 36, \"base_parameter_count\": 36}}",
+        "stdout_json": {
+          "schema": "armctrl.x5_figaroh_oed_result.v1",
+          "status": "ok",
+          "source_backend": "figaroh",
+          "request": "runs/oed-structural-metric-contract-20260606/attempt-001/figaroh_trajectory_request.json",
+          "candidate_trajectory": "runs/oed-structural-metric-contract-20260606/attempt-001/external_candidate_trajectory.csv",
+          "sample_count": 40,
+          "stack_reps": 1,
+          "random_seed": 2,
+          "final_regressor_shape": null,
+          "initialization": {
+            "strategy": "armctrl_velocity_feasible",
+            "attempts": 1
+          },
+          "base_regressor_score": {
+            "status": "computed",
+            "condition_number": 68.43362806845255,
+            "row_count": 240,
+            "column_count": 36,
+            "base_parameter_count": 36
+          }
+        },
+        "optimizer_convergence": {
+          "status": "fail",
+          "reason": "max_iterations_exceeded"
+        },
+        "optimizer_diagnostics": {
+          "iterations": 60,
+          "objective_scaled": 0.602262353055065,
+          "objective_unscaled": 68.4342885401802,
+          "dual_infeasibility_scaled": 0.4261228231188589,
+          "dual_infeasibility_unscaled": 48.41978264612851,
+          "constraint_violation_scaled": 0.0,
+          "constraint_violation_unscaled": 0.0,
+          "iteration_log_tail": [
+            "  41  7.3601940e+01 0.00e+00 3.51e-01  -4.0 2.63e-01    -  1.00e+00 2.65e-01h  1",
+            "  42  7.3024251e+01 0.00e+00 3.37e-01  -4.2 7.99e-02    -  1.00e+00 6.74e-01h  1",
+            "  43  7.2924436e+01 0.00e+00 5.41e-01  -3.7 1.90e+00    -  8.49e-01 4.56e-02h  2",
+            "  44  7.2846647e+01 0.00e+00 8.79e-01  -3.7 3.80e-01    -  4.76e-01 2.63e-01h  2",
+            "  45  7.2259976e+01 0.00e+00 7.76e-01  -4.1 1.56e-01    -  9.28e-01 5.98e-01h  1",
+            "  46  7.2111593e+01 0.00e+00 1.82e+00  -4.2 3.31e-01    -  1.00e+00 3.53e-01h  1",
+            "  47  7.1852265e+01 0.00e+00 1.19e+00  -5.2 2.24e-01    -  1.00e+00 2.32e-01h  1",
+            "  48  7.1515170e+01 0.00e+00 3.12e-01  -5.1 9.44e-02    -  1.00e+00 5.96e-01h  1",
+            "  49  7.1158501e+01 0.00e+00 2.58e-01  -5.5 3.18e-01    -  1.00e+00 2.82e-01h  1",
+            "  50  7.0658149e+01 0.00e+00 6.43e-01  -3.5 1.04e+01    -  7.87e-01 4.73e-02f  1",
+            "  51  7.0202627e+01 0.00e+00 5.30e-01  -4.1 8.69e-01    -  7.19e-01 3.15e-01h  1",
+            "  52  7.2474183e+01 0.00e+00 6.12e-01  -3.2 3.84e-01    -  7.02e-01 1.00e+00h  1",
+            "  53  7.1407127e+01 0.00e+00 8.91e-01  -3.4 5.75e-01    -  1.00e+00 3.41e-01h  1",
+            "  54  7.0117286e+01 0.00e+00 7.93e-01  -3.4 3.60e-01    -  9.81e-01 6.12e-01f  1",
+            "  55  6.9959467e+01 0.00e+00 5.53e-01  -3.6 1.72e+00    -  1.00e+00 4.57e-02h  2",
+            "  56  7.0403604e+01 0.00e+00 7.86e-01  -3.3 1.72e-01    -  1.00e+00 1.00e+00h  1",
+            "  57  6.9259735e+01 0.00e+00 4.33e-01  -4.7 1.20e-01    -  1.00e+00 7.18e-01h  1",
+            "  58  6.9025718e+01 0.00e+00 9.00e-01  -4.3 4.41e-01    -  1.00e+00 3.23e-01h  1",
+            "  59  6.8662666e+01 0.00e+00 9.90e-01  -4.5 2.40e-01    -  1.00e+00 5.81e-01h  1",
+            "  60  6.8434289e+01 0.00e+00 4.26e-01  -3.6 6.19e+00    -  4.41e-01 2.09e-02h  3"
+          ]
+        },
+        "stderr": "<frozen importlib._bootstrap>:488: RuntimeWarning: to-Python converter for std::shared_ptr<ndcurves::curve_abc<double, double, true, Eigen::Matrix<double, 3, 1, 0, 3, 1>, Eigen::Matrix<double, 3, 1, 0, 3, 1> > > already registered; second conversion method ignored."
+      }
+    },
+    "execution_trajectory": {
+      "interpolation_method": "scipy_cubic_spline",
+      "planning_sample_hz": 20.0,
+      "execution_sample_hz": 100.0,
+      "planning_sample_count": 40,
+      "sample_count": 196,
+      "max_joint_step_rad": 0.01847600000000002,
+      "max_velocity_rad_s": 1.8427499999999999,
+      "max_acceleration_rad_s2": 17.812499999999975
+    }
+  },
+  "handoff": {
+    "dataset_contract": "lerobot-compatible",
+    "solver_backends": [
+      "pinocchio",
+      "figaroh"
+    ],
+    "trajectory_optimizer": "figaroh",
+    "hardware_required_for_execute": true
+  },
+  "artifacts": {
+    "planned_trajectory": "runs/oed-structural-metric-contract-20260606/attempt-001/planned_trajectory.csv",
+    "execution_trajectory": "runs/oed-structural-metric-contract-20260606/attempt-001/execution_trajectory.csv",
+    "trajectory_preview": "runs/oed-structural-metric-contract-20260606/attempt-001/trajectory_preview.json",
+    "preview_html": "runs/oed-structural-metric-contract-20260606/attempt-001/preview.html",
+    "manifest": "runs/oed-structural-metric-contract-20260606/attempt-001/manifest.json"
+  }
+}

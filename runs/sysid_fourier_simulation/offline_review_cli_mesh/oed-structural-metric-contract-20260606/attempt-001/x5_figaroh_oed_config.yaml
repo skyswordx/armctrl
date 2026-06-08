@@ -1,0 +1,118 @@
+identification:
+  active_joints:
+  - joint1
+  - joint2
+  - joint3
+  - joint4
+  - joint5
+  - joint6
+  robot_params:
+  - q_lim_def:
+    - - -0.45
+      - 0.45
+    - - 0.0
+      - 0.75
+    - - 0.0
+      - 0.75
+    - - -0.45
+      - 0.45
+    - - -0.45
+      - 0.45
+    - - -0.45
+      - 0.45
+    dq_lim_def:
+    - - -2.0
+      - 2.0
+    - - -1.4
+      - 1.4
+    - - -1.4
+      - 1.4
+    - - -2.0
+      - 2.0
+    - - -2.0
+      - 2.0
+    - - -2.0
+      - 2.0
+    effort_lim_def:
+    - - -100.0
+      - 100.0
+    - - -100.0
+      - 100.0
+    - - -30.0
+      - 30.0
+    - - -30.0
+      - 30.0
+    - - -100.0
+      - 100.0
+    - - -100.0
+      - 100.0
+    fv:
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    fs:
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    Ia:
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    offset:
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    Iam6: 0.0
+    fvm6: 0.0
+    fsm6: 0.0
+    reduction_ratio:
+    - 1.0
+    - 1.0
+    - 1.0
+    - 1.0
+    - 1.0
+    - 1.0
+    ratio_essential:
+    - 1.0
+    - 1.0
+    - 1.0
+    - 1.0
+    - 1.0
+    - 1.0
+  problem_params:
+  - is_external_wrench: false
+    is_joint_torques: true
+    force_torque: []
+    external_wrench_offsets: []
+    has_friction: false
+    has_actuator_inertia: false
+    has_joint_offset: false
+    has_coupled_wrist: false
+  processing_params:
+  - ts: 0.05
+    cut_off_frequency_butterworth: 5.0
+  tls_params:
+  - mass_load: 0.0
+    which_body_loaded: ''
+  trajectory_params:
+  - n_wps: 7
+    freq: 20.0
+    t_s: 0.333333333333
+    soft_lim: 0.05
+    max_attempts: 1000
+    ipopt_max_iterations: 60
+    ipopt_print_level: 5
+    random_seed: 2
+    x5_joint_relation_constraints: []
