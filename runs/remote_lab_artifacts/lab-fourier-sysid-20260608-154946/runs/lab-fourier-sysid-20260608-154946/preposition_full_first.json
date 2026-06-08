@@ -1,0 +1,87 @@
+{
+  "status": "queued",
+  "schema": "armctrl.runtime_preposition.v1",
+  "movement_command_sent": false,
+  "owner": "runtime_preposition",
+  "mode": "trajectory_replay",
+  "q_start": [
+    -0.318335,
+    0.358809,
+    0.709914,
+    -0.077134,
+    -0.25812,
+    -0.159346
+  ],
+  "q_target": [
+    0.315,
+    0.6375,
+    0.4875,
+    -0.225,
+    0.315,
+    0.225
+  ],
+  "sample_count": 65,
+  "send_hz": 50.0,
+  "start_pose_policy": "live_hold",
+  "start_pose_guard": {
+    "status": "pass",
+    "policy": "live_hold",
+    "expected_q_start": [
+      -0.318335,
+      0.358809,
+      0.709914,
+      -0.077134,
+      -0.25812,
+      -0.159346
+    ],
+    "q_hold": [
+      -0.318335,
+      0.358809,
+      0.709914,
+      -0.077134,
+      -0.25812,
+      -0.159346
+    ],
+    "q_meas": [
+      -0.3202486038208008,
+      0.3587779998779297,
+      0.7024869918823242,
+      -0.08525943756103516,
+      -0.2561607360839844,
+      -0.16231822967529297
+    ],
+    "safe_center": [
+      0.0,
+      0.3,
+      0.3,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "max_start_error_rad": 0.02,
+    "q_meas_to_q_hold_max_abs_rad": 0.008125437561035162,
+    "q_hold_to_expected_start_max_abs_rad": 0.0,
+    "q_hold_to_safe_center_max_abs_rad": 0.40991400000000006,
+    "failed_checks": []
+  },
+  "runtime": {
+    "single_motion_owner": true,
+    "queue": "runs/lab-fourier-sysid-20260608-154946/runtime_session_commands",
+    "session_artifact": "runs/lab-fourier-sysid-20260608-154946/runtime_session.json"
+  },
+  "runtime_command": {
+    "command_id": "0cf41720-3b7b-4c2f-866f-ef5b71a3257a",
+    "status": "queued",
+    "artifacts": {
+      "command": "runs/lab-fourier-sysid-20260608-154946/runtime_session_commands/pending/0cf41720-3b7b-4c2f-866f-ef5b71a3257a.json",
+      "result": "runs/lab-fourier-sysid-20260608-154946/runtime_session_commands/results/0cf41720-3b7b-4c2f-866f-ef5b71a3257a.json"
+    }
+  },
+  "artifacts": {
+    "command": "runs/lab-fourier-sysid-20260608-154946/runtime_session_commands/pending/0cf41720-3b7b-4c2f-866f-ef5b71a3257a.json",
+    "result": "runs/lab-fourier-sysid-20260608-154946/runtime_session_commands/results/0cf41720-3b7b-4c2f-866f-ef5b71a3257a.json",
+    "runtime_preposition": "runs/lab-fourier-sysid-20260608-154946/preposition_full_first.json"
+  },
+  "fault_landing_mode": "damping",
+  "next_gate": "wait for live runtime preposition result artifact"
+}

@@ -1,0 +1,99 @@
+{
+  "schema": "armctrl.trajectory_preview.v1",
+  "movement_allowed": false,
+  "trajectory_path": "runs/lab-fourier-sysid-20260608-154946/ident-fourier-reduced-0p25-normal/execution_trajectory.csv",
+  "urdf_path": "configs/models/X5_camera.urdf",
+  "safe_config_path": "configs/x5.safe.yaml",
+  "backend": {
+    "requested": "auto",
+    "selected": "pinocchio_coal",
+    "result": {
+      "status": "pass",
+      "method": "pinocchio_coal",
+      "checked_samples": 196,
+      "ignored_allowed_collision_pairs": [
+        {
+          "first": "base_link",
+          "second": "link1"
+        },
+        {
+          "first": "link1",
+          "second": "link2"
+        },
+        {
+          "first": "link5",
+          "second": "link6"
+        }
+      ]
+    },
+    "attempts": [
+      {
+        "backend": "pinocchio_coal",
+        "result": {
+          "status": "pass",
+          "method": "pinocchio_coal",
+          "checked_samples": 196,
+          "ignored_allowed_collision_pairs": [
+            {
+              "first": "base_link",
+              "second": "link1"
+            },
+            {
+              "first": "link1",
+              "second": "link2"
+            },
+            {
+              "first": "link5",
+              "second": "link6"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "safety": {
+    "allowed": true,
+    "clearance_check": {
+      "status": "pass",
+      "method": "urdf_fk_frame_clearance",
+      "violations": []
+    },
+    "zone_check": {
+      "status": "pass",
+      "method": "workspace_box_zones",
+      "violations": []
+    }
+  },
+  "trajectory_metrics": {
+    "sample_count": 196,
+    "joint_ranges_rad": {
+      "joint_1": 0.158334,
+      "joint_2": 0.12390100000000004,
+      "joint_3": 0.12616,
+      "joint_4": 0.161805,
+      "joint_5": 0.14328000000000002,
+      "joint_6": 0.117568
+    }
+  },
+  "workspace_metrics": {
+    "link_frame_z_range_m": {
+      "link5": {
+        "min": 0.30352411320388606,
+        "max": 0.34628541490800935
+      },
+      "link6": {
+        "min": 0.2183971368887508,
+        "max": 0.2659219262121498
+      },
+      "eef_link": {
+        "min": 0.202438741712133,
+        "max": 0.2768078686596589
+      }
+    }
+  },
+  "render": {
+    "status": "written",
+    "path": "runs/lab-fourier-sysid-20260608-154946/ident-fourier-reduced-0p25-normal/preview.html",
+    "format": "html"
+  }
+}

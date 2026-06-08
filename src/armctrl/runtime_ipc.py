@@ -1270,15 +1270,19 @@ def _runtime_trajectory_points(
     return [
         JointTrajectoryPoint(
             time_s=index / float(runtime_send_hz),
-            q=_sample_linear_joint_trajectory(
+            q=_sample_cubic_hermite_joint_trajectory(
                 q_points,
-                trajectory_sample_hz=trajectory_sample_hz,
-                sample_time_s=min(duration_s, index / float(runtime_send_hz)),
-            ),
-            dq=_sample_linear_joint_trajectory(
                 effective_dq_points,
                 trajectory_sample_hz=trajectory_sample_hz,
                 sample_time_s=min(duration_s, index / float(runtime_send_hz)),
+                derivative=False,
+            ),
+            dq=_sample_cubic_hermite_joint_trajectory(
+                q_points,
+                effective_dq_points,
+                trajectory_sample_hz=trajectory_sample_hz,
+                sample_time_s=min(duration_s, index / float(runtime_send_hz)),
+                derivative=True,
             ),
         )
         for index in range(sample_count)
@@ -1338,6 +1342,53 @@ def _sample_linear_joint_trajectory(
     )
 
 
+def _sample_cubic_hermite_joint_trajectory(
+    q_points: Sequence[tuple[float, ...]],
+    dq_points: Sequence[tuple[float, ...]],
+    *,
+    trajectory_sample_hz: float,
+    sample_time_s: float,
+    derivative: bool,
+) -> tuple[float, ...]:
+    if sample_time_s <= 0.0 or len(q_points) == 1:
+        return tuple(dq_points[0] if derivative else q_points[0])
+    dt_s = 1.0 / float(trajectory_sample_hz)
+    raw_index = sample_time_s * float(trajectory_sample_hz)
+    left_index = min(int(raw_index), len(q_points) - 1)
+    right_index = min(left_index + 1, len(q_points) - 1)
+    if left_index == right_index:
+        return tuple(dq_points[left_index] if derivative else q_points[left_index])
+    s = raw_index - left_index
+    q0 = q_points[left_index]
+    q1 = q_points[right_index]
+    v0 = dq_points[left_index]
+    v1 = dq_points[right_index]
+    if derivative:
+        return tuple(
+            ((6.0 * s * s - 6.0 * s) / dt_s) * left
+            + (3.0 * s * s - 4.0 * s + 1.0) * left_vel
+            + ((-6.0 * s * s + 6.0 * s) / dt_s) * right
+            + (3.0 * s * s - 2.0 * s) * right_vel
+            for left, right, left_vel, right_vel in zip(q0, q1, v0, v1, strict=True)
+        )
+    h00 = 2.0 * s * s * s - 3.0 * s * s + 1.0
+    h10 = s * s * s - 2.0 * s * s + s
+    h01 = -2.0 * s * s * s + 3.0 * s * s
+    h11 = s * s * s - s * s
+    values: list[float] = []
+    for left, right, left_vel, right_vel in zip(q0, q1, v0, v1, strict=True):
+        value = (
+            h00 * left
+            + h10 * dt_s * left_vel
+            + h01 * right
+            + h11 * dt_s * right_vel
+        )
+        lower = min(left, right)
+        upper = max(left, right)
+        values.append(min(max(value, lower), upper))
+    return tuple(values)
+
+
 def _command_runtime_send_hz(
     command: dict[str, object],
     motion: MotionExecutionResult,
@@ -1368,14 +1419,14 @@ def _trajectory_resampling_policy(
         and abs(trajectory_sample_hz - runtime_send_hz) <= 1e-9
     ):
         return "none_sample_hz_matches_send_hz"
-    return "linear_time_resample"
+    return "cubic_hermite_time_resample"
 
 
 def _trajectory_interpolation_policy(*, resampling_policy: str, kind: str) -> str:
     if kind != "trajectory":
         return "linear_intent_frame"
-    if resampling_policy == "linear_time_resample":
-        return "linear_joint_position"
+    if resampling_policy == "cubic_hermite_time_resample":
+        return "bounded_cubic_hermite_joint_position_velocity"
     return "pre_sampled_joint_positions"
 
 

@@ -249,6 +249,7 @@ class MotionGainController:
         self._gain = FakeGain(0.0, 0.0, 0.0, 0.0)
         self.gain_history: list[FakeGain] = []
         self.commands: list[tuple[list[float], float]] = []
+        self.trajectory_batches: list[list[tuple[list[float], float]]] = []
         self.velocity_commands: list[list[float]] = []
         self._current_pos = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
@@ -275,6 +276,11 @@ class MotionGainController:
         self._current_pos = q_cmd
         self.commands.append((q_cmd, float(cmd.timestamp)))
         self.velocity_commands.append(list(cmd.vel()))
+
+    def set_joint_traj(self, trajectory) -> None:
+        batch = [(list(cmd.pos()), float(cmd.timestamp)) for cmd in trajectory]
+        self.trajectory_batches.append(batch)
+        self.set_joint_cmd(trajectory[-1])
 
     def set_to_damping(self) -> None:
         pass
@@ -991,9 +997,15 @@ def test_arx5_backend_restores_motion_gain_and_timestamps_commands_before_stream
     assert controller.gain_history[-1].kp == pytest.approx(120.0)
     assert controller.gain_history[-1].kd == pytest.approx(2.5)
     assert controller.commands[0] == ([1.0, 0.0, 0.0, 0.0, 0.0, 0.0], 10.002)
-    assert controller.commands[1] == ([0.9, 0.1, 0.0, 0.0, 0.0, 0.0], 10.2)
+    assert controller.commands[1][0] == pytest.approx(
+        [0.85, 0.15, 0.0, 0.0, 0.0, 0.0]
+    )
+    assert controller.commands[1][1] == pytest.approx(10.01)
     assert controller.commands[2][0] == [0.8, 0.2, 0.0, 0.0, 0.0, 0.0]
-    assert controller.commands[2][1] == pytest.approx(10.22)
+    assert controller.commands[2][1] == pytest.approx(10.01)
+    assert controller.trajectory_batches == []
+    assert backend.sdk_stream_policy["api"] == "joint_cmd"
+    assert backend.sdk_stream_policy["target_sync_before_gain_restore"] is True
 
 
 def test_arx5_backend_writes_trajectory_velocity_into_sdk_joint_state() -> None:

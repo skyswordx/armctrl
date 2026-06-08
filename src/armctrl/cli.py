@@ -134,7 +134,6 @@ from armctrl.sysid_run import (
     Arx5InterfaceCollectionBackend,
     FakeSysIdRunner,
     SDK_CONFIRMATION,
-    SdkSysIdRunner,
     SdkSysIdRunnerGate,
 )
 from armctrl.sysid_review import SysIdOfflineReviewRequest, SysIdOfflineReviewer
@@ -1008,6 +1007,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     sysid_run_parser.add_argument("--q-center", nargs="+", type=float)
     sysid_run_parser.add_argument("--urdf-path", default="configs/models/X5_camera.urdf")
     sysid_run_parser.add_argument("--safe-config", default="configs/x5.safe.yaml")
+    sysid_run_parser.add_argument("--candidate-trajectory")
     sysid_run_parser.add_argument("--output", required=True)
     sysid_run_parser.add_argument("--confirm")
     sysid_run_parser.add_argument("--readiness-artifact")
@@ -3491,70 +3491,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             payload = _attach_sysid_run_manifest(payload, args.output)
             _emit(payload, as_json=args.as_json)
             return 0
-            request = SysIdPlanRequest(
-                profile_name=args.profile,
-                dof=args.dof,
-                sample_hz=args.sample_hz,
-                duration_s=args.duration,
-                amplitude_rad=args.amplitude,
-                q_center=q_center,
-                urdf_path=args.urdf_path,
-                safe_config_path=args.safe_config,
-                output_dir=Path(args.output),
-            )
-            safe_config = WorkspaceSafetyConfig.from_yaml(Path(args.safe_config))
-            try:
-                result = SdkSysIdRunner(
-                    backend=Arx5InterfaceCollectionBackend(
-                        model=args.model,
-                        interface=args.interface,
-                        max_joint_step_rad=safe_config.max_joint_step_rad,
-                        controller_dt_s=_controller_dt_from_readiness_artifact(
-                            readiness_artifact
-                        ),
-                    )
-                ).run(request, confirm=args.confirm)
-            except ModuleNotFoundError as error:
-                if error.name != "arx5_interface":
-                    raise
-                payload = gate.reject_sdk_unavailable(
-                    adapter=args.adapter,
-                )
-                payload = _attach_sysid_run_manifest(payload, args.output)
-                _emit(payload, as_json=args.as_json)
-                return 3
-            except RuntimeError as error:
-                if str(error) != "planned trajectory did not pass safety checks":
-                    raise
-                payload = gate.reject_unsafe_plan(
-                    adapter=args.adapter,
-                )
-                payload = _attach_sysid_run_manifest(payload, args.output)
-                _emit(payload, as_json=args.as_json)
-                return 3
-            payload = {"status": "ok", **result.to_json()}
-            readiness_summary = _sysid_readiness_summary(
-                readiness_artifact_path=readiness_artifact_path,
-                readiness_artifact=readiness_artifact,
-            )
-            payload["readiness"] = readiness_summary
-            manifest = _attach_sysid_readiness_to_manifest(
-                manifest_path=Path(result.artifacts["manifest"]),
-                readiness_summary=readiness_summary,
-            )
-            if "acceptance" in manifest:
-                payload["acceptance"] = manifest["acceptance"]
-            run_status = payload.get("run_status")
-            if run_status is not None and run_status != "completed":
-                payload["status"] = str(run_status)
-                _emit(payload, as_json=args.as_json)
-                return 3
-            acceptance_status = _nonpassing_acceptance_status(payload)
-            if acceptance_status is not None:
-                payload["status"] = str(acceptance_status)
-                _emit(payload, as_json=args.as_json)
-                return 3
-            return _emit(payload, as_json=args.as_json)
         q_center = tuple(args.q_center or [0.0] * args.dof)
         if len(q_center) != args.dof:
             parser.error("--q-center length must match --dof")

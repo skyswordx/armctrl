@@ -992,7 +992,7 @@ def test_cli_sysid_readiness_accepts_fresh_live_runtime_status(
                 "heartbeat": {
                     "fresh": True,
                     "age_s": 0.01,
-                    "max_age_s": 1.0,
+                    "max_age_s": 5.0,
                     "wall_time_s": time.time(),
                 },
                 "readiness": {
@@ -2427,8 +2427,11 @@ def test_runtime_queue_resamples_trajectory_when_runtime_send_hz_differs(
         expected_q_start=(0.0, 0.3, 0.3),
         q_points=[
             (0.0, 0.3, 0.3),
-            (0.10, 0.3, 0.3),
             (0.20, 0.3, 0.3),
+        ],
+        dq_points=[
+            (0.0, 0.0, 0.0),
+            (0.0, 0.0, 0.0),
         ],
         send_hz=50.0,
         trajectory_sample_hz=10.0,
@@ -2449,11 +2452,16 @@ def test_runtime_queue_resamples_trajectory_when_runtime_send_hz_differs(
     assert result["status"] == "completed"
     assert result["motion"]["trajectory_sample_hz"] == 10.0
     assert result["motion"]["runtime_send_hz"] == 50.0
-    assert result["motion"]["resampling_policy"] == "linear_time_resample"
-    assert result["motion"]["interpolation_policy"] == "linear_joint_position"
-    assert result["motion"]["sample_count"] == 11
+    assert result["motion"]["resampling_policy"] == "cubic_hermite_time_resample"
+    assert (
+        result["motion"]["interpolation_policy"]
+        == "bounded_cubic_hermite_joint_position_velocity"
+    )
+    assert result["motion"]["sample_count"] == 6
     assert result["motion"]["samples"][0]["q_cmd"] == [0.0, 0.3, 0.3]
-    assert result["motion"]["samples"][5]["q_cmd"] == [0.1, 0.3, 0.3]
+    assert result["motion"]["samples"][1]["q_cmd"][0] == pytest.approx(0.0208)
+    assert result["motion"]["samples"][1]["dq_cmd"][0] == pytest.approx(1.92)
+    assert result["motion"]["samples"][3]["q_cmd"][0] == pytest.approx(0.1296)
     assert result["motion"]["samples"][-1]["q_cmd"] == [0.2, 0.3, 0.3]
     assert result["motion"]["send_period_s"]["avg"] == pytest.approx(0.02)
     assert result_artifact["motion"]["runtime_send_hz"] == 50.0

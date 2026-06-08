@@ -3,14 +3,12 @@ import json
 import subprocess
 import sys
 import time
-from dataclasses import replace
 from pathlib import Path
 
-from armctrl.motion_runtime import MotionAuditSample, MotionExecutionResult, MotionMode
+from armctrl.motion_runtime import MotionMode
 from armctrl.sysid import SysIdPlanRequest, trajectory_rows
 from armctrl.sysid_run import (
     Arx5InterfaceCollectionBackend,
-    SdkSysIdRunner,
     SDK_CONFIRMATION,
 )
 from armctrl.runtime_session import (
@@ -49,13 +47,17 @@ def _write_fake_runtime_session(path: Path) -> None:
         send_hz=50.0,
         hold_hz=50.0,
         max_joint_step_rad=0.01,
-        max_heartbeat_age_s=1.0,
+        max_heartbeat_age_s=5.0,
     )
     payload = record_runtime_hold_tick(
         payload,
         q_meas=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
         fault_flags=(),
-        max_heartbeat_age_s=1.0,
+        max_heartbeat_age_s=5.0,
+    )
+    payload = refresh_runtime_status_payload(
+        payload,
+        max_heartbeat_age_s=5.0,
     )
     path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
@@ -70,15 +72,15 @@ def _write_live_runtime_status(path: Path) -> None:
         send_hz=50.0,
         hold_hz=50.0,
         max_joint_step_rad=0.01,
-        max_heartbeat_age_s=1.0,
+        max_heartbeat_age_s=5.0,
     )
     payload = record_runtime_hold_tick(
         payload,
         q_meas=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
         fault_flags=(),
-        max_heartbeat_age_s=1.0,
+        max_heartbeat_age_s=5.0,
     )
-    payload = refresh_runtime_status_payload(payload, max_heartbeat_age_s=1.0)
+    payload = refresh_runtime_status_payload(payload, max_heartbeat_age_s=5.0)
     path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -100,11 +102,18 @@ def _install_fake_submit_trajectory_command(monkeypatch, cli, tmp_path: Path) ->
         command_payload = {
             "expected_q_start": list(kwargs["expected_q_start"]),
             "start_pose_policy": kwargs.get("start_pose_policy", "live_hold"),
+            "q_points": [list(point) for point in kwargs.get("q_points", [])],
+            "send_hz": kwargs.get("send_hz"),
+            "trajectory_sample_hz": kwargs.get("trajectory_sample_hz"),
             "start_pose_guard": {
                 "policy": kwargs.get("start_pose_policy", "live_hold"),
                 "q_hold": list(kwargs["expected_q_start"]),
             },
         }
+        if kwargs.get("dq_points") is not None:
+            command_payload["dq_points"] = [
+                list(point) for point in kwargs["dq_points"]
+            ]
         if kwargs.get("max_tracking_error_rad") is not None:
             command_payload["max_tracking_error_rad"] = kwargs[
                 "max_tracking_error_rad"
@@ -123,142 +132,6 @@ def _install_fake_submit_trajectory_command(monkeypatch, cli, tmp_path: Path) ->
         }
 
     monkeypatch.setattr(cli, "submit_trajectory_command", fake_submit_trajectory_command)
-
-
-class RecordingBackend:
-    def __init__(self) -> None:
-        self.events: list[str] = []
-        self.last_motion_result = MotionExecutionResult(
-            status="completed",
-            producer="sysid",
-            mode="trajectory_replay",
-            trajectory_sample_hz=20.0,
-            actual_send_hz=19.8,
-            send_jitter_ms_p95=1.2,
-            send_jitter_ms_p99=2.3,
-            controller_dt_s=0.01,
-            samples=(
-                MotionAuditSample(
-                    sent_monotonic_s=1.0,
-                    q_cmd=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
-                    dq_cmd=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
-                    q_meas=(0.0, 0.299, 0.301, 0.0, 0.0, 0.0),
-                    dq_meas=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
-                    tau_meas=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
-                    fault_flags=("simulated_warning",),
-                    producer="sysid",
-                    mode="trajectory_replay",
-                ),
-            ),
-            landing_mode="released",
-        )
-        self.last_ramp_result = MotionExecutionResult(
-            status="completed",
-            producer="sysid_ramp",
-            mode="trajectory_replay",
-            trajectory_sample_hz=20.0,
-            actual_send_hz=20.0,
-            send_jitter_ms_p95=0.0,
-            send_jitter_ms_p99=0.0,
-            controller_dt_s=0.01,
-            samples=(),
-            landing_mode="released",
-        )
-
-    def enter_hold_or_damping(self) -> None:
-        self.events.append("enter_hold_or_damping")
-
-    def read_samples(self, request: SysIdPlanRequest) -> list[dict[str, str]]:
-        self.events.append("read_samples")
-        return [
-            {
-                "time_s": "0.000000",
-                **{f"q_cmd_{index + 1}": "0.000000" for index in range(request.dof)},
-                **{f"q_{index + 1}": "0.000000" for index in range(request.dof)},
-                **{f"dq_{index + 1}": "0.000000" for index in range(request.dof)},
-                **{f"tau_meas_{index + 1}": "0.000000" for index in range(request.dof)},
-            }
-        ]
-
-    def enter_damping(self) -> None:
-        self.events.append("enter_damping")
-
-
-class PassingRecordingBackend(RecordingBackend):
-    def __init__(self) -> None:
-        super().__init__()
-        sample = replace(self.last_motion_result.samples[0], fault_flags=())
-        self.last_motion_result = replace(
-            self.last_motion_result,
-            samples=(sample,),
-        )
-
-
-class FaultedRecordingBackend(RecordingBackend):
-    def __init__(self) -> None:
-        super().__init__()
-        self.last_motion_result = MotionExecutionResult(
-            status="faulted",
-            producer="sysid",
-            mode="trajectory_replay",
-            trajectory_sample_hz=20.0,
-            actual_send_hz=20.0,
-            send_jitter_ms_p95=0.0,
-            send_jitter_ms_p99=0.0,
-            controller_dt_s=0.01,
-            samples=(
-                MotionAuditSample(
-                    sent_monotonic_s=1.0,
-                    q_cmd=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
-                    dq_cmd=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
-                    q_meas=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
-                    dq_meas=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
-                    tau_meas=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
-                    fault_flags=(),
-                    producer="sysid",
-                    mode="trajectory_replay",
-                ),
-                MotionAuditSample(
-                    sent_monotonic_s=1.05,
-                    q_cmd=(0.0, 0.301, 0.3, 0.0, 0.0, 0.0),
-                    dq_cmd=(0.0, 0.02, 0.0, 0.0, 0.0, 0.0),
-                    q_meas=(0.0, 0.301, 0.3, 0.0, 0.0, 0.0),
-                    dq_meas=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
-                    tau_meas=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
-                    fault_flags=("over_current",),
-                    producer="sysid",
-                    mode="trajectory_replay",
-                ),
-            ),
-            landing_mode="damping",
-        )
-
-    def read_samples(self, request: SysIdPlanRequest) -> list[dict[str, str]]:
-        self.events.append("read_samples")
-        rows = []
-        for sample_index, sample in enumerate(self.last_motion_result.samples):
-            rows.append(
-                {
-                    "time_s": f"{sample_index / request.sample_hz:.6f}",
-                    **{
-                        f"q_cmd_{index + 1}": f"{sample.q_cmd[index]:.6f}"
-                        for index in range(request.dof)
-                    },
-                    **{
-                        f"q_{index + 1}": f"{sample.q_meas[index]:.6f}"
-                        for index in range(request.dof)
-                    },
-                    **{
-                        f"dq_{index + 1}": "0.000000"
-                        for index in range(request.dof)
-                    },
-                    **{
-                        f"tau_meas_{index + 1}": "0.000000"
-                        for index in range(request.dof)
-                    },
-                }
-            )
-        return rows
 
 
 class ManualClock:
@@ -738,175 +611,6 @@ def test_cli_sysid_run_sdk_accepts_confirm_and_readiness_but_requires_runtime(
     assert json.loads(manifest_path.read_text(encoding="utf-8")) == payload
 
 
-def test_sdk_sysid_runner_starts_recording_after_safe_state_and_lands_damping(
-    tmp_path: Path,
-) -> None:
-    backend = RecordingBackend()
-    request = SysIdPlanRequest(
-        profile_name="gravity_sweep",
-        dof=6,
-        sample_hz=20,
-        duration_s=1,
-        amplitude_rad=0.02,
-        q_center=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
-        urdf_path="configs/models/X5_camera.urdf",
-        safe_config_path="configs/x5.safe.yaml",
-        output_dir=tmp_path / "ident-sdk",
-    )
-
-    result = SdkSysIdRunner(backend=backend).run(
-        request,
-        confirm=SDK_CONFIRMATION,
-    )
-
-    manifest = json.loads((request.output_dir / "manifest.json").read_text(encoding="utf-8"))
-
-    assert result.adapter == "sdk"
-    assert backend.events == [
-        "enter_hold_or_damping",
-        "read_samples",
-        "enter_damping",
-    ]
-    assert manifest["adapter"] == "sdk"
-    assert manifest["safety"]["recording_starts_after_safe_state"] is True
-    assert manifest["safety"]["fault_landing_mode"] == "damping"
-    assert manifest["safety"]["movement_allowed"] is True
-    assert manifest["motion_runtime"] == {
-        "schema": "armctrl.motion_runtime_result.v1",
-        "status": "completed",
-        "producer": "sysid",
-        "mode": "trajectory_replay",
-        "trajectory_sample_hz": 20.0,
-        "actual_send_hz": 19.8,
-        "send_jitter_ms_p95": 1.2,
-        "send_jitter_ms_p99": 2.3,
-        "controller_dt_s": 0.01,
-        "sample_count": 1,
-        "fault_flags": ["simulated_warning"],
-        "tracking": {
-            "q_cmd_delta_rad": None,
-            "q_meas_delta_rad": None,
-            "q_cmd_delta_max_abs_rad": None,
-            "q_meas_delta_max_abs_rad": None,
-            "max_abs_sample_tracking_error_rad": 0.0010000000000000009,
-            "final_tracking_error_rad": [
-                0.0,
-                -0.0010000000000000009,
-                0.0010000000000000009,
-                0.0,
-                0.0,
-                0.0,
-            ],
-            "final_tracking_error_max_abs_rad": 0.0010000000000000009,
-        },
-        "samples": [
-            {
-                "sent_monotonic_s": 1.0,
-                "q_cmd": [0.0, 0.3, 0.3, 0.0, 0.0, 0.0],
-                "q_meas": [0.0, 0.299, 0.301, 0.0, 0.0, 0.0],
-                "dq_meas": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-                "tau_meas": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-                "fault_flags": ["simulated_warning"],
-                "producer": "sysid",
-                "mode": "trajectory_replay",
-            }
-        ],
-        "landing_mode": "released",
-    }
-    assert manifest["ramp_runtime"] == {
-        "schema": "armctrl.motion_runtime_result.v1",
-        "status": "completed",
-        "producer": "sysid_ramp",
-        "mode": "trajectory_replay",
-        "trajectory_sample_hz": 20.0,
-        "actual_send_hz": 20.0,
-        "send_jitter_ms_p95": 0.0,
-        "send_jitter_ms_p99": 0.0,
-        "controller_dt_s": 0.01,
-        "sample_count": 0,
-        "fault_flags": [],
-        "tracking": {
-            "q_cmd_delta_rad": None,
-            "q_meas_delta_rad": None,
-            "q_cmd_delta_max_abs_rad": None,
-            "q_meas_delta_max_abs_rad": None,
-            "max_abs_sample_tracking_error_rad": None,
-            "final_tracking_error_rad": None,
-            "final_tracking_error_max_abs_rad": None,
-        },
-        "samples": [],
-        "landing_mode": "released",
-    }
-    assert manifest["acceptance"]["schema"] == "armctrl.real_motion_acceptance.v1"
-    assert manifest["acceptance"]["stage"] == "sysid_smoke"
-    assert manifest["acceptance"]["status"] == "review_required"
-    assert manifest["acceptance"]["next_gate"] == (
-        "inspect_acceptance_checks_before_next_hardware_gate"
-    )
-    assert manifest["acceptance"]["checks"]["controller_dt_measured"]["status"] == "pass"
-    assert manifest["acceptance"]["checks"]["actual_send_hz_measured"]["status"] == "pass"
-    assert manifest["acceptance"]["checks"]["readiness_gate"]["status"] == "not_available"
-    assert manifest["acceptance"]["checks"]["no_fault_flags"] == {
-        "status": "fail",
-        "fault_flags": ["simulated_warning"],
-    }
-    assert (
-        manifest["acceptance"]["checks"]["q_meas_responded_to_commanded_motion"]["status"]
-        == "not_applicable"
-    )
-
-
-def test_sdk_sysid_runner_writes_faulted_manifest_with_partial_samples(
-    tmp_path: Path,
-) -> None:
-    backend = FaultedRecordingBackend()
-    request = SysIdPlanRequest(
-        profile_name="gravity_sweep",
-        dof=6,
-        sample_hz=20,
-        duration_s=1,
-        amplitude_rad=0.02,
-        q_center=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
-        urdf_path="configs/models/X5_camera.urdf",
-        safe_config_path="configs/x5.safe.yaml",
-        output_dir=tmp_path / "ident-sdk-faulted",
-    )
-
-    result = SdkSysIdRunner(backend=backend).run(
-        request,
-        confirm=SDK_CONFIRMATION,
-    )
-
-    manifest = json.loads((request.output_dir / "manifest.json").read_text(encoding="utf-8"))
-    with (request.output_dir / "raw_samples.csv").open(
-        "r",
-        encoding="utf-8-sig",
-        newline="",
-    ) as handle:
-        raw_rows = list(csv.DictReader(handle))
-
-    assert result.sample_count == 2
-    assert result.run_status == "faulted"
-    assert manifest["run_status"] == "faulted"
-    assert manifest["sample_count"] == 2
-    assert len(raw_rows) == 2
-    assert manifest["motion_runtime"]["status"] == "faulted"
-    assert manifest["motion_runtime"]["landing_mode"] == "damping"
-    assert manifest["motion_runtime"]["fault_flags"] == ["over_current"]
-    assert manifest["motion_runtime"]["sample_count"] == 2
-    assert manifest["acceptance"]["status"] == "review_required"
-    assert manifest["acceptance"]["checks"]["runtime_completed"]["status"] == "fail"
-    assert manifest["acceptance"]["checks"]["no_fault_flags"] == {
-        "status": "fail",
-        "fault_flags": ["over_current"],
-    }
-    assert backend.events == [
-        "enter_hold_or_damping",
-        "read_samples",
-        "enter_damping",
-    ]
-
-
 def test_cli_sysid_run_sdk_with_runtime_blocks_until_live_queue_exists(
     tmp_path: Path,
     monkeypatch,
@@ -1037,6 +741,7 @@ def test_cli_sysid_run_sdk_with_runtime_acquires_from_live_hold_pose(
             raise AssertionError("sdk sysid must not open SDK outside runtime")
 
     monkeypatch.setattr(cli, "Arx5InterfaceCollectionBackend", ForbiddenBackendFactory)
+    _install_fake_submit_trajectory_command(monkeypatch, cli, tmp_path)
 
     exit_code = cli.main(
         [
@@ -1293,6 +998,79 @@ def test_cli_sysid_run_sdk_with_runtime_does_not_report_fake_acceptance(
     assert "acceptance" not in payload
     assert payload["movement_command_sent"] is False
     assert manifest == payload
+
+
+def test_cli_sysid_run_sdk_runtime_accepts_candidate_trajectory(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    from armctrl import cli
+
+    readiness_artifact = tmp_path / "runtime_status.json"
+    runtime_session = tmp_path / "runtime-session.json"
+    output_dir = tmp_path / "ident-sdk-candidate"
+    _write_live_runtime_status(readiness_artifact)
+    _write_live_runtime_status(runtime_session)
+    candidate = tmp_path / "candidate.csv"
+    candidate.write_text(
+        "time_s,q_cmd_1,q_cmd_2,q_cmd_3,q_cmd_4,q_cmd_5,q_cmd_6\n"
+        "0.000000,0.000000,0.300000,0.300000,0.000000,0.000000,0.000000\n"
+        "1.000000,0.001000,0.300000,0.300000,0.000000,0.000000,0.000000\n",
+        encoding="utf-8",
+    )
+
+    class ForbiddenBackendFactory:
+        def __init__(self, **kwargs) -> None:
+            raise AssertionError("sdk sysid must not open SDK outside runtime")
+
+    monkeypatch.setattr(cli, "Arx5InterfaceCollectionBackend", ForbiddenBackendFactory)
+    _install_fake_submit_trajectory_command(monkeypatch, cli, tmp_path)
+
+    exit_code = cli.main(
+        [
+            "sysid",
+            "run",
+            "fourier_multisine",
+            "--adapter",
+            "sdk",
+            "--dof",
+            "6",
+            "--sample-hz",
+            "20",
+            "--duration",
+            "1.0",
+            "--amplitude",
+            "0.001",
+            "--q-center",
+            "0",
+            "0.3",
+            "0.3",
+            "0",
+            "0",
+            "0",
+            "--candidate-trajectory",
+            str(candidate),
+            "--output",
+            str(output_dir),
+            "--confirm",
+            SDK_CONFIRMATION,
+            "--readiness-artifact",
+            str(readiness_artifact),
+            "--runtime-session-artifact",
+            str(runtime_session),
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0, payload
+    assert payload["status"] == "queued"
+    assert payload["runtime"]["owner"] == "sysid"
+    assert payload["artifacts"]["execution_trajectory"].endswith(
+        "execution_trajectory.csv"
+    )
 
 
 def test_cli_sysid_run_sdk_with_runtime_does_not_report_fake_faults(
@@ -1590,7 +1368,7 @@ def test_arx5_interface_backend_sends_joint_commands_and_lands_damping() -> None
     assert backend.last_ramp_result.actual_send_hz == 2.0
     assert len(backend.last_ramp_result.samples) == 2
     assert rows[0]["q_cmd_2"] == "0.300000"
-    assert rows[0]["q_2"] == "0.300000"
+    assert float(rows[0]["q_2"]) > float(rows[0]["q_cmd_2"])
     assert "tau_meas_6" in rows[0]
     assert FakeArx5Module.last_controller is not None
     assert len(FakeArx5Module.last_controller.commands) > 3

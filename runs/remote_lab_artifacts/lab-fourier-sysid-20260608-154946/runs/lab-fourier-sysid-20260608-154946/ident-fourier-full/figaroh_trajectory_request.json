@@ -1,0 +1,211 @@
+{
+  "schema": "armctrl.figaroh_optimal_trajectory_request.v1",
+  "profile": "fourier_multisine",
+  "model": {
+    "urdf_path": "configs/models/X5_camera.urdf",
+    "dof": 6,
+    "active_joints": [
+      "joint1",
+      "joint2",
+      "joint3",
+      "joint4",
+      "joint5",
+      "joint6"
+    ]
+  },
+  "sampling": {
+    "sample_hz": 100.0,
+    "planning_sample_hz": 100.0,
+    "execution_sample_hz": 100.0,
+    "duration_s": 1.95,
+    "requested_sample_count": 196,
+    "effective_duration_s": 1.95,
+    "effective_sample_count": 196,
+    "execution_sample_count": 196,
+    "sample_count": 196
+  },
+  "seed": {
+    "q_center": [
+      0.315,
+      0.6375,
+      0.4875,
+      -0.22499999999999998,
+      0.31500000000000006,
+      0.22499999999999998
+    ],
+    "amplitude_rad": 0.8
+  },
+  "constraints": {
+    "safe_config_path": "configs/x5.safe.yaml",
+    "urdf_limits": true,
+    "workspace_gate": true,
+    "collision_gate": true,
+    "torque_gate": true,
+    "max_joint_step_rad": 0.02,
+    "derived_velocity_limit_rad_s": null,
+    "oed_velocity_limit_source": "profile_oed_velocity_limits_rad_s",
+    "joint_limits_rad": [
+      [
+        -0.485,
+        1.115
+      ],
+      [
+        0.0,
+        1.4375
+      ],
+      [
+        0.0,
+        1.2875
+      ],
+      [
+        -1.025,
+        0.575
+      ],
+      [
+        -0.485,
+        1.115
+      ],
+      [
+        -0.575,
+        1.025
+      ]
+    ],
+    "velocity_limits_rad_s": [
+      [
+        -2.0,
+        2.0
+      ],
+      [
+        -1.4,
+        1.4
+      ],
+      [
+        -1.4,
+        1.4
+      ],
+      [
+        -2.0,
+        2.0
+      ],
+      [
+        -2.0,
+        2.0
+      ],
+      [
+        -2.0,
+        2.0
+      ]
+    ],
+    "acceleration_limits_rad_s2": [
+      [
+        -30.0,
+        30.0
+      ],
+      [
+        -30.0,
+        30.0
+      ],
+      [
+        -30.0,
+        30.0
+      ],
+      [
+        -30.0,
+        30.0
+      ],
+      [
+        -30.0,
+        30.0
+      ],
+      [
+        -30.0,
+        30.0
+      ]
+    ],
+    "effort_limits_nm": [
+      [
+        -100.0,
+        100.0
+      ],
+      [
+        -100.0,
+        100.0
+      ],
+      [
+        -30.0,
+        30.0
+      ],
+      [
+        -30.0,
+        30.0
+      ],
+      [
+        -100.0,
+        100.0
+      ],
+      [
+        -100.0,
+        100.0
+      ]
+    ],
+    "profile_safety": {
+      "profile_name": "fourier_multisine",
+      "max_sysid_amplitude_rad": 0.8,
+      "max_joint_step_rad": 0.02,
+      "oed_velocity_limits_rad_s": [
+        2.0,
+        1.4,
+        1.4,
+        2.0,
+        2.0,
+        2.0
+      ],
+      "oed_acceleration_limits_rad_s2": [
+        30.0,
+        30.0,
+        30.0,
+        30.0,
+        30.0,
+        30.0
+      ]
+    },
+    "joint_relation_constraints": []
+  },
+  "figaroh": {
+    "class": "figaroh.optimal.BaseOptimalTrajectory",
+    "objective": "condition_number(base_regressor)",
+    "parameterization": "cubic_spline",
+    "constraint_manager": "figaroh.optimal.contraints.TrajectoryConstraintManager",
+    "timing": {
+      "planning_sample_hz": 100.0,
+      "planning_sample_period_s": 0.01,
+      "execution_sample_hz": 100.0,
+      "execution_sample_period_s": 0.01,
+      "n_wps": 5,
+      "stack_reps": 1,
+      "requested_duration_s": 1.95,
+      "requested_segment_duration_s": 1.95,
+      "minimum_waypoint_duration_s": 0.0,
+      "waypoint_duration_s": 0.4875,
+      "segment_duration_s": 1.95,
+      "effective_duration_s": 1.95,
+      "duration_adjusted_for_safety": false,
+      "duration_adjustment_reason": "requested_duration_satisfied"
+    },
+    "optimizer": {
+      "ipopt_max_iterations": 200,
+      "ipopt_print_level": 7,
+      "random_seed": 1
+    },
+    "quality_gate": {
+      "condition_number_threshold": 1000.0
+    },
+    "expected_outputs": [
+      "optimized_waypoints",
+      "planned_trajectory",
+      "base_regressor_condition_number",
+      "rank"
+    ]
+  },
+  "armctrl_boundary": "armctrl writes this request, runs safety gates on returned trajectory, and records evidence; FIGAROH/Pinocchio own OED/regressor math"
+}

@@ -6,9 +6,7 @@ import importlib
 import json
 import math
 import time
-from typing import Protocol
 
-from armctrl.acceptance import build_real_motion_acceptance
 from armctrl.motion_runtime import (
     JointStateSnapshot,
     JointTrajectoryPoint,
@@ -23,6 +21,7 @@ from armctrl.runtime_session import (
 from armctrl.sysid import SysIdPlanRequest, SysIdPlanner, trajectory_rows
 
 SDK_CONFIRMATION = "I UNDERSTAND THIS WILL MOVE THE ARM"
+SDK_STREAM_APIS = {"joint_cmd", "rolling_traj"}
 
 
 @dataclass(frozen=True)
@@ -131,100 +130,6 @@ class FakeSysIdRunner:
         )
 
 
-class SdkCollectionBackend(Protocol):
-    def enter_hold_or_damping(self) -> None:
-        ...
-
-    def read_samples(self, request: SysIdPlanRequest) -> list[dict[str, str]]:
-        ...
-
-    def enter_damping(self) -> None:
-        ...
-
-
-class SdkSysIdRunner:
-    def __init__(self, *, backend: SdkCollectionBackend) -> None:
-        self._backend = backend
-
-    def run(self, request: SysIdPlanRequest, *, confirm: str) -> SysIdRunResult:
-        if confirm != SDK_CONFIRMATION:
-            raise PermissionError("sdk sysid runner requires explicit operator confirmation")
-        request.output_dir.mkdir(parents=True, exist_ok=True)
-        raw_samples_path = request.output_dir / "raw_samples.csv"
-        manifest_path = request.output_dir / "manifest.json"
-        plan = SysIdPlanner.default().write_plan(request)
-        if not (plan.artifact_safety or {}).get("allowed", False):
-            raise RuntimeError("planned trajectory did not pass safety checks")
-
-        self._backend.enter_hold_or_damping()
-        try:
-            raw_rows = self._backend.read_samples(request)
-        finally:
-            self._backend.enter_damping()
-
-        with raw_samples_path.open("w", newline="", encoding="utf-8") as file:
-            writer = csv.DictWriter(file, fieldnames=list(raw_rows[0]))
-            writer.writeheader()
-            writer.writerows(raw_rows)
-
-        manifest = {
-            "schema": "armctrl.sysid_run_manifest.v1",
-            "adapter": "sdk",
-            "run_status": _sdk_run_status_from_backend(self._backend),
-            "profile": plan.profile.to_json(),
-            "request": {
-                "dof": request.dof,
-                "sample_hz": request.sample_hz,
-                "duration_s": request.duration_s,
-                "amplitude_rad": request.amplitude_rad,
-                "q_center": list(request.q_center),
-                "urdf_path": request.urdf_path,
-                "safe_config_path": request.safe_config_path,
-            },
-            "sample_count": len(raw_rows),
-            "handoff": plan.handoff,
-            "artifacts": {
-                "planned_trajectory": plan.artifacts["planned_trajectory"],
-                "raw_samples": str(raw_samples_path),
-                "manifest": str(manifest_path),
-            },
-            "plan_safety": plan.artifact_safety,
-            "safety": {
-                "requires_confirm": SDK_CONFIRMATION,
-                "movement_allowed": True,
-                "recording_starts_after_safe_state": True,
-                "fault_landing_mode": "damping",
-            },
-        }
-        motion_result = getattr(self._backend, "last_motion_result", None)
-        if motion_result is not None:
-            manifest["motion_runtime"] = _motion_runtime_manifest(motion_result)
-            manifest["acceptance"] = build_real_motion_acceptance(
-                stage="sysid_smoke",
-                motion_runtime=manifest["motion_runtime"],
-                hardware_motion=True,
-                movement_command_sent=True,
-            )
-        ramp_result = getattr(self._backend, "last_ramp_result", None)
-        if ramp_result is not None:
-            manifest["ramp_runtime"] = _motion_runtime_manifest(ramp_result)
-        manifest_path.write_text(
-            json.dumps(manifest, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        return SysIdRunResult(
-            schema="armctrl.sysid_run.v1",
-            adapter="sdk",
-            sample_count=len(raw_rows),
-            artifacts={
-                "planned_trajectory": plan.artifacts["planned_trajectory"],
-                "raw_samples": str(raw_samples_path),
-                "manifest": str(manifest_path),
-            },
-            run_status=str(manifest["run_status"]),
-        )
-
-
 class Arx5InterfaceCollectionBackend:
     def __init__(
         self,
@@ -239,6 +144,7 @@ class Arx5InterfaceCollectionBackend:
         start_delay_s: float = 0.20,
         resume_gain_duration_s: float = 0.4,
         shutdown_to_passive: bool | None = None,
+        sdk_stream_api: str = "joint_cmd",
     ) -> None:
         self._model = model
         self._interface = interface
@@ -256,9 +162,16 @@ class Arx5InterfaceCollectionBackend:
         self._start_delay_s = float(start_delay_s)
         self._resume_gain_duration_s = float(resume_gain_duration_s)
         self._shutdown_to_passive = shutdown_to_passive
+        if sdk_stream_api not in SDK_STREAM_APIS:
+            raise ValueError(
+                "sdk_stream_api must be one of: " + ", ".join(sorted(SDK_STREAM_APIS))
+            )
+        self._sdk_stream_api = sdk_stream_api
         self._controller = None
         self._controller_dt_s: float | None = None
-        self._stream_base_timestamp_s = 0.0
+        self._stream_preview_s = 0.04
+        self._stream_effective_preview_s = 0.04
+        self._stream_points: list[JointTrajectoryPoint] = []
         self._stream_started = False
         self.last_ramp_result: MotionExecutionResult | None = None
         self.last_motion_result: MotionExecutionResult | None = None
@@ -291,6 +204,10 @@ class Arx5InterfaceCollectionBackend:
             controller_config,
             self._interface,
         )
+        self._stream_preview_s = _sdk_command_preview_s(
+            controller_config,
+            controller_dt_s=float(controller_dt_s),
+        )
 
     def read_samples(self, request: SysIdPlanRequest) -> list[dict[str, str]]:
         if self._controller is None:
@@ -310,6 +227,7 @@ class Arx5InterfaceCollectionBackend:
                 JointTrajectoryPoint(
                     time_s=float(planned["time_s"]),
                     q=_q_cmd_from_plan(request, planned),
+                    dq=_dq_cmd_from_plan(request, planned),
                 )
                 for planned in planned_rows
             ],
@@ -333,6 +251,17 @@ class Arx5InterfaceCollectionBackend:
     def controller_dt_s(self) -> float | None:
         return self._controller_dt_s
 
+    @property
+    def sdk_stream_policy(self) -> dict[str, object]:
+        return {
+            "api": self._sdk_stream_api,
+            "timestamp_policy": "sdk_now_plus_effective_preview",
+            "preview_s": self._stream_preview_s,
+            "effective_preview_s": self._stream_effective_preview_s,
+            "target_sync_before_gain_restore": True,
+            "position_preview_interpolation": "bounded_cubic_hermite_when_dq_available_else_linear",
+        }
+
     def send_joint_command(
         self,
         q: tuple[float, ...],
@@ -348,23 +277,30 @@ class Arx5InterfaceCollectionBackend:
         if not self._stream_started:
             self.begin_joint_trajectory([JointTrajectoryPoint(time_s=0.0, q=q)])
         point_time_s = float(trajectory_time_s) if trajectory_time_s is not None else 0.0
+        q_to_send, dq_to_send = self._stream_command_at(point_time_s, q=q, dq=dq)
+        get_timestamp = getattr(self._controller, "get_timestamp", None)
+        sdk_now_s = float(get_timestamp()) if callable(get_timestamp) else 0.0
         cmd = self._joint_state_from_positions_tuple(
-            q,
-            timestamp_s=self._stream_base_timestamp_s + max(0.0, point_time_s),
-            dq_cmd=dq,
+            q_to_send,
+            timestamp_s=sdk_now_s + self._stream_effective_preview_s,
+            dq_cmd=dq_to_send,
         )
-        self._controller.set_joint_cmd(cmd)
+        self._set_joint_stream_cmd(cmd)
 
     def begin_joint_trajectory(self, points: list[JointTrajectoryPoint]) -> None:
         if self._controller is None:
             raise RuntimeError("sdk controller is not initialized")
         if not points:
             return
-        self._ensure_motion_gain()
+        self._stream_points = list(points)
+        self._stream_effective_preview_s = _effective_stream_preview_s(
+            self._stream_preview_s,
+            points=self._stream_points,
+        )
+        # Match the stable teleop takeover pattern: first align the SDK target
+        # with measured q while gains are still passive, then restore motion gain.
         self._sync_joint_target_to_current_state()
-        get_timestamp = getattr(self._controller, "get_timestamp", None)
-        sdk_now_s = float(get_timestamp()) if callable(get_timestamp) else 0.0
-        self._stream_base_timestamp_s = sdk_now_s + self._start_delay_s
+        self._ensure_motion_gain()
         self._stream_started = True
 
     def hold(self) -> str:
@@ -579,6 +515,39 @@ class Arx5InterfaceCollectionBackend:
         self._controller.set_joint_cmd(cmd)
         self._sleep(controller_dt_s)
 
+    def _stream_command_at(
+        self,
+        point_time_s: float,
+        *,
+        q: tuple[float, ...],
+        dq: tuple[float, ...] | None,
+    ) -> tuple[tuple[float, ...], tuple[float, ...] | None]:
+        if not self._stream_points:
+            return tuple(float(value) for value in q), dq
+        sample_time_s = max(0.0, float(point_time_s) + self._stream_effective_preview_s)
+        q_to_send = _sample_joint_trajectory_q_points(
+            self._stream_points,
+            sample_time_s=sample_time_s,
+            fallback=tuple(float(value) for value in q),
+        )
+        dq_to_send = _sample_joint_trajectory_points(
+            self._stream_points,
+            sample_time_s=sample_time_s,
+            field="dq",
+            fallback=dq,
+        )
+        return q_to_send, dq_to_send
+
+    def _set_joint_stream_cmd(self, cmd) -> None:
+        if self._sdk_stream_api == "joint_cmd":
+            self._controller.set_joint_cmd(cmd)
+            return
+        set_joint_traj = getattr(self._controller, "set_joint_traj", None)
+        if callable(set_joint_traj):
+            set_joint_traj([cmd])
+            return
+        raise RuntimeError("sdk_stream_api=rolling_traj requires set_joint_traj")
+
     def _rows_from_motion_result(
         self,
         request: SysIdPlanRequest,
@@ -631,6 +600,147 @@ def _positive_float_or_none(value: object) -> float | None:
     return parsed
 
 
+def _sdk_command_preview_s(controller_config: object, *, controller_dt_s: float) -> float:
+    preview_s = _positive_float_or_none(
+        _sdk_attr_value(controller_config, "default_preview_time")
+    )
+    if preview_s is not None:
+        return preview_s
+    return max(0.04, float(controller_dt_s) * 5.0)
+
+
+def _effective_stream_preview_s(
+    preview_s: float,
+    *,
+    points: list[JointTrajectoryPoint],
+) -> float:
+    if len(points) < 2:
+        return max(0.0, float(preview_s))
+    duration_s = max(0.0, float(points[-1].time_s) - float(points[0].time_s))
+    if duration_s <= 0.0:
+        return max(0.0, float(preview_s))
+    return max(0.0, min(float(preview_s), duration_s * 0.5))
+
+
+def _sample_joint_trajectory_points(
+    points: list[JointTrajectoryPoint],
+    *,
+    sample_time_s: float,
+    field: str,
+    fallback: tuple[float, ...] | None,
+) -> tuple[float, ...] | None:
+    if not points:
+        return fallback
+    values = [getattr(point, field) for point in points]
+    if any(value is None for value in values):
+        return fallback
+    if len(points) == 1 or sample_time_s <= float(points[0].time_s):
+        return tuple(float(value) for value in values[0])
+    if sample_time_s >= float(points[-1].time_s):
+        return tuple(float(value) for value in values[-1])
+    for left_point, right_point, left_value, right_value in zip(
+        points,
+        points[1:],
+        values,
+        values[1:],
+        strict=True,
+    ):
+        left_time_s = float(left_point.time_s)
+        right_time_s = float(right_point.time_s)
+        if right_time_s < sample_time_s:
+            continue
+        if right_time_s <= left_time_s:
+            return tuple(float(value) for value in right_value)
+        ratio = (sample_time_s - left_time_s) / (right_time_s - left_time_s)
+        return tuple(
+            float(left) + (float(right) - float(left)) * ratio
+            for left, right in zip(left_value, right_value, strict=True)
+        )
+    return tuple(float(value) for value in values[-1])
+
+
+def _sample_joint_trajectory_q_points(
+    points: list[JointTrajectoryPoint],
+    *,
+    sample_time_s: float,
+    fallback: tuple[float, ...],
+) -> tuple[float, ...]:
+    if not points:
+        return fallback
+    if any(point.dq is None for point in points):
+        return _sample_joint_trajectory_points(
+            points,
+            sample_time_s=sample_time_s,
+            field="q",
+            fallback=fallback,
+        ) or fallback
+    q_points = [tuple(float(value) for value in point.q) for point in points]
+    dq_points = [
+        tuple(float(value) for value in point.dq or ())
+        for point in points
+    ]
+    if any(len(dq) != len(q) for q, dq in zip(q_points, dq_points, strict=True)):
+        return _sample_joint_trajectory_points(
+            points,
+            sample_time_s=sample_time_s,
+            field="q",
+            fallback=fallback,
+        ) or fallback
+    return _sample_cubic_hermite_points(
+        q_points,
+        dq_points,
+        point_times=[float(point.time_s) for point in points],
+        sample_time_s=sample_time_s,
+        fallback=fallback,
+    )
+
+
+def _sample_cubic_hermite_points(
+    q_points: list[tuple[float, ...]],
+    dq_points: list[tuple[float, ...]],
+    *,
+    point_times: list[float],
+    sample_time_s: float,
+    fallback: tuple[float, ...],
+) -> tuple[float, ...]:
+    if not q_points or len(q_points) != len(dq_points) or len(q_points) != len(point_times):
+        return fallback
+    if len(q_points) == 1 or sample_time_s <= point_times[0]:
+        return tuple(q_points[0])
+    if sample_time_s >= point_times[-1]:
+        return tuple(q_points[-1])
+    for index in range(len(q_points) - 1):
+        left_time_s = point_times[index]
+        right_time_s = point_times[index + 1]
+        if right_time_s < sample_time_s:
+            continue
+        if right_time_s <= left_time_s:
+            return tuple(q_points[index + 1])
+        s = (sample_time_s - left_time_s) / (right_time_s - left_time_s)
+        dt_s = right_time_s - left_time_s
+        h00 = 2.0 * s * s * s - 3.0 * s * s + 1.0
+        h10 = s * s * s - 2.0 * s * s + s
+        h01 = -2.0 * s * s * s + 3.0 * s * s
+        h11 = s * s * s - s * s
+        values: list[float] = []
+        for left, right, left_vel, right_vel in zip(
+            q_points[index],
+            q_points[index + 1],
+            dq_points[index],
+            dq_points[index + 1],
+            strict=True,
+        ):
+            value = (
+                h00 * left
+                + h10 * dt_s * left_vel
+                + h01 * right
+                + h11 * dt_s * right_vel
+            )
+            values.append(min(max(value, min(left, right)), max(left, right)))
+        return tuple(values)
+    return tuple(q_points[-1])
+
+
 def _sdk_attr_value(source: object, name: str):
     try:
         value = getattr(source, name)
@@ -674,13 +784,6 @@ def _float_tuple_or_none(value: object) -> tuple[float, ...] | None:
         except (TypeError, ValueError):
             return None
     return tuple(values)
-
-
-def _sdk_run_status_from_backend(backend: SdkCollectionBackend) -> str:
-    motion_result = getattr(backend, "last_motion_result", None)
-    if isinstance(motion_result, MotionExecutionResult):
-        return motion_result.status
-    return "completed"
 
 
 def _fault_flags_from_sources(*sources: object) -> tuple[str, ...]:
@@ -736,6 +839,16 @@ def _q_cmd_from_plan(
         float(planned[f"q_cmd_{joint_index + 1}"])
         for joint_index in range(request.dof)
     )
+
+
+def _dq_cmd_from_plan(
+    request: SysIdPlanRequest,
+    planned: dict[str, str],
+) -> tuple[float, ...] | None:
+    keys = [f"dq_cmd_{joint_index + 1}" for joint_index in range(request.dof)]
+    if not all(key in planned for key in keys):
+        return None
+    return tuple(float(planned[key]) for key in keys)
 
 
 def _motion_runtime_manifest(result: MotionExecutionResult) -> dict[str, object]:
@@ -885,7 +998,7 @@ class SdkSysIdRunnerGate:
             "movement_allowed": False,
             "fault_landing_mode": "damping",
             "recording_starts_after_safe_state": True,
-            "next_gate": "implement and verify an arx5_interface SdkCollectionBackend before moving hardware",
+            "next_gate": "start live arm runtime and submit SysID through the owner queue",
         }
 
     def reject_without_readiness_artifact(self, *, adapter: str) -> dict[str, object]:
