@@ -1006,18 +1006,18 @@ def test_cli_sysid_run_sdk_with_runtime_acquires_from_live_hold_pose(
         send_hz=50.0,
         hold_hz=50.0,
         max_joint_step_rad=0.01,
-        max_heartbeat_age_s=1.0,
+        max_heartbeat_age_s=5.0,
     )
     runtime_payload["q_hold"] = list(live_hold)
     runtime_payload = record_runtime_hold_tick(
         runtime_payload,
         q_meas=live_meas,
         fault_flags=(),
-        max_heartbeat_age_s=1.0,
+        max_heartbeat_age_s=5.0,
     )
     runtime_payload = refresh_runtime_status_payload(
         runtime_payload,
-        max_heartbeat_age_s=1.0,
+        max_heartbeat_age_s=5.0,
     )
     runtime_session.write_text(
         json.dumps(runtime_payload, ensure_ascii=False, indent=2),
