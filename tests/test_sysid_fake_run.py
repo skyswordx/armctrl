@@ -2,6 +2,7 @@ import csv
 import json
 import subprocess
 import sys
+import time
 from dataclasses import replace
 from pathlib import Path
 
@@ -1019,6 +1020,9 @@ def test_cli_sysid_run_sdk_with_runtime_acquires_from_live_hold_pose(
         runtime_payload,
         max_heartbeat_age_s=5.0,
     )
+    future_wall_time_s = time.time() + 60.0
+    runtime_payload["heartbeat"]["wall_time_s"] = future_wall_time_s
+    runtime_payload["last_hold_wall_time_s"] = future_wall_time_s
     runtime_session.write_text(
         json.dumps(runtime_payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
