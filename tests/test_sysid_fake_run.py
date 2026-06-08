@@ -140,6 +140,7 @@ class RecordingBackend:
                 MotionAuditSample(
                     sent_monotonic_s=1.0,
                     q_cmd=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
+                    dq_cmd=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
                     q_meas=(0.0, 0.299, 0.301, 0.0, 0.0, 0.0),
                     dq_meas=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
                     tau_meas=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
@@ -208,6 +209,7 @@ class FaultedRecordingBackend(RecordingBackend):
                 MotionAuditSample(
                     sent_monotonic_s=1.0,
                     q_cmd=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
+                    dq_cmd=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
                     q_meas=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
                     dq_meas=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
                     tau_meas=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
@@ -218,6 +220,7 @@ class FaultedRecordingBackend(RecordingBackend):
                 MotionAuditSample(
                     sent_monotonic_s=1.05,
                     q_cmd=(0.0, 0.301, 0.3, 0.0, 0.0, 0.0),
+                    dq_cmd=(0.0, 0.02, 0.0, 0.0, 0.0, 0.0),
                     q_meas=(0.0, 0.301, 0.3, 0.0, 0.0, 0.0),
                     dq_meas=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
                     tau_meas=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
@@ -1072,6 +1075,8 @@ def test_cli_sysid_run_sdk_with_runtime_acquires_from_live_hold_pose(
     command = json.loads(command_artifact.read_text(encoding="utf-8"))
     assert command["expected_q_start"] == list(live_hold)
     assert command["start_pose_policy"] == "live_hold"
+    assert "dq_points" in command
+    assert len(command["dq_points"]) == len(command["q_points"])
     assert command["start_pose_guard"]["policy"] == "live_hold"
 
 

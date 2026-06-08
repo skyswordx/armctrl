@@ -36,6 +36,7 @@ def submit_trajectory_command(
     owner: str,
     expected_q_start: Sequence[float],
     q_points: Sequence[Sequence[float]],
+    dq_points: Sequence[Sequence[float]] | None = None,
     send_hz: float,
     trajectory_sample_hz: float | None = None,
     max_start_error_rad: float,
@@ -53,6 +54,17 @@ def submit_trajectory_command(
     for point in points:
         if len(point) != len(q_start):
             raise ValueError("all q points must match expected_q_start length")
+    velocities = (
+        None
+        if dq_points is None
+        else [_float_list(point, name="dq_point") for point in dq_points]
+    )
+    if velocities is not None:
+        if len(velocities) != len(points):
+            raise ValueError("dq_points length must match q_points length")
+        for point in velocities:
+            if len(point) != len(q_start):
+                raise ValueError("all dq points must match expected_q_start length")
     if send_hz <= 0.0:
         raise ValueError("send_hz must be positive")
     if trajectory_sample_hz is None:
@@ -92,6 +104,8 @@ def submit_trajectory_command(
         "session_artifact": str(session_artifact_path),
         "result_artifact": str(result_path),
     }
+    if velocities is not None:
+        command["dq_points"] = velocities
     if max_tracking_error_rad is not None:
         command["max_tracking_error_rad"] = float(max_tracking_error_rad)
     if max_tau_abs is not None:
@@ -488,8 +502,15 @@ def _execute_motion_command(
             raise ValueError("trajectory command requires q_points")
         trajectory_sample_hz = float(command.get("trajectory_sample_hz", send_hz))
         raw_points = [tuple(_object_float_list(q_point)) for q_point in q_points]
+        dq_points = command.get("dq_points")
+        raw_velocities = (
+            None
+            if not isinstance(dq_points, list)
+            else [tuple(_object_float_list(dq_point)) for dq_point in dq_points]
+        )
         points = _runtime_trajectory_points(
             raw_points,
+            dq_points=raw_velocities,
             trajectory_sample_hz=trajectory_sample_hz,
             runtime_send_hz=send_hz,
         )
@@ -1211,6 +1232,7 @@ def _tau_summary(samples: Sequence[MotionAuditSample]) -> dict[str, object]:
 def _runtime_trajectory_points(
     q_points: Sequence[tuple[float, ...]],
     *,
+    dq_points: Sequence[tuple[float, ...]] | None = None,
     trajectory_sample_hz: float,
     runtime_send_hz: float,
 ) -> list[JointTrajectoryPoint]:
@@ -1220,8 +1242,28 @@ def _runtime_trajectory_points(
         raise ValueError("trajectory_sample_hz must be positive")
     if runtime_send_hz <= 0.0:
         raise ValueError("send_hz must be positive")
+    if dq_points is not None:
+        if len(dq_points) != len(q_points):
+            raise ValueError("dq_points length must match q_points length")
+        for q_point, dq_point in zip(q_points, dq_points, strict=True):
+            if len(dq_point) != len(q_point):
+                raise ValueError("dq_points must match q point length")
+    effective_dq_points = (
+        list(dq_points)
+        if dq_points is not None
+        else _finite_difference_velocities(
+            q_points,
+            trajectory_sample_hz=trajectory_sample_hz,
+        )
+    )
     if len(q_points) == 1:
-        return [JointTrajectoryPoint(time_s=0.0, q=tuple(q_points[0]))]
+        return [
+            JointTrajectoryPoint(
+                time_s=0.0,
+                q=tuple(q_points[0]),
+                dq=tuple(effective_dq_points[0]),
+            )
+        ]
     duration_s = (len(q_points) - 1) / float(trajectory_sample_hz)
     sample_count = int(round(duration_s * float(runtime_send_hz))) + 1
     sample_count = max(2, sample_count)
@@ -1233,9 +1275,47 @@ def _runtime_trajectory_points(
                 trajectory_sample_hz=trajectory_sample_hz,
                 sample_time_s=min(duration_s, index / float(runtime_send_hz)),
             ),
+            dq=_sample_linear_joint_trajectory(
+                effective_dq_points,
+                trajectory_sample_hz=trajectory_sample_hz,
+                sample_time_s=min(duration_s, index / float(runtime_send_hz)),
+            ),
         )
         for index in range(sample_count)
     ]
+
+
+def _finite_difference_velocities(
+    q_points: Sequence[tuple[float, ...]],
+    *,
+    trajectory_sample_hz: float,
+) -> list[tuple[float, ...]]:
+    if not q_points:
+        return []
+    if len(q_points) == 1:
+        return [tuple(0.0 for _ in q_points[0])]
+    dt_s = 1.0 / float(trajectory_sample_hz)
+    velocities: list[tuple[float, ...]] = []
+    for index, point in enumerate(q_points):
+        if index == 0:
+            left = point
+            right = q_points[index + 1]
+            divisor = dt_s
+        elif index == len(q_points) - 1:
+            left = q_points[index - 1]
+            right = point
+            divisor = dt_s
+        else:
+            left = q_points[index - 1]
+            right = q_points[index + 1]
+            divisor = 2.0 * dt_s
+        velocities.append(
+            tuple(
+                (right_value - left_value) / divisor
+                for left_value, right_value in zip(left, right, strict=True)
+            )
+        )
+    return velocities
 
 
 def _sample_linear_joint_trajectory(
@@ -1346,6 +1426,7 @@ def _motion_sample_manifest(sample: MotionAuditSample) -> dict[str, object]:
     return {
         "sent_monotonic_s": sample.sent_monotonic_s,
         "q_cmd": list(sample.q_cmd),
+        "dq_cmd": list(sample.dq_cmd),
         "q_meas": list(sample.q_meas),
         "dq_meas": list(sample.dq_meas),
         "tau_meas": list(sample.tau_meas),

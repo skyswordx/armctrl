@@ -249,6 +249,7 @@ class MotionGainController:
         self._gain = FakeGain(0.0, 0.0, 0.0, 0.0)
         self.gain_history: list[FakeGain] = []
         self.commands: list[tuple[list[float], float]] = []
+        self.velocity_commands: list[list[float]] = []
         self._current_pos = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
     def get_controller_config(self):
@@ -273,6 +274,7 @@ class MotionGainController:
         q_cmd = list(cmd.pos())
         self._current_pos = q_cmd
         self.commands.append((q_cmd, float(cmd.timestamp)))
+        self.velocity_commands.append(list(cmd.vel()))
 
     def set_to_damping(self) -> None:
         pass
@@ -992,6 +994,42 @@ def test_arx5_backend_restores_motion_gain_and_timestamps_commands_before_stream
     assert controller.commands[1] == ([0.9, 0.1, 0.0, 0.0, 0.0, 0.0], 10.2)
     assert controller.commands[2][0] == [0.8, 0.2, 0.0, 0.0, 0.0, 0.0]
     assert controller.commands[2][1] == pytest.approx(10.22)
+
+
+def test_arx5_backend_writes_trajectory_velocity_into_sdk_joint_state() -> None:
+    clock = ManualClock()
+    backend = Arx5InterfaceCollectionBackend(
+        model="X5",
+        interface="can0",
+        arx5_module=MotionGainArx5Module,
+        controller_dt_s=0.002,
+        sleep=clock.sleep,
+    )
+
+    backend.enter_hold_or_damping()
+    runtime = MotionRuntime(
+        backend=backend,
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+    result = runtime.execute_trajectory(
+        [
+            JointTrajectoryPoint(
+                time_s=0.0,
+                q=(0.9, 0.1, 0.0, 0.0, 0.0, 0.0),
+                dq=(-0.1, 0.1, 0.0, 0.0, 0.0, 0.0),
+            ),
+        ],
+        producer="sysid",
+        trajectory_sample_hz=100.0,
+    )
+
+    controller = MotionGainArx5Module.last_controller
+    assert result.status == "completed"
+    assert controller is not None
+    assert controller.velocity_commands[-1] == pytest.approx(
+        [-0.1, 0.1, 0.0, 0.0, 0.0, 0.0]
+    )
 
 
 def test_arx5_backend_accepts_method_style_sdk_gain_api() -> None:

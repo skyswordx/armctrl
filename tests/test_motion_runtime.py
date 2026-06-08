@@ -43,6 +43,16 @@ class FailingSendBackend(FakeMotionBackend):
         super().send_joint_command(*args, **kwargs)
 
 
+class CapturingVelocityBackend(FakeMotionBackend):
+    def __init__(self) -> None:
+        super().__init__()
+        self.dq_commands: list[tuple[float, ...] | None] = []
+
+    def send_joint_command(self, *args, **kwargs) -> None:
+        self.dq_commands.append(kwargs.get("dq"))
+        super().send_joint_command(*args, **kwargs)
+
+
 class FaultingReadBackend(FakeMotionBackend):
     def __init__(self, *, fault_on_read: int) -> None:
         super().__init__()
@@ -108,6 +118,25 @@ def test_execute_trajectory_replays_timestamped_points_and_reports_send_metrics(
     assert result.landing_mode == "hold"
     assert backend.hold_count == 1
     assert runtime.mode == MotionMode.HOLD
+
+
+def test_execute_trajectory_preserves_velocity_commands_for_backend():
+    clock = ManualClock()
+    backend = CapturingVelocityBackend()
+    runtime = MotionRuntime(backend=backend, monotonic=clock.monotonic, sleep=clock.sleep)
+    trajectory = [
+        JointTrajectoryPoint(time_s=0.0, q=(0.0, 0.0), dq=(0.1, 0.0)),
+        JointTrajectoryPoint(time_s=0.01, q=(0.01, 0.0), dq=(0.1, 0.0)),
+    ]
+
+    result = runtime.execute_trajectory(
+        trajectory,
+        producer="sysid",
+        trajectory_sample_hz=100.0,
+    )
+
+    assert result.status == "completed"
+    assert backend.dq_commands == [(0.1, 0.0), (0.1, 0.0)]
 
 
 def test_execute_trajectory_rejects_nonpositive_sample_hz_before_sending():

@@ -341,6 +341,7 @@ class Arx5InterfaceCollectionBackend:
         mode: MotionMode,
         monotonic_s: float,
         trajectory_time_s: float | None = None,
+        dq: tuple[float, ...] | None = None,
     ) -> None:
         if self._controller is None:
             raise RuntimeError("sdk controller is not initialized")
@@ -350,6 +351,7 @@ class Arx5InterfaceCollectionBackend:
         cmd = self._joint_state_from_positions_tuple(
             q,
             timestamp_s=self._stream_base_timestamp_s + max(0.0, point_time_s),
+            dq_cmd=dq,
         )
         self._controller.set_joint_cmd(cmd)
 
@@ -499,13 +501,18 @@ class Arx5InterfaceCollectionBackend:
         q_cmd: tuple[float, ...],
         *,
         timestamp_s: float = 0.0,
+        dq_cmd: tuple[float, ...] | None = None,
     ):
         arx5 = self._load_arx5()
         cmd = arx5.JointState(len(q_cmd))
         for joint_index, joint_position in enumerate(q_cmd):
             cmd.pos()[joint_index] = joint_position
         if hasattr(cmd, "vel"):
-            cmd.vel()[:] = tuple(0.0 for _ in q_cmd)
+            cmd.vel()[:] = (
+                tuple(float(value) for value in dq_cmd)
+                if dq_cmd is not None
+                else tuple(0.0 for _ in q_cmd)
+            )
         if hasattr(cmd, "torque"):
             cmd.torque()[:] = tuple(0.0 for _ in q_cmd)
         cmd.timestamp = float(timestamp_s)

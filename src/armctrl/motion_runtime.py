@@ -35,6 +35,7 @@ class ArmRuntimeError(RuntimeError):
 class JointTrajectoryPoint:
     time_s: float
     q: tuple[float, ...]
+    dq: tuple[float, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -65,6 +66,7 @@ class JointStateSnapshot:
 class MotionAuditSample:
     sent_monotonic_s: float
     q_cmd: tuple[float, ...]
+    dq_cmd: tuple[float, ...]
     q_meas: tuple[float, ...]
     dq_meas: tuple[float, ...]
     tau_meas: tuple[float, ...]
@@ -97,6 +99,7 @@ class MotionBackend(Protocol):
         mode: MotionMode,
         monotonic_s: float,
         trajectory_time_s: float | None = None,
+        dq: tuple[float, ...] | None = None,
     ) -> None:
         ...
 
@@ -128,6 +131,7 @@ class FakeMotionBackend:
         mode: MotionMode,
         monotonic_s: float,
         trajectory_time_s: float | None = None,
+        dq: tuple[float, ...] | None = None,
     ) -> None:
         q_tuple = tuple(float(value) for value in q)
         self._last_q = q_tuple
@@ -242,18 +246,25 @@ class MotionRuntime:
                     self._sleep(target_s - now_s)
                 sent_s = self._monotonic()
                 q_cmd = tuple(point.q)
+                dq_cmd = (
+                    tuple(point.dq)
+                    if point.dq is not None
+                    else tuple(0.0 for _ in q_cmd)
+                )
                 self._backend.send_joint_command(
                     q_cmd,
                     producer=producer,
                     mode=MotionMode.TRAJECTORY_REPLAY,
                     monotonic_s=sent_s,
                     trajectory_time_s=float(point.time_s),
+                    dq=dq_cmd,
                 )
                 state = self._backend.read_joint_state()
                 sent_times.append(sent_s)
                 sample = MotionAuditSample(
                     sent_monotonic_s=sent_s,
                     q_cmd=q_cmd,
+                    dq_cmd=dq_cmd,
                     q_meas=state.q_meas,
                     dq_meas=state.dq_meas,
                     tau_meas=state.tau_meas,
@@ -404,18 +415,25 @@ class MotionRuntime:
                     self._sleep(target_s - now_s)
                 sent_s = self._monotonic()
                 q_cmd = tuple(point.q)
+                dq_cmd = (
+                    tuple(point.dq)
+                    if point.dq is not None
+                    else tuple(0.0 for _ in q_cmd)
+                )
                 self._backend.send_joint_command(
                     q_cmd,
                     producer=producer,
                     mode=MotionMode.AGENT_SERVO,
                     monotonic_s=sent_s,
                     trajectory_time_s=float(point.time_s),
+                    dq=dq_cmd,
                 )
                 state = self._backend.read_joint_state()
                 sent_times.append(sent_s)
                 sample = MotionAuditSample(
                     sent_monotonic_s=sent_s,
                     q_cmd=q_cmd,
+                    dq_cmd=dq_cmd,
                     q_meas=state.q_meas,
                     dq_meas=state.dq_meas,
                     tau_meas=state.tau_meas,
@@ -1026,9 +1044,15 @@ def _validate_trajectory_inputs(
             expected_dof = len(q)
         elif len(q) != expected_dof:
             raise ValueError("trajectory q vectors must have consistent length")
+        if point.dq is not None and len(tuple(point.dq)) != expected_dof:
+            raise ValueError("trajectory dq vectors must match q length")
         for value in q:
             if not math.isfinite(float(value)):
                 raise ValueError("trajectory q values must be finite")
+        if point.dq is not None:
+            for value in point.dq:
+                if not math.isfinite(float(value)):
+                    raise ValueError("trajectory dq values must be finite")
         previous_time_s = time_s
 
 

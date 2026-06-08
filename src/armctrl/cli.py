@@ -333,6 +333,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     runtime_result_check_parser.add_argument("--expect-mode")
     runtime_result_check_parser.add_argument("--expect-sample-count", type=int)
     runtime_result_check_parser.add_argument("--max-jitter-p99-ms", type=float)
+    runtime_result_check_parser.add_argument("--max-tracking-error-rad", type=float)
     runtime_result_check_parser.add_argument("--output")
     runtime_result_check_parser.add_argument(
         "--json", action="store_true", dest="as_json"
@@ -1624,6 +1625,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 payload = _runtime_result_check_all_payload(
                     run_dir=Path(args.run_dir) if args.run_dir is not None else None,
                     max_jitter_p99_ms=args.max_jitter_p99_ms,
+                    max_tracking_error_rad=args.max_tracking_error_rad,
                     required_owners=args.require_owner,
                 )
             else:
@@ -1636,6 +1638,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     expect_mode=args.expect_mode,
                     expect_sample_count=args.expect_sample_count,
                     max_jitter_p99_ms=args.max_jitter_p99_ms,
+                    max_tracking_error_rad=args.max_tracking_error_rad,
                 )
         except (OSError, ValueError) as error:
             payload = {
@@ -3404,11 +3407,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                     Path(plan.artifacts["execution_trajectory"]),
                     dof=args.dof,
                 )
+                dq_points = _read_sysid_execution_dq_points(
+                    Path(plan.artifacts["execution_trajectory"]),
+                    dof=args.dof,
+                )
+                if dq_points is None:
+                    dq_points = _derive_sysid_execution_dq_points(
+                        q_points,
+                        sample_hz=float(args.sample_hz),
+                    )
                 queued = submit_trajectory_command(
                     session_artifact_path=Path(args.runtime_session_artifact),
                     owner="sysid",
                     expected_q_start=q_center,
                     q_points=q_points,
+                    dq_points=dq_points,
                     send_hz=args.sample_hz,
                     max_start_error_rad=0.02,
                     heartbeat_timeout_s=max(0.5, float(args.duration) + 1.0),
@@ -4514,6 +4527,62 @@ def _read_sysid_execution_q_points(path: Path, *, dof: int) -> list[tuple[float,
     return q_points
 
 
+def _read_sysid_execution_dq_points(
+    path: Path,
+    *,
+    dof: int,
+) -> list[tuple[float, ...]] | None:
+    with path.open(newline="", encoding="utf-8") as file:
+        reader = csv.DictReader(file)
+        rows = list(reader)
+        fieldnames = set(reader.fieldnames or [])
+    if not rows:
+        raise ValueError(f"execution trajectory has no rows: {path}")
+    required = {f"dq_cmd_{joint_index + 1}" for joint_index in range(dof)}
+    if not required.issubset(fieldnames):
+        return None
+    return [
+        tuple(float(row[f"dq_cmd_{joint_index + 1}"]) for joint_index in range(dof))
+        for row in rows
+    ]
+
+
+def _derive_sysid_execution_dq_points(
+    q_points: Sequence[Sequence[float]],
+    *,
+    sample_hz: float,
+) -> list[tuple[float, ...]]:
+    if sample_hz <= 0.0:
+        raise ValueError("sample_hz must be positive")
+    points = [tuple(float(value) for value in point) for point in q_points]
+    if not points:
+        return []
+    if len(points) == 1:
+        return [tuple(0.0 for _ in points[0])]
+    dt_s = 1.0 / float(sample_hz)
+    velocities: list[tuple[float, ...]] = []
+    for index, point in enumerate(points):
+        if index == 0:
+            left = point
+            right = points[index + 1]
+            divisor = dt_s
+        elif index == len(points) - 1:
+            left = points[index - 1]
+            right = point
+            divisor = dt_s
+        else:
+            left = points[index - 1]
+            right = points[index + 1]
+            divisor = 2.0 * dt_s
+        velocities.append(
+            tuple(
+                (right_value - left_value) / divisor
+                for left_value, right_value in zip(left, right, strict=True)
+            )
+        )
+    return velocities
+
+
 def _arx5_active_hold_tick(
     *,
     backend: Arx5InterfaceCollectionBackend,
@@ -4582,6 +4651,7 @@ def _runtime_result_check_payload(
     expect_mode: str | None,
     expect_sample_count: int | None,
     max_jitter_p99_ms: float | None,
+    max_tracking_error_rad: float | None,
 ) -> dict[str, object]:
     result = json.loads(result_artifact_path.read_text(encoding="utf-8"))
     motion = result.get("motion") if isinstance(result.get("motion"), dict) else {}
@@ -4603,6 +4673,10 @@ def _runtime_result_check_payload(
     mode = result.get("mode")
     sample_count = _runtime_optional_int(motion.get("sample_count"))
     jitter_p99_ms = _runtime_optional_float(motion.get("send_jitter_ms_p99"))
+    tracking = motion.get("tracking_error")
+    tracking_max_abs_rad = _runtime_optional_float(
+        tracking.get("max_abs_rad") if isinstance(tracking, dict) else None
+    )
     checks = {
         "schema": result.get("schema") == "armctrl.arm_runtime_command_result.v1",
         "result_completed": result.get("status") == "completed",
@@ -4626,6 +4700,13 @@ def _runtime_result_check_payload(
         "queue_latency_present": timing.get("queue_latency_s") is not None,
         "first_send_latency_present": timing.get("first_send_latency_s") is not None,
         "execution_elapsed_present": timing.get("execution_elapsed_s") is not None,
+        "tracking_error_within_limit": (
+            max_tracking_error_rad is None
+            or (
+                tracking_max_abs_rad is not None
+                and tracking_max_abs_rad <= float(max_tracking_error_rad)
+            )
+        ),
     }
     payload = {
         "status": "pass" if all(checks.values()) else "fail",
@@ -4659,6 +4740,7 @@ def _runtime_result_check_payload(
             "execution_elapsed_s": _runtime_optional_float(
                 timing.get("execution_elapsed_s")
             ),
+            "tracking_error_max_abs_rad": tracking_max_abs_rad,
         },
         "policies": {
             "resampling_policy": motion.get("resampling_policy"),
@@ -4696,6 +4778,7 @@ def _runtime_result_check_all_payload(
     *,
     run_dir: Path | None,
     max_jitter_p99_ms: float | None,
+    max_tracking_error_rad: float | None,
     required_owners: Sequence[str],
 ) -> dict[str, object]:
     if run_dir is None:
@@ -4708,6 +4791,7 @@ def _runtime_result_check_all_payload(
             expect_mode=None,
             expect_sample_count=None,
             max_jitter_p99_ms=max_jitter_p99_ms,
+            max_tracking_error_rad=max_tracking_error_rad,
         )
         for path in result_paths
     ]

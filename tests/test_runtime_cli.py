@@ -1740,6 +1740,70 @@ def test_cli_runtime_result_check_rejects_failed_timing_gate(
     assert payload["next_gate"] == "inspect runtime result timing and safety evidence"
 
 
+def test_cli_runtime_result_check_rejects_tracking_error_over_limit(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    from armctrl import cli
+
+    result_artifact = tmp_path / "runtime-result-tracking-fail.json"
+    result_artifact.write_text(
+        json.dumps(
+            {
+                "schema": "armctrl.arm_runtime_command_result.v1",
+                "status": "completed",
+                "owner": "sysid",
+                "mode": "trajectory_replay",
+                "motion": {
+                    "status": "completed",
+                    "sample_count": 2,
+                    "runtime_send_hz": 100.0,
+                    "actual_send_hz": 100.0,
+                    "send_jitter_ms_p99": 0.1,
+                    "dt_min_s": 0.01,
+                    "dt_max_s": 0.01,
+                    "tracking_error": {"max_abs_rad": 0.032},
+                },
+                "timing": {
+                    "queue_latency_s": 0.02,
+                    "acquire_latency_s": 0.01,
+                    "first_send_latency_s": 0.005,
+                    "execution_elapsed_s": 0.01,
+                },
+                "acceptance": {
+                    "status": "pass",
+                    "timing_gate": {"status": "pass"},
+                    "status_publish_gate": {"status": "pass"},
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = cli.main(
+        [
+            "runtime",
+            "result-check",
+            "--result-artifact",
+            str(result_artifact),
+            "--expect-owner",
+            "sysid",
+            "--max-tracking-error-rad",
+            "0.02",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 3
+    assert payload["status"] == "fail"
+    assert payload["checks"]["tracking_error_within_limit"] is False
+    assert payload["metrics"]["tracking_error_max_abs_rad"] == pytest.approx(0.032)
+
+
 def test_runtime_command_result_records_tracking_error_summary(
     tmp_path: Path,
 ) -> None:
@@ -2935,6 +2999,56 @@ def test_runtime_command_result_records_signed_period_error_summary(
     assert result_artifact["motion"]["dt_error_ms_summary"] == result["motion"][
         "dt_error_ms_summary"
     ]
+
+
+def test_runtime_queue_preserves_trajectory_velocity_commands(tmp_path: Path) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    backend = FakeMotionBackend()
+    observed_dq: list[tuple[float, ...] | None] = []
+    original_send = backend.send_joint_command
+
+    def capture_send(*args, **kwargs):
+        observed_dq.append(kwargs.get("dq"))
+        return original_send(*args, **kwargs)
+
+    backend.send_joint_command = capture_send
+    backend.send_joint_command(
+        tuple(float(value) for value in session["q_meas"]),
+        producer="test_bootstrap",
+        mode=MotionMode.HOLD,
+        monotonic_s=0.0,
+    )
+    runtime = ArmRuntime(
+        backend=backend,
+        safe_center=tuple(float(value) for value in session["safe_center"]),
+        runtime_session_id=str(session["runtime_session_id"]),
+    )
+    runtime.mark_hold_safe(q_hold=tuple(float(value) for value in session["q_hold"]))
+    submit_trajectory_command(
+        session_artifact_path=session_artifact,
+        owner="sysid",
+        expected_q_start=(0.0, 0.3, 0.3),
+        q_points=[(0.0, 0.3, 0.3), (0.01, 0.3, 0.3)],
+        dq_points=[(0.1, 0.0, 0.0), (0.1, 0.0, 0.0)],
+        send_hz=100.0,
+        max_start_error_rad=0.02,
+        heartbeat_timeout_s=1.0,
+        max_heartbeat_age_s=1.0,
+    )
+
+    result = execute_pending_runtime_commands(
+        session_artifact_path=session_artifact,
+        backend=backend,
+        runtime=runtime,
+        max_heartbeat_age_s=1.0,
+    )
+
+    assert result is not None
+    assert result["status"] == "completed"
+    assert observed_dq[-2:] == [(0.1, 0.0, 0.0), (0.1, 0.0, 0.0)]
+    assert result["motion"]["samples"][0]["dq_cmd"] == [0.1, 0.0, 0.0]
 
 
 def test_runtime_queue_passes_owner_watchdog_into_motion_loop(
