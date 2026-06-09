@@ -6,9 +6,9 @@ cd "$ROOT_DIR"
 
 STATE_FILE="${ARMCTRL_LAB_FOURIER_STATE:-.lab_fourier_sysid.env}"
 SAFE_CENTER_DEFAULT="0.0 0.3 0.3 0.0 0.0 0.0"
-SLOW_CANDIDATE_DEFAULT="runs/x5-fourier-best-candidate-runtime-check/execution_trajectory_reduced_0p25_slow4x_dwell1s.csv"
-REDUCED_CANDIDATE_DEFAULT="runs/x5-fourier-best-candidate-runtime-check/execution_trajectory_reduced_0p25.csv"
-FULL_CANDIDATE_DEFAULT="runs/x5-fourier-best-candidate-runtime-check/attempt-001/execution_trajectory.csv"
+SLOW_CANDIDATE_DEFAULT="runs/remote_lab_artifacts/lab-fourier-sysid-20260608-154946/runs/lab-fourier-sysid-20260608-154946/ident-fourier-reduced-0p25-slow4x/execution_trajectory.csv"
+REDUCED_CANDIDATE_DEFAULT="runs/remote_lab_artifacts/lab-fourier-sysid-20260608-154946/runs/lab-fourier-sysid-20260608-154946/ident-fourier-reduced-0p25-normal/execution_trajectory.csv"
+FULL_CANDIDATE_DEFAULT="runs/remote_lab_artifacts/lab-fourier-sysid-20260608-154946/runs/lab-fourier-sysid-20260608-154946/ident-fourier-full/execution_trajectory.csv"
 REDUCED_FIRST_Q_DEFAULT="0.07875 0.384375 0.346875 -0.05625 0.07875 0.05625"
 FULL_FIRST_Q_DEFAULT="0.315 0.6375 0.4875 -0.225 0.315 0.225"
 
@@ -34,6 +34,8 @@ Usage:
 Notes:
   - start runs in the foreground and holds the SDK/CAN runtime.
   - Other subcommands can be run from a second terminal; they read .lab_fourier_sysid.env.
+  - status and result checks use the formal armctrl console/motion surface.
+  - run-* keeps armctrl sysid run because it owns Fourier candidate compilation and SysID evidence.
   - Do not run full until slow and reduced have completed smoothly.
 EOF
 }
@@ -71,13 +73,19 @@ ensure_file() {
   fi
 }
 
+ensure_candidate_files() {
+  ensure_file "$SLOW_CANDIDATE"
+  ensure_file "$REDUCED_CANDIDATE"
+  ensure_file "$FULL_CANDIDATE"
+}
+
 runtime_status() {
   local label="${1:-status}"
   ensure_state
-  uv run armctrl runtime status \
+  uv run armctrl console status \
     --session-artifact "$RUN_DIR/runtime_session.json" \
     --max-heartbeat-age-s 1.0 \
-    --output "$RUN_DIR/runtime_status_${label}.json" \
+    --output "$RUN_DIR/console_status_${label}.json" \
     --json
 }
 
@@ -117,7 +125,7 @@ run_candidate() {
     --safe-config configs/x5.safe.yaml \
     --output "$RUN_DIR/ident-fourier-${name}" \
     --confirm "I UNDERSTAND THIS WILL MOVE THE ARM" \
-    --readiness-artifact "$RUN_DIR/runtime_status_${readiness_label}.json" \
+    --readiness-artifact "$RUN_DIR/console_status_${readiness_label}.json" \
     --runtime-session-artifact "$RUN_DIR/runtime_session.json" \
     --json
 }
@@ -126,7 +134,7 @@ check_result() {
   local expected_samples="$1"
   local max_tracking="$2"
   ensure_state
-  uv run armctrl runtime result-check \
+  uv run armctrl motion result \
     --run-dir "$RUN_DIR" \
     --expect-owner sysid \
     --expect-mode trajectory_replay \
@@ -141,6 +149,8 @@ case "$cmd" in
   init)
     run_dir="${2:-runs/lab-fourier-sysid-$(date +%Y%m%d-%H%M%S)}"
     write_state "$run_dir"
+    ensure_state
+    ensure_candidate_files
     ;;
   start)
     if [[ ! -f "$STATE_FILE" ]]; then

@@ -27,7 +27,9 @@ from armctrl.runtime_session import (
 
 RUNTIME_COMMAND_SCHEMA = "armctrl.arm_runtime_command.v1"
 RUNTIME_COMMAND_RESULT_SCHEMA = "armctrl.arm_runtime_command_result.v1"
-START_POSE_POLICIES = {"live_hold", "safe_center", "explicit_q"}
+START_POSE_POLICIES = {"live_hold", "safe_center", "explicit_q", "current_measured_pose"}
+EEF_COMMAND_KINDS = {"eef_pose_delta", "eef_twist"}
+EEF_BACKENDS = {"moveit_servo", "sdk_cartesian"}
 
 
 def submit_trajectory_command(
@@ -37,6 +39,8 @@ def submit_trajectory_command(
     expected_q_start: Sequence[float],
     q_points: Sequence[Sequence[float]],
     dq_points: Sequence[Sequence[float]] | None = None,
+    ddq_points: Sequence[Sequence[float]] | None = None,
+    artifact_policy: dict[str, object] | None = None,
     send_hz: float,
     trajectory_sample_hz: float | None = None,
     max_start_error_rad: float,
@@ -65,6 +69,17 @@ def submit_trajectory_command(
         for point in velocities:
             if len(point) != len(q_start):
                 raise ValueError("all dq points must match expected_q_start length")
+    accelerations = (
+        None
+        if ddq_points is None
+        else [_float_list(point, name="ddq_point") for point in ddq_points]
+    )
+    if accelerations is not None:
+        if len(accelerations) != len(points):
+            raise ValueError("ddq_points length must match q_points length")
+        for point in accelerations:
+            if len(point) != len(q_start):
+                raise ValueError("all ddq points must match expected_q_start length")
     if send_hz <= 0.0:
         raise ValueError("send_hz must be positive")
     if trajectory_sample_hz is None:
@@ -89,7 +104,8 @@ def submit_trajectory_command(
     command = {
         "schema": RUNTIME_COMMAND_SCHEMA,
         "command_id": command_id,
-        "kind": "trajectory",
+        "kind": "joint_trajectory",
+        "source": str(owner),
         "owner": str(owner),
         "mode": MotionMode.TRAJECTORY_REPLAY.value,
         "start_pose_policy": str(start_pose_policy),
@@ -97,6 +113,7 @@ def submit_trajectory_command(
         "start_pose_guard": start_pose_guard,
         "max_start_error_rad": float(max_start_error_rad),
         "heartbeat_timeout_s": float(heartbeat_timeout_s),
+        "max_heartbeat_age_s": float(max_heartbeat_age_s),
         "send_hz": float(send_hz),
         "trajectory_sample_hz": float(trajectory_sample_hz),
         "q_points": points,
@@ -106,6 +123,10 @@ def submit_trajectory_command(
     }
     if velocities is not None:
         command["dq_points"] = velocities
+    if accelerations is not None:
+        command["ddq_points"] = accelerations
+    if artifact_policy is not None:
+        command["artifact_policy"] = dict(artifact_policy)
     if max_tracking_error_rad is not None:
         command["max_tracking_error_rad"] = float(max_tracking_error_rad)
     if max_tau_abs is not None:
@@ -133,6 +154,8 @@ def submit_trajectory_command(
             "result": str(result_path),
         },
     }
+    if artifact_policy is not None:
+        payload["artifact_policy"] = dict(artifact_policy)
     return _write_optional_output(payload, output_path)
 
 
@@ -178,7 +201,8 @@ def submit_intent_command(
     command = {
         "schema": RUNTIME_COMMAND_SCHEMA,
         "command_id": command_id,
-        "kind": "intent",
+        "kind": "joint_intent",
+        "source": str(owner),
         "owner": str(owner),
         "mode": MotionMode.AGENT_SERVO.value,
         "start_pose_policy": str(start_pose_policy),
@@ -191,6 +215,7 @@ def submit_intent_command(
         ),
         "max_start_error_rad": float(max_start_error_rad),
         "heartbeat_timeout_s": float(heartbeat_timeout_s),
+        "max_heartbeat_age_s": float(max_heartbeat_age_s),
         "send_hz": float(send_hz),
         "submitted_wall_time_s": time.time(),
         "session_artifact": str(session_artifact_path),
@@ -222,6 +247,135 @@ def submit_intent_command(
             "command": str(pending_path),
             "result": str(result_path),
         },
+    }
+    return _write_optional_output(payload, output_path)
+
+
+def submit_eef_command(
+    *,
+    session_artifact_path: Path,
+    owner: str,
+    backend: str,
+    kind: str,
+    frame: str,
+    expected_q_start: Sequence[float],
+    control_period_s: float,
+    send_hz: float,
+    max_start_error_rad: float,
+    heartbeat_timeout_s: float,
+    max_heartbeat_age_s: float,
+    delta_position_m: Sequence[float] | None = None,
+    delta_rpy_rad: Sequence[float] | None = None,
+    linear_mps: Sequence[float] | None = None,
+    angular_rps: Sequence[float] | None = None,
+    output_path: Path | None = None,
+    start_pose_policy: str = "live_hold",
+) -> dict[str, object]:
+    if kind not in EEF_COMMAND_KINDS:
+        raise ValueError(f"unsupported EEF runtime command kind: {kind}")
+    if backend not in EEF_BACKENDS:
+        raise ValueError(
+            "EEF runtime supports backend=moveit_servo or backend=sdk_cartesian"
+        )
+    q_start = _float_list(expected_q_start, name="expected_q_start")
+    if control_period_s <= 0.0:
+        raise ValueError("control_period_s must be positive")
+    if send_hz <= 0.0:
+        raise ValueError("send_hz must be positive")
+    if not frame:
+        raise ValueError("frame must not be empty")
+    if kind == "eef_pose_delta":
+        if delta_position_m is None or delta_rpy_rad is None:
+            raise ValueError("eef_pose_delta requires delta_position_m and delta_rpy_rad")
+        eef_command = {
+            "frame": str(frame),
+            "delta_position_m": _fixed_float_list(
+                delta_position_m,
+                name="delta_position_m",
+                length=3,
+            ),
+            "delta_rpy_rad": _fixed_float_list(
+                delta_rpy_rad,
+                name="delta_rpy_rad",
+                length=3,
+            ),
+            "control_period_s": float(control_period_s),
+        }
+    else:
+        if linear_mps is None or angular_rps is None:
+            raise ValueError("eef_twist requires linear_mps and angular_rps")
+        eef_command = {
+            "frame": str(frame),
+            "linear_mps": _fixed_float_list(linear_mps, name="linear_mps", length=3),
+            "angular_rps": _fixed_float_list(angular_rps, name="angular_rps", length=3),
+            "control_period_s": float(control_period_s),
+        }
+
+    session = _read_json_object(session_artifact_path)
+    start_pose_guard = _ensure_can_queue_command(
+        session,
+        owner=owner,
+        expected_q_start=q_start,
+        start_pose_policy=start_pose_policy,
+        max_start_error_rad=float(max_start_error_rad),
+        heartbeat_timeout_s=float(heartbeat_timeout_s),
+        max_heartbeat_age_s=float(max_heartbeat_age_s),
+    )
+    command_id = str(uuid4())
+    queue_dir = runtime_command_queue_dir(session_artifact_path)
+    pending_path = queue_dir / "pending" / f"{command_id}.json"
+    result_path = queue_dir / "results" / f"{command_id}.json"
+    command = {
+        "schema": RUNTIME_COMMAND_SCHEMA,
+        "command_id": command_id,
+        "kind": str(kind),
+        "command_space": "eef",
+        "source": str(owner),
+        "owner": str(owner),
+        "mode": MotionMode.AGENT_SERVO.value,
+        "backend": str(backend),
+        "start_pose_policy": str(start_pose_policy),
+        "expected_q_start": q_start,
+        "start_pose_guard": start_pose_guard,
+        "eef_command": eef_command,
+        "max_start_error_rad": float(max_start_error_rad),
+        "heartbeat_timeout_s": float(heartbeat_timeout_s),
+        "max_heartbeat_age_s": float(max_heartbeat_age_s),
+        "send_hz": float(send_hz),
+        "submitted_wall_time_s": time.time(),
+        "session_artifact": str(session_artifact_path),
+        "result_artifact": str(result_path),
+        "hardware_execution_requires_backend_adapter": True,
+        "mature_backend_policy": {
+            "selected": str(backend),
+            "no_heuristic_joint_fallback": True,
+        },
+    }
+    pending_path.parent.mkdir(parents=True, exist_ok=True)
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_json_atomic(pending_path, command)
+    payload = {
+        "status": "queued",
+        "schema": "armctrl.arm_runtime_submit.v1",
+        "command_id": command_id,
+        "owner": str(owner),
+        "mode": MotionMode.AGENT_SERVO.value,
+        "command_space": "eef",
+        "backend": str(backend),
+        "runtime_session_id": session.get("runtime_session_id"),
+        "movement_command_sent": False,
+        "start_pose_policy": str(start_pose_policy),
+        "start_pose_guard": start_pose_guard,
+        "runtime": {
+            "single_motion_owner": True,
+            "queue": str(queue_dir),
+            "session_artifact": str(session_artifact_path),
+        },
+        "artifacts": {
+            "command": str(pending_path),
+            "result": str(result_path),
+        },
+        "next_gate": "serve with a configured mature EEF backend adapter",
     }
     return _write_optional_output(payload, output_path)
 
@@ -293,6 +447,7 @@ def execute_runtime_command(
             heartbeat_timeout_s=float(command.get("heartbeat_timeout_s", 0.5)),
             max_heartbeat_age_s=float(max_heartbeat_age_s),
         )
+        _ensure_command_has_executable_backend(command, backend=backend)
         live_runtime = runtime
         if live_runtime is None:
             live_runtime = ArmRuntime(
@@ -303,10 +458,11 @@ def execute_runtime_command(
             live_runtime.mark_hold_safe(
                 q_hold=tuple(_object_float_list(session.get("q_hold")))
             )
+        expected_q_start = _owner_expected_q_start(command, backend=backend)
         lease = live_runtime.acquire_owner(
             owner=owner,
             mode=MotionMode(mode),
-            expected_q_start=tuple(_object_float_list(command.get("expected_q_start"))),
+            expected_q_start=expected_q_start,
             max_start_error_rad=float(command.get("max_start_error_rad", 0.02)),
             heartbeat_timeout_s=float(command.get("heartbeat_timeout_s", 0.5)),
         )
@@ -327,7 +483,7 @@ def execute_runtime_command(
             "acquired_wall_time_s": owner_wall_time_s,
             "landing_policy": "watchdog_to_damping_release_to_hold_safe",
         }
-        if command.get("kind") == "intent":
+        if command.get("kind") == "joint_intent":
             session["owner_lease"].update(_intent_owner_watchdog_contract(command))
         session["owner_deadman"] = {
             "owner": lease.owner,
@@ -360,6 +516,7 @@ def execute_runtime_command(
         motion = _execute_motion_command(
             command,
             runtime=live_runtime,
+            backend=backend,
             watchdog=lambda: _owner_timeout_watchdog(
                 session_artifact_path=session_artifact_path,
                 owner=owner,
@@ -441,11 +598,20 @@ def execute_runtime_command(
             "command_id": command.get("command_id"),
             "owner": owner,
             "mode": mode,
+            "command_space": (
+                "eef" if command.get("kind") in EEF_COMMAND_KINDS else None
+            ),
+            "kind": command.get("kind"),
             "start_pose_policy": str(command.get("start_pose_policy", "live_hold")),
             "movement_command_sent": False,
             "reason": str(error),
             "start_pose_guard": _error_start_pose_guard(error),
             "landing_mode": None,
+            "eef_command": (
+                _eef_motion_contract(command)
+                if command.get("kind") in EEF_COMMAND_KINDS
+                else None
+            ),
             "timing": {
                 "submitted_wall_time_s": _optional_float(
                     command.get("submitted_wall_time_s")
@@ -491,12 +657,13 @@ def _execute_motion_command(
     command: dict[str, object],
     *,
     runtime: ArmRuntime,
+    backend: MotionBackend,
     watchdog=None,
     on_sample=None,
 ) -> MotionExecutionResult:
     kind = command.get("kind")
     send_hz = float(command.get("send_hz", 50.0))
-    if kind == "trajectory":
+    if kind == "joint_trajectory":
         q_points = command.get("q_points")
         if not isinstance(q_points, list):
             raise ValueError("trajectory command requires q_points")
@@ -525,7 +692,7 @@ def _execute_motion_command(
             ),
             max_tau_abs=_optional_float(command.get("max_tau_abs")),
         )
-    if kind == "intent":
+    if kind == "joint_intent":
         return runtime.execute_owner_intent_frame(
             JointIntentFrame(
                 q_start=tuple(_object_float_list(command.get("expected_q_start"))),
@@ -546,7 +713,51 @@ def _execute_motion_command(
             ),
             max_tau_abs=_optional_float(command.get("max_tau_abs")),
         )
+    if kind in EEF_COMMAND_KINDS:
+        runtime._raise_if_not_owned(owner=str(command.get("owner")), mode=MotionMode.AGENT_SERVO)
+        executor = getattr(backend, "execute_eef_command", None)
+        if not callable(executor):
+            raise ValueError(
+                "EEF runtime command requires a configured mature backend adapter "
+                "(moveit_servo or sdk_cartesian); heuristic joint fallback is forbidden"
+            )
+        result = executor(
+            command,
+            owner=str(command.get("owner")),
+            watchdog=watchdog,
+            on_sample=on_sample,
+        )
+        return runtime._finish_owner_motion(owner=str(command.get("owner")), result=result)
     raise ValueError(f"unsupported runtime command kind: {kind}")
+
+
+def _owner_expected_q_start(
+    command: dict[str, object],
+    *,
+    backend: MotionBackend,
+) -> tuple[float, ...]:
+    if (
+        command.get("kind") in EEF_COMMAND_KINDS
+        and str(command.get("start_pose_policy", "")) == "current_measured_pose"
+    ):
+        return tuple(float(value) for value in backend.read_joint_state().q_meas)
+    return tuple(_object_float_list(command.get("expected_q_start")))
+
+
+def _ensure_command_has_executable_backend(
+    command: dict[str, object],
+    *,
+    backend: MotionBackend,
+) -> None:
+    if command.get("kind") not in EEF_COMMAND_KINDS:
+        return
+    executor = getattr(backend, "execute_eef_command", None)
+    if callable(executor):
+        return
+    raise ValueError(
+        "EEF runtime command requires a configured mature backend adapter "
+        "(moveit_servo or sdk_cartesian); heuristic joint fallback is forbidden"
+    )
 
 
 def _session_from_runtime_status(
@@ -809,11 +1020,23 @@ def _command_result_payload(
     }
     if status_update_payload is not None:
         payload["status_update"] = status_update_payload
-    if command.get("kind") == "intent":
+    if command.get("kind") == "joint_intent":
         payload["motion"].update(_intent_motion_contract(command))
+    if command.get("kind") in EEF_COMMAND_KINDS:
+        payload["motion"]["eef_command"] = _eef_motion_contract(command)
     if watchdog is not None:
         payload["watchdog"] = watchdog
     return payload
+
+
+def _eef_motion_contract(command: dict[str, object]) -> dict[str, object]:
+    return {
+        "kind": command.get("kind"),
+        "backend": command.get("backend"),
+        "command_space": "eef",
+        "eef_command": command.get("eef_command"),
+        "mature_backend_policy": command.get("mature_backend_policy"),
+    }
 
 
 def _command_timing_summary(
@@ -1026,7 +1249,7 @@ def _timing_gate_summary(
 
 def _expected_runtime_sample_count(command: dict[str, object]) -> int | None:
     kind = command.get("kind")
-    if kind == "trajectory":
+    if kind == "joint_trajectory":
         q_points = command.get("q_points")
         if not isinstance(q_points, list) or not q_points:
             return None
@@ -1043,7 +1266,7 @@ def _expected_runtime_sample_count(command: dict[str, object]) -> int | None:
             return len(q_points)
         duration_s = (len(q_points) - 1) / trajectory_sample_hz
         return max(2, int(round(duration_s * runtime_send_hz)) + 1)
-    if kind == "intent":
+    if kind == "joint_intent":
         control_period_s = _optional_float(command.get("control_period_s"))
         send_hz = _optional_float(command.get("send_hz"))
         if (
@@ -1400,7 +1623,7 @@ def _command_trajectory_sample_hz(
     command: dict[str, object],
     motion: MotionExecutionResult,
 ) -> float | None:
-    if command.get("kind") != "trajectory":
+    if command.get("kind") != "joint_trajectory":
         return motion.trajectory_sample_hz
     return _optional_float(command.get("trajectory_sample_hz")) or motion.trajectory_sample_hz
 
@@ -1411,7 +1634,7 @@ def _trajectory_resampling_policy(
     runtime_send_hz: float | None,
     kind: str,
 ) -> str:
-    if kind != "trajectory":
+    if kind != "joint_trajectory":
         return "intent_frame_to_runtime_send_hz"
     if (
         trajectory_sample_hz is not None
@@ -1423,7 +1646,7 @@ def _trajectory_resampling_policy(
 
 
 def _trajectory_interpolation_policy(*, resampling_policy: str, kind: str) -> str:
-    if kind != "trajectory":
+    if kind != "joint_trajectory":
         return "linear_intent_frame"
     if resampling_policy == "cubic_hermite_time_resample":
         return "bounded_cubic_hermite_joint_position_velocity"
@@ -1656,7 +1879,10 @@ def _start_pose_guard(
     q_hold_to_expected = _max_abs_error(q_hold, expected)
     q_hold_to_safe_center = _max_abs_error(q_hold, safe_center)
     failed_checks: list[str] = []
-    if q_meas_to_q_hold is None or q_meas_to_q_hold > float(max_start_error_rad):
+    if (
+        policy != "current_measured_pose"
+        and (q_meas_to_q_hold is None or q_meas_to_q_hold > float(max_start_error_rad))
+    ):
         failed_checks.append("q_meas_close_to_q_hold")
     if policy == "live_hold":
         if q_hold_to_expected is None or q_hold_to_expected > float(max_start_error_rad):
@@ -1669,6 +1895,8 @@ def _start_pose_guard(
             failed_checks.append("q_hold_close_to_safe_center")
         if q_hold_to_expected is None or q_hold_to_expected > float(max_start_error_rad):
             failed_checks.append("expected_start_matches_current_q_hold")
+    elif policy == "current_measured_pose":
+        pass
     elif q_hold_to_expected is None or q_hold_to_expected > float(max_start_error_rad):
         failed_checks.append("q_hold_close_to_explicit_q")
     return {
@@ -1739,6 +1967,18 @@ def _float_list(values: Sequence[float], *, name: str) -> list[float]:
     result = [float(value) for value in values]
     if not result:
         raise ValueError(f"{name} must not be empty")
+    return result
+
+
+def _fixed_float_list(
+    values: Sequence[float],
+    *,
+    name: str,
+    length: int,
+) -> list[float]:
+    result = _float_list(values, name=name)
+    if len(result) != length:
+        raise ValueError(f"{name} must contain exactly {length} values")
     return result
 
 

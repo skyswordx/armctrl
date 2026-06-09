@@ -22,6 +22,7 @@ from armctrl.agent_flow import (
     AgentFlowRuntimeSmokeRequest,
     AgentFlowRuntimeSmoker,
 )
+from armctrl.arx5_sdk_cartesian_runtime import Arx5SdkCartesianRuntimeBackend
 from armctrl.recipes import RecipeCatalog
 from armctrl.recipe_executor import RecipeExecutor
 from armctrl.recipe_runtime import (
@@ -48,6 +49,7 @@ from armctrl.runtime_session import (
     release_owner_from_artifact,
     runtime_readiness,
     runtime_status_from_artifact,
+    start_arx5_cartesian_runtime_session,
     start_arx5_runtime_session,
     stop_runtime_session_from_artifact,
     start_fake_runtime_session,
@@ -55,6 +57,7 @@ from armctrl.runtime_session import (
 )
 from armctrl.runtime_ipc import (
     execute_pending_runtime_commands,
+    submit_eef_command,
     submit_intent_command,
     submit_trajectory_command,
 )
@@ -128,6 +131,7 @@ from armctrl.sysid import SysIdPlanner, SysIdPlanRequest
 from armctrl.sysid_trajectory_backend import TrajectoryCommandError
 from armctrl.sysid_evidence import SysIdEvidenceImporter
 from armctrl.sysid_figaroh_adapter import FigarohEvidenceAdapter, FigarohHandoffWriter
+from armctrl.sysid_measured import MeasuredSysIdAnalyzeRequest, MeasuredSysIdAnalyzer
 from armctrl.sysid_package import SysIdPackager
 from armctrl.sysid_postprocess import SysIdPostprocessor, SysIdPostprocessResult
 from armctrl.sysid_run import (
@@ -156,6 +160,73 @@ from armctrl.sysid_solve import SysIdSolver
 from armctrl.workspace import WorkspaceSafetyConfig
 
 
+MOTION_COMMAND_SURFACE = "armctrl.motion.submit.v1"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+MOTION_PROFILES: dict[str, dict[str, object]] = {
+    "lab-sysid": {
+        "profile": "lab-sysid",
+        "schema": "armctrl.motion_profile.v1",
+        "description": "Lab SysID golden path: reviewed joint trajectory through the live runtime.",
+        "source": "sysid",
+        "owner": "sysid",
+        "runtime_backend": "arx5_sdk",
+        "start_pose_policy": "safe_center",
+        "supported_motion_kinds": ["joint-trajectory"],
+        "readiness": "live runtime status with safe_center hold",
+        "legacy_entrypoints": ["armctrl sysid run ... --adapter sdk"],
+    },
+    "lab-agent-eef": {
+        "profile": "lab-agent-eef",
+        "schema": "armctrl.motion_profile.v1",
+        "description": "Lab Agent EEF MVP: current measured Cartesian takeover through sdk_cartesian.",
+        "source": "agent",
+        "owner": "agent",
+        "runtime_backend": "sdk_cartesian",
+        "start_pose_policy": "current_measured_pose",
+        "supported_motion_kinds": ["eef-delta", "eef-twist"],
+        "readiness": "live runtime status with current measured pose hold",
+        "legacy_entrypoints": ["armctrl runtime submit-eef"],
+    },
+    "lab-agent-joint": {
+        "profile": "lab-agent-joint",
+        "schema": "armctrl.motion_profile.v1",
+        "description": "Lab Agent joint-space MVP: bounded low-frequency joint intent or checked waypoints.",
+        "source": "agent",
+        "owner": "agent",
+        "runtime_backend": "arx5_sdk",
+        "start_pose_policy": "live_hold",
+        "supported_motion_kinds": ["joint-intent", "joint-trajectory"],
+        "readiness": "live runtime status with hold_safe",
+        "legacy_entrypoints": ["armctrl runtime submit-intent", "armctrl runtime submit-trajectory"],
+    },
+    "recipe": {
+        "profile": "recipe",
+        "schema": "armctrl.motion_profile.v1",
+        "description": "Pre-reviewed recipe motions compiled to runtime trajectory or intent commands.",
+        "source": "recipe",
+        "owner": "recipe",
+        "runtime_backend": "arx5_sdk",
+        "start_pose_policy": "live_hold",
+        "supported_motion_kinds": ["joint-trajectory", "joint-intent"],
+        "readiness": "live runtime status with hold_safe",
+        "legacy_entrypoints": ["armctrl recipe runtime-submit"],
+    },
+    "teleop": {
+        "profile": "teleop",
+        "schema": "armctrl.motion_profile.v1",
+        "description": "Reserved manual/teleop profile; formalized now, hardware backend later.",
+        "source": "teleop",
+        "owner": "teleop",
+        "runtime_backend": "not_configured",
+        "start_pose_policy": "live_hold",
+        "supported_motion_kinds": ["joint-jog", "eef-twist"],
+        "readiness": "requires live runtime, deadman, and mature teleop adapter",
+        "status": "reserved",
+    },
+}
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="armctrl")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -169,7 +240,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     runtime_start_parser = runtime_subparsers.add_parser("start")
     runtime_start_parser.add_argument(
         "--backend",
-        choices=["fake", "arx5_sdk"],
+        choices=["fake", "arx5_sdk", "sdk_cartesian"],
         default="fake",
     )
     runtime_start_parser.add_argument("--model", default="X5")
@@ -191,6 +262,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--max-joint-step-rad",
         type=float,
         default=0.01,
+    )
+    runtime_start_parser.add_argument(
+        "--max-start-error-rad",
+        type=float,
+        default=0.02,
+    )
+    runtime_start_parser.add_argument(
+        "--recover-to-safe-first",
+        action="store_true",
+        help=(
+            "For sdk_cartesian only: first use the arx5_sdk joint controller to "
+            "recover to SAFE_CENTER before opening the Cartesian runtime."
+        ),
     )
     runtime_start_parser.add_argument(
         "--max-heartbeat-age-s",
@@ -471,6 +555,361 @@ def main(argv: Sequence[str] | None = None) -> int:
     runtime_submit_intent_parser.add_argument(
         "--json", action="store_true", dest="as_json"
     )
+
+    runtime_submit_eef_parser = runtime_subparsers.add_parser("submit-eef")
+    runtime_submit_eef_parser.add_argument("--session-artifact", required=True)
+    runtime_submit_eef_parser.add_argument("--owner", default="agent")
+    runtime_submit_eef_parser.add_argument(
+        "--backend",
+        required=True,
+        choices=["moveit_servo", "sdk_cartesian"],
+    )
+    runtime_submit_eef_parser.add_argument(
+        "--kind",
+        required=True,
+        choices=["eef_pose_delta", "eef_twist"],
+    )
+    runtime_submit_eef_parser.add_argument("--frame", default="eef_link")
+    runtime_submit_eef_parser.add_argument(
+        "--expected-q-start",
+        nargs="+",
+        type=float,
+        required=True,
+    )
+    runtime_submit_eef_parser.add_argument("--delta-position", nargs=3, type=float)
+    runtime_submit_eef_parser.add_argument("--delta-rpy", nargs=3, type=float)
+    runtime_submit_eef_parser.add_argument("--linear", nargs=3, type=float)
+    runtime_submit_eef_parser.add_argument("--angular", nargs=3, type=float)
+    runtime_submit_eef_parser.add_argument(
+        "--control-period-s",
+        type=float,
+        default=0.1,
+    )
+    runtime_submit_eef_parser.add_argument("--send-hz", type=float, default=50.0)
+    runtime_submit_eef_parser.add_argument(
+        "--max-start-error-rad",
+        type=float,
+        default=0.02,
+    )
+    runtime_submit_eef_parser.add_argument(
+        "--start-pose-policy",
+        choices=["live_hold", "safe_center", "explicit_q", "current_measured_pose"],
+        default="live_hold",
+    )
+    runtime_submit_eef_parser.add_argument(
+        "--heartbeat-timeout-s",
+        type=float,
+        default=0.5,
+    )
+    runtime_submit_eef_parser.add_argument(
+        "--max-heartbeat-age-s",
+        type=float,
+        default=1.0,
+    )
+    runtime_submit_eef_parser.add_argument("--output")
+    runtime_submit_eef_parser.add_argument(
+        "--json", action="store_true", dest="as_json"
+    )
+
+    motion_parser = subparsers.add_parser("motion")
+    motion_subparsers = motion_parser.add_subparsers(
+        dest="motion_command",
+        required=True,
+    )
+    motion_submit_parser = motion_subparsers.add_parser("submit")
+    motion_submit_subparsers = motion_submit_parser.add_subparsers(
+        dest="motion_kind",
+        required=True,
+    )
+
+    motion_joint_trajectory_parser = motion_submit_subparsers.add_parser(
+        "joint-trajectory"
+    )
+    motion_joint_trajectory_parser.add_argument("--session-artifact", required=True)
+    motion_joint_trajectory_parser.add_argument("--owner", default="agent")
+    motion_joint_trajectory_parser.add_argument(
+        "--expected-q-start",
+        nargs="+",
+        type=float,
+        required=True,
+    )
+    motion_joint_trajectory_parser.add_argument(
+        "--q-point",
+        nargs="+",
+        type=float,
+        action="append",
+        required=True,
+    )
+    motion_joint_trajectory_parser.add_argument("--send-hz", type=float, default=50.0)
+    motion_joint_trajectory_parser.add_argument(
+        "--trajectory-sample-hz",
+        type=float,
+    )
+    motion_joint_trajectory_parser.add_argument(
+        "--start-pose-policy",
+        choices=["live_hold", "safe_center", "explicit_q", "current_measured_pose"],
+        default="live_hold",
+    )
+    motion_joint_trajectory_parser.add_argument(
+        "--max-tracking-error-rad",
+        type=float,
+    )
+    motion_joint_trajectory_parser.add_argument("--max-tau-abs", type=float)
+    motion_joint_trajectory_parser.add_argument(
+        "--max-start-error-rad",
+        type=float,
+        default=0.02,
+    )
+    motion_joint_trajectory_parser.add_argument(
+        "--heartbeat-timeout-s",
+        type=float,
+        default=0.5,
+    )
+    motion_joint_trajectory_parser.add_argument(
+        "--max-heartbeat-age-s",
+        type=float,
+        default=1.0,
+    )
+    motion_joint_trajectory_parser.add_argument("--output")
+    motion_joint_trajectory_parser.add_argument(
+        "--json", action="store_true", dest="as_json"
+    )
+
+    motion_joint_intent_parser = motion_submit_subparsers.add_parser("joint-intent")
+    motion_joint_intent_parser.add_argument("--session-artifact", required=True)
+    motion_joint_intent_parser.add_argument("--owner", default="agent")
+    motion_joint_intent_parser.add_argument(
+        "--expected-q-start",
+        nargs="+",
+        type=float,
+        required=True,
+    )
+    motion_joint_intent_parser.add_argument(
+        "--q-target",
+        nargs="+",
+        type=float,
+        required=True,
+    )
+    motion_joint_intent_parser.add_argument(
+        "--control-period-s",
+        type=float,
+        default=0.1,
+    )
+    motion_joint_intent_parser.add_argument("--send-hz", type=float, default=50.0)
+    motion_joint_intent_parser.add_argument(
+        "--start-pose-policy",
+        choices=["live_hold", "safe_center", "explicit_q", "current_measured_pose"],
+        default="live_hold",
+    )
+    motion_joint_intent_parser.add_argument(
+        "--max-joint-delta-rad",
+        type=float,
+        default=0.005,
+    )
+    motion_joint_intent_parser.add_argument(
+        "--max-tracking-error-rad",
+        type=float,
+    )
+    motion_joint_intent_parser.add_argument("--max-tau-abs", type=float)
+    motion_joint_intent_parser.add_argument(
+        "--max-start-error-rad",
+        type=float,
+        default=0.02,
+    )
+    motion_joint_intent_parser.add_argument(
+        "--heartbeat-timeout-s",
+        type=float,
+        default=0.5,
+    )
+    motion_joint_intent_parser.add_argument(
+        "--max-heartbeat-age-s",
+        type=float,
+        default=1.0,
+    )
+    motion_joint_intent_parser.add_argument("--output")
+    motion_joint_intent_parser.add_argument(
+        "--json", action="store_true", dest="as_json"
+    )
+
+    motion_eef_delta_parser = motion_submit_subparsers.add_parser("eef-delta")
+    motion_eef_delta_parser.add_argument("--session-artifact", required=True)
+    motion_eef_delta_parser.add_argument("--owner", default="agent")
+    motion_eef_delta_parser.add_argument(
+        "--backend",
+        required=True,
+        choices=["moveit_servo", "sdk_cartesian"],
+    )
+    motion_eef_delta_parser.add_argument("--frame", default="eef_link")
+    motion_eef_delta_parser.add_argument(
+        "--expected-q-start",
+        nargs="+",
+        type=float,
+        required=True,
+    )
+    motion_eef_delta_parser.add_argument(
+        "--delta-position",
+        nargs=3,
+        type=float,
+        required=True,
+    )
+    motion_eef_delta_parser.add_argument(
+        "--delta-rpy",
+        nargs=3,
+        type=float,
+        required=True,
+    )
+    motion_eef_delta_parser.add_argument("--control-period-s", type=float, default=0.1)
+    motion_eef_delta_parser.add_argument("--send-hz", type=float, default=50.0)
+    motion_eef_delta_parser.add_argument(
+        "--start-pose-policy",
+        choices=["live_hold", "safe_center", "explicit_q", "current_measured_pose"],
+        default="live_hold",
+    )
+    motion_eef_delta_parser.add_argument(
+        "--max-start-error-rad",
+        type=float,
+        default=0.02,
+    )
+    motion_eef_delta_parser.add_argument(
+        "--heartbeat-timeout-s",
+        type=float,
+        default=0.5,
+    )
+    motion_eef_delta_parser.add_argument(
+        "--max-heartbeat-age-s",
+        type=float,
+        default=1.0,
+    )
+    motion_eef_delta_parser.add_argument("--output")
+    motion_eef_delta_parser.add_argument(
+        "--json", action="store_true", dest="as_json"
+    )
+
+    motion_eef_twist_parser = motion_submit_subparsers.add_parser("eef-twist")
+    motion_eef_twist_parser.add_argument("--session-artifact", required=True)
+    motion_eef_twist_parser.add_argument("--owner", default="agent")
+    motion_eef_twist_parser.add_argument(
+        "--backend",
+        required=True,
+        choices=["moveit_servo", "sdk_cartesian"],
+    )
+    motion_eef_twist_parser.add_argument("--frame", default="eef_link")
+    motion_eef_twist_parser.add_argument(
+        "--expected-q-start",
+        nargs="+",
+        type=float,
+        required=True,
+    )
+    motion_eef_twist_parser.add_argument(
+        "--linear",
+        nargs=3,
+        type=float,
+        required=True,
+    )
+    motion_eef_twist_parser.add_argument(
+        "--angular",
+        nargs=3,
+        type=float,
+        required=True,
+    )
+    motion_eef_twist_parser.add_argument("--control-period-s", type=float, default=0.1)
+    motion_eef_twist_parser.add_argument("--send-hz", type=float, default=50.0)
+    motion_eef_twist_parser.add_argument(
+        "--start-pose-policy",
+        choices=["live_hold", "safe_center", "explicit_q", "current_measured_pose"],
+        default="live_hold",
+    )
+    motion_eef_twist_parser.add_argument(
+        "--max-start-error-rad",
+        type=float,
+        default=0.02,
+    )
+    motion_eef_twist_parser.add_argument(
+        "--heartbeat-timeout-s",
+        type=float,
+        default=0.5,
+    )
+    motion_eef_twist_parser.add_argument(
+        "--max-heartbeat-age-s",
+        type=float,
+        default=1.0,
+    )
+    motion_eef_twist_parser.add_argument("--output")
+    motion_eef_twist_parser.add_argument(
+        "--json", action="store_true", dest="as_json"
+    )
+
+    motion_eef_pose_parser = motion_submit_subparsers.add_parser("eef-pose")
+    motion_eef_pose_parser.add_argument("--session-artifact", required=True)
+    motion_eef_pose_parser.add_argument("--owner", default="agent")
+    motion_eef_pose_parser.add_argument(
+        "--backend",
+        choices=["moveit_servo", "sdk_cartesian"],
+        default="moveit_servo",
+    )
+    motion_eef_pose_parser.add_argument("--frame", default="base_link")
+    motion_eef_pose_parser.add_argument("--position", nargs=3, type=float)
+    motion_eef_pose_parser.add_argument("--rpy", nargs=3, type=float)
+    motion_eef_pose_parser.add_argument("--output")
+    motion_eef_pose_parser.add_argument(
+        "--json", action="store_true", dest="as_json"
+    )
+
+    motion_joint_jog_parser = motion_submit_subparsers.add_parser("joint-jog")
+    motion_joint_jog_parser.add_argument("--session-artifact", required=True)
+    motion_joint_jog_parser.add_argument("--owner", default="teleop")
+    motion_joint_jog_parser.add_argument("--joint-delta", nargs="+", type=float)
+    motion_joint_jog_parser.add_argument("--velocity", nargs="+", type=float)
+    motion_joint_jog_parser.add_argument("--deadman", action="store_true")
+    motion_joint_jog_parser.add_argument("--output")
+    motion_joint_jog_parser.add_argument(
+        "--json", action="store_true", dest="as_json"
+    )
+
+    motion_result_parser = motion_subparsers.add_parser("result")
+    motion_result_source = motion_result_parser.add_mutually_exclusive_group(
+        required=True
+    )
+    motion_result_source.add_argument("--result-artifact")
+    motion_result_source.add_argument("--run-dir")
+    motion_result_parser.add_argument("--all", action="store_true")
+    motion_result_parser.add_argument("--require-owner", action="append", default=[])
+    motion_result_parser.add_argument("--expect-owner")
+    motion_result_parser.add_argument("--expect-mode")
+    motion_result_parser.add_argument("--expect-sample-count", type=int)
+    motion_result_parser.add_argument("--max-jitter-p99-ms", type=float)
+    motion_result_parser.add_argument("--max-tracking-error-rad", type=float)
+    motion_result_parser.add_argument("--output")
+    motion_result_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    profile_parser = subparsers.add_parser("profile")
+    profile_subparsers = profile_parser.add_subparsers(
+        dest="profile_command",
+        required=True,
+    )
+    profile_list_parser = profile_subparsers.add_parser("list")
+    profile_list_parser.add_argument("--json", action="store_true", dest="as_json")
+    profile_show_parser = profile_subparsers.add_parser("show")
+    profile_show_parser.add_argument("name")
+    profile_show_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    console_parser = subparsers.add_parser("console")
+    console_subparsers = console_parser.add_subparsers(
+        dest="console_command",
+        required=True,
+    )
+    console_status_parser = console_subparsers.add_parser("status")
+    console_status_parser.add_argument("--session-artifact", required=True)
+    console_status_parser.add_argument(
+        "--max-heartbeat-age-s",
+        type=float,
+        default=1.0,
+    )
+    console_status_parser.add_argument("--output")
+    console_status_parser.add_argument("--json", action="store_true", dest="as_json")
+    console_catalog_parser = console_subparsers.add_parser("catalog")
+    console_catalog_parser.add_argument("--output")
+    console_catalog_parser.add_argument("--json", action="store_true", dest="as_json")
 
     recipe_parser = subparsers.add_parser("recipe")
     recipe_subparsers = recipe_parser.add_subparsers(dest="recipe_command", required=True)
@@ -773,6 +1212,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--max-tau-abs",
         type=float,
     )
+    agent_flow_real_runtime_smoke_parser.add_argument(
+        "--max-heartbeat-age-s",
+        type=float,
+        default=1.0,
+    )
     agent_flow_real_runtime_smoke_parser.add_argument("--runtime-session-artifact")
     agent_flow_real_runtime_smoke_parser.add_argument("--confirm", required=True)
     agent_flow_real_runtime_smoke_parser.add_argument("--output")
@@ -1012,6 +1456,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     sysid_run_parser.add_argument("--confirm")
     sysid_run_parser.add_argument("--readiness-artifact")
     sysid_run_parser.add_argument("--runtime-session-artifact")
+    sysid_run_parser.add_argument("--max-heartbeat-age-s", type=float, default=1.0)
     sysid_run_parser.add_argument("--max-tracking-error-rad", type=float)
     sysid_run_parser.add_argument("--max-tau-abs", type=float)
     sysid_run_parser.add_argument("--json", action="store_true", dest="as_json")
@@ -1024,6 +1469,35 @@ def main(argv: Sequence[str] | None = None) -> int:
     sysid_solve_parser = sysid_subparsers.add_parser("solve")
     sysid_solve_parser.add_argument("--dataset", required=True)
     sysid_solve_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    sysid_analyze_measured_parser = sysid_subparsers.add_parser("analyze-measured")
+    sysid_analyze_measured_parser.add_argument("--dataset", required=True)
+    sysid_analyze_measured_parser.add_argument("--urdf-path", required=True)
+    sysid_analyze_measured_parser.add_argument("--primary", required=True)
+    sysid_analyze_measured_parser.add_argument(
+        "--validation",
+        action="append",
+        default=[],
+    )
+    sysid_analyze_measured_parser.add_argument("--output", required=True)
+    sysid_analyze_measured_parser.add_argument(
+        "--filter-method",
+        choices=["savgol"],
+        default="savgol",
+    )
+    sysid_analyze_measured_parser.add_argument(
+        "--savgol-window-samples",
+        type=int,
+        default=21,
+    )
+    sysid_analyze_measured_parser.add_argument(
+        "--savgol-polyorder",
+        type=int,
+        default=3,
+    )
+    sysid_analyze_measured_parser.add_argument(
+        "--json", action="store_true", dest="as_json"
+    )
 
     sysid_review_parser = sysid_subparsers.add_parser("review-candidate")
     sysid_review_parser.add_argument("--plan-dir", required=True)
@@ -1306,6 +1780,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     sysid_agent_sysid_smoke_readiness_parser.add_argument(
         "--runtime-status-artifact",
     )
+    sysid_agent_sysid_smoke_readiness_parser.add_argument(
+        "--max-heartbeat-age-s",
+        type=float,
+        default=1.0,
+    )
     sysid_agent_sysid_smoke_readiness_parser.add_argument("--output")
     sysid_agent_sysid_smoke_readiness_parser.add_argument(
         "--json",
@@ -1425,6 +1904,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 artifact_key="runtime_session",
             )
             if args.serve:
+                _clear_runtime_stop_request(Path(args.output))
                 runtime = _live_runtime_from_session_payload(
                     backend=backend,
                     payload=payload,
@@ -1436,6 +1916,162 @@ def main(argv: Sequence[str] | None = None) -> int:
                     backend=backend,
                     runtime=runtime,
                     hold_tick=_arx5_active_hold_tick(
+                        backend=backend,
+                        hold_hz=args.hold_hz,
+                    ),
+                )
+            _emit(payload, as_json=args.as_json)
+            return 3
+        if args.backend == "sdk_cartesian":
+            rejected = arx5_runtime_start_preflight(
+                model=args.model,
+                interface=args.interface,
+                confirm=args.confirm,
+            )
+            if rejected is not None:
+                rejected["backend"] = "sdk_cartesian"
+                rejected["next_gate"] = "confirm sdk_cartesian runtime start on the robot host after arx5_sdk recovery to SAFE_CENTER"
+                payload = _attach_output_artifact(
+                    rejected,
+                    args.output,
+                    artifact_key="runtime_session",
+                )
+                _emit(payload, as_json=args.as_json)
+                return 3
+            recovery_payload: dict[str, object] | None = None
+            if args.recover_to_safe_first:
+                recovery_backend = Arx5InterfaceCollectionBackend(
+                    model=args.model,
+                    interface=args.interface,
+                    max_joint_step_rad=args.max_joint_step_rad,
+                    shutdown_to_passive=False,
+                )
+                try:
+                    recovery_payload = start_arx5_runtime_session(
+                        backend=recovery_backend,
+                        model=args.model,
+                        interface=args.interface,
+                        safe_center=tuple(args.safe_center),
+                        send_hz=args.send_hz,
+                        hold_hz=args.hold_hz,
+                        max_joint_step_rad=args.max_joint_step_rad,
+                        max_heartbeat_age_s=args.max_heartbeat_age_s,
+                    )
+                except Exception as error:
+                    try:
+                        recovery_backend.damping()
+                    except Exception:
+                        pass
+                    payload = {
+                        "status": "rejected",
+                        "schema": "armctrl.arm_runtime_session.v1",
+                        "backend": "sdk_cartesian",
+                        "model": args.model,
+                        "interface": args.interface,
+                        "requires_confirm": ARX5_RUNTIME_START_CONFIRMATION,
+                        "hardware_motion": True,
+                        "movement_command_sent": "unknown",
+                        "sdk_opened": "unknown",
+                        "reason": f"sdk_cartesian pre-recovery failed: {error}",
+                        "fault_landing_mode": "damping",
+                        "next_gate": "inspect robot state and SDK logs before retrying Agent EEF runtime start",
+                    }
+                    payload = _attach_output_artifact(
+                        payload,
+                        args.output,
+                        artifact_key="runtime_session",
+                    )
+                    _emit(payload, as_json=args.as_json)
+                    return 3
+                del recovery_backend
+                time.sleep(0.05)
+            backend = Arx5SdkCartesianRuntimeBackend(
+                model=args.model,
+                interface=args.interface,
+            )
+            try:
+                payload = start_arx5_cartesian_runtime_session(
+                    backend=backend,
+                    model=args.model,
+                    interface=args.interface,
+                    safe_center=tuple(args.safe_center),
+                    send_hz=args.send_hz,
+                    hold_hz=args.hold_hz,
+                    max_start_error_rad=args.max_start_error_rad,
+                    max_heartbeat_age_s=args.max_heartbeat_age_s,
+                )
+            except Exception as error:
+                try:
+                    backend.damping()
+                except Exception:
+                    pass
+                payload = {
+                    "status": "rejected",
+                    "schema": "armctrl.arm_runtime_session.v1",
+                    "backend": "sdk_cartesian",
+                    "model": args.model,
+                    "interface": args.interface,
+                    "requires_confirm": ARX5_RUNTIME_START_CONFIRMATION,
+                    "hardware_motion": True,
+                    "movement_command_sent": "unknown",
+                    "sdk_opened": "unknown",
+                    "reason": f"sdk_cartesian runtime start failed: {error}",
+                    "fault_landing_mode": "damping",
+                    "next_gate": "inspect sdk_cartesian current-pose takeover and measured q before retrying Agent EEF runtime",
+                }
+                if recovery_payload is not None:
+                    payload["pre_recovery"] = {
+                        "backend": "arx5_sdk",
+                        "status": recovery_payload.get("status"),
+                        "mode": recovery_payload.get("mode"),
+                        "q_meas_after_recovery": recovery_payload.get("q_meas"),
+                        "q_hold_after_recovery": recovery_payload.get("q_hold"),
+                        "recovery": recovery_payload.get("recovery"),
+                        "handoff_policy": "optional_joint_recover_then_current_pose_cartesian_takeover",
+                    }
+                payload = _attach_output_artifact(
+                    payload,
+                    args.output,
+                    artifact_key="runtime_session",
+                )
+                _emit(payload, as_json=args.as_json)
+                return 3
+            if recovery_payload is not None:
+                payload["pre_recovery"] = {
+                    "backend": "arx5_sdk",
+                    "status": recovery_payload.get("status"),
+                    "mode": recovery_payload.get("mode"),
+                    "q_start": recovery_payload.get("recovery", {}).get("q_start")
+                    if isinstance(recovery_payload.get("recovery"), dict)
+                    else None,
+                    "q_meas_after_recovery": recovery_payload.get("q_meas"),
+                    "q_hold_after_recovery": recovery_payload.get("q_hold"),
+                    "recovery": recovery_payload.get("recovery"),
+                    "handoff_policy": "optional_joint_recover_then_current_pose_cartesian_takeover",
+                }
+                contract = dict(payload.get("runtime_contract", {}))
+                contract["droop_recovery_supported"] = True
+                contract["recovery_backend"] = "arx5_sdk"
+                contract["handoff_guard"] = "sdk_cartesian_current_pose_takeover_after_recovery"
+                payload["runtime_contract"] = contract
+            payload = _attach_output_artifact(
+                payload,
+                args.output,
+                artifact_key="runtime_session",
+            )
+            if args.serve:
+                _clear_runtime_stop_request(Path(args.output))
+                runtime = _live_runtime_from_session_payload(
+                    backend=backend,
+                    payload=payload,
+                )
+                payload = _serve_runtime_session_until_stopped(
+                    session_artifact_path=Path(args.output),
+                    heartbeat_period_s=args.heartbeat_period_s,
+                    max_heartbeat_age_s=args.max_heartbeat_age_s,
+                    backend=backend,
+                    runtime=runtime,
+                    hold_tick=_sdk_cartesian_active_hold_tick(
                         backend=backend,
                         hold_hz=args.hold_hz,
                     ),
@@ -1458,6 +2094,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             artifact_key="runtime_session",
         )
         if args.serve:
+            _clear_runtime_stop_request(Path(args.output))
             backend = FakeMotionBackend()
             backend.send_joint_command(
                 tuple(float(value) for value in payload.get("q_meas") or []),
@@ -1657,6 +2294,47 @@ def main(argv: Sequence[str] | None = None) -> int:
         _emit(payload, as_json=args.as_json)
         return 0 if payload.get("status") == "pass" else 3
 
+    if args.command == "motion" and args.motion_command == "result":
+        try:
+            if args.all:
+                payload = _runtime_result_check_all_payload(
+                    run_dir=Path(args.run_dir) if args.run_dir is not None else None,
+                    max_jitter_p99_ms=args.max_jitter_p99_ms,
+                    max_tracking_error_rad=args.max_tracking_error_rad,
+                    required_owners=args.require_owner,
+                )
+            else:
+                payload = _runtime_result_check_payload(
+                    result_artifact_path=_runtime_result_artifact_path_from_args(
+                        result_artifact=args.result_artifact,
+                        run_dir=args.run_dir,
+                    ),
+                    expect_owner=args.expect_owner,
+                    expect_mode=args.expect_mode,
+                    expect_sample_count=args.expect_sample_count,
+                    max_jitter_p99_ms=args.max_jitter_p99_ms,
+                    max_tracking_error_rad=args.max_tracking_error_rad,
+                )
+        except (OSError, ValueError) as error:
+            payload = {
+                "status": "fail",
+                "schema": "armctrl.motion_result_check.v1",
+                "reason": str(error),
+                "result_artifact": args.result_artifact,
+                "run_dir": args.run_dir,
+                "next_gate": "wait for live runtime command result artifact",
+            }
+        payload = dict(payload)
+        payload["command_surface"] = "armctrl.motion.result.v1"
+        payload["legacy_equivalent"] = "armctrl runtime result-check"
+        payload = _attach_output_artifact(
+            payload,
+            args.output,
+            artifact_key="motion_result_check",
+        )
+        _emit(payload, as_json=args.as_json)
+        return 0 if payload.get("status") == "pass" else 3
+
     if args.command == "runtime" and args.runtime_command == "preposition":
         try:
             runtime_status = runtime_status_from_artifact(
@@ -1791,6 +2469,142 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 3
         _emit(payload, as_json=args.as_json)
         return 0
+
+    if args.command == "runtime" and args.runtime_command == "submit-eef":
+        try:
+            payload = submit_eef_command(
+                session_artifact_path=Path(args.session_artifact),
+                owner=args.owner,
+                backend=args.backend,
+                kind=args.kind,
+                frame=args.frame,
+                expected_q_start=tuple(args.expected_q_start),
+                control_period_s=args.control_period_s,
+                send_hz=args.send_hz,
+                start_pose_policy=args.start_pose_policy,
+                max_start_error_rad=args.max_start_error_rad,
+                heartbeat_timeout_s=args.heartbeat_timeout_s,
+                max_heartbeat_age_s=args.max_heartbeat_age_s,
+                delta_position_m=(
+                    tuple(args.delta_position)
+                    if args.delta_position is not None
+                    else None
+                ),
+                delta_rpy_rad=(
+                    tuple(args.delta_rpy) if args.delta_rpy is not None else None
+                ),
+                linear_mps=tuple(args.linear) if args.linear is not None else None,
+                angular_rps=(
+                    tuple(args.angular) if args.angular is not None else None
+                ),
+                output_path=Path(args.output) if args.output else None,
+            )
+        except RuntimeSessionError as error:
+            payload = {
+                **error.payload,
+                "status": "rejected",
+                "schema": "armctrl.arm_runtime_submit.v1",
+                "command_space": "eef",
+                "reason": str(error),
+                "movement_command_sent": False,
+            }
+            _emit(payload, as_json=args.as_json)
+            return 3
+        except ValueError as error:
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.arm_runtime_submit.v1",
+                "command_space": "eef",
+                "owner": args.owner,
+                "mode": MotionMode.AGENT_SERVO.value,
+                "backend": args.backend,
+                "reason": str(error),
+                "movement_command_sent": False,
+            }
+            payload = _attach_output_artifact(payload, args.output)
+            _emit(payload, as_json=args.as_json)
+            return 3
+        _emit(payload, as_json=args.as_json)
+        return 0
+
+    if args.command == "motion" and args.motion_command == "submit":
+        return _handle_motion_submit(args)
+
+    if args.command == "profile" and args.profile_command == "list":
+        payload = {
+            "status": "ok",
+            "schema": "armctrl.motion_profile_catalog.v1",
+            "profiles": _motion_profile_catalog(include_description=True),
+        }
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "profile" and args.profile_command == "show":
+        profile = MOTION_PROFILES.get(args.name)
+        if profile is None:
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.motion_profile.v1",
+                "reason": f"unknown profile: {args.name}",
+                "available_profiles": sorted(MOTION_PROFILES),
+            }
+            _emit(payload, as_json=args.as_json)
+            return 3
+        payload = {"status": "ok", **profile}
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "console" and args.console_command == "status":
+        try:
+            runtime_status = runtime_status_from_artifact(
+                session_artifact_path=Path(args.session_artifact),
+                max_heartbeat_age_s=args.max_heartbeat_age_s,
+            )
+            payload = {
+                "status": "ok",
+                "schema": "armctrl.runtime_console_status.v1",
+                "runtime": runtime_status,
+                "profiles": _motion_profile_catalog(include_description=False),
+                "motion_surface": _motion_surface_catalog(),
+            }
+        except RuntimeSessionError as error:
+            payload = {
+                **error.payload,
+                "status": "blocked",
+                "schema": "armctrl.runtime_console_status.v1",
+                "reason": str(error),
+                "next_gate": "start or recover live runtime before using console",
+            }
+        payload = _attach_output_artifact(
+            payload,
+            args.output,
+            artifact_key="runtime_console_status",
+        )
+        _emit(payload, as_json=args.as_json)
+        return 0 if payload.get("status") == "ok" else 3
+
+    if args.command == "console" and args.console_command == "catalog":
+        payload = {
+            "status": "ok",
+            "schema": "armctrl.runtime_console_catalog.v1",
+            "profiles": _motion_profile_catalog(include_description=True),
+            "motion_surface": _motion_surface_catalog(),
+            "operator_surfaces": {
+                "runtime_status": "armctrl console status --session-artifact <runtime_session.json>",
+                "submit_motion": "armctrl motion submit <kind> ...",
+                "check_result": "armctrl motion result --run-dir <run_dir>",
+                "show_profile": "armctrl profile show <name>",
+            },
+            "legacy_policy": {
+                "formal_control_surface": "motion/profile/console",
+                "sysid_run_sdk": "operator-facing SysID compiler into motion submit joint-trajectory",
+                "runtime_submit_legacy": "compatibility/diagnostic surface; prefer armctrl motion submit",
+            },
+        }
+        payload = _attach_output_artifact(
+            payload,
+            args.output,
+            artifact_key="runtime_console_catalog",
+        )
+        return _emit(payload, as_json=args.as_json)
 
     if args.command == "recipe" and args.recipe_command == "list":
         payload = {
@@ -2386,6 +3200,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             runtime_status = _runtime_first_sysid_readiness_artifact(
                 readiness_artifact,
                 runtime_session_artifact_path=Path(args.runtime_session_artifact),
+                max_heartbeat_age_s=args.max_heartbeat_age_s,
             )
             readiness = _read_agent_sysid_readiness_from_payload(runtime_status)
             start_pose = _runtime_live_hold_start_pose(
@@ -2418,7 +3233,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 max_joint_delta_rad=args.max_joint_delta_rad,
                 max_start_error_rad=0.02,
                 heartbeat_timeout_s=0.5,
-                max_heartbeat_age_s=1.0,
+                max_heartbeat_age_s=args.max_heartbeat_age_s,
                 max_tracking_error_rad=args.max_tracking_error_rad,
                 max_tau_abs=args.max_tau_abs,
             )
@@ -3216,8 +4031,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                         duration_s=args.duration,
                         amplitude_rad=args.amplitude,
                         q_center=q_center,
-                        urdf_path=args.urdf_path,
-                        safe_config_path=args.safe_config,
+                        urdf_path=_repo_default_path(args.urdf_path),
+                        safe_config_path=_repo_default_path(args.safe_config),
                         output_dir=Path(args.output),
                         render_path=render_path,
                         candidate_trajectory_path=(
@@ -3263,6 +4078,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             readiness_artifact = json.loads(
                 readiness_artifact_path.read_text(encoding="utf-8")
             )
+            readiness_artifact = _unwrap_runtime_status_artifact(readiness_artifact)
             if readiness_artifact.get("schema") != "armctrl.arm_runtime_status.v1":
                 payload = {
                     "status": "rejected",
@@ -3310,6 +4126,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     if args.runtime_session_artifact is not None
                     else None
                 ),
+                max_heartbeat_age_s=args.max_heartbeat_age_s,
             )
             if not _sysid_run_readiness_allowed(readiness_artifact):
                 payload = gate.reject_failed_readiness(
@@ -3366,8 +4183,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                         duration_s=args.duration,
                         amplitude_rad=args.amplitude,
                         q_center=q_center,
-                        urdf_path=args.urdf_path,
-                        safe_config_path=args.safe_config,
+                        urdf_path=_repo_default_path(args.urdf_path),
+                        safe_config_path=_repo_default_path(args.safe_config),
                         output_dir=Path(args.output),
                         candidate_trajectory_path=(
                             Path(args.candidate_trajectory)
@@ -3411,24 +4228,46 @@ def main(argv: Sequence[str] | None = None) -> int:
                     Path(plan.artifacts["execution_trajectory"]),
                     dof=args.dof,
                 )
+                dq_policy = "preserved"
                 if dq_points is None:
                     dq_points = _derive_sysid_execution_dq_points(
                         q_points,
                         sample_hz=float(args.sample_hz),
                     )
+                    dq_policy = "derived_finite_difference"
+                ddq_points = _read_sysid_execution_ddq_points(
+                    Path(plan.artifacts["execution_trajectory"]),
+                    dof=args.dof,
+                )
+                ddq_policy = "preserved" if ddq_points is not None else "missing"
+                artifact_policy = {
+                    "schema": "armctrl.sysid_runtime_compiler_policy.v1",
+                    "trajectory_artifact": plan.artifacts["execution_trajectory"],
+                    "q_cmd": "preserved",
+                    "dq_cmd": dq_policy,
+                    "ddq_cmd": ddq_policy,
+                    "sample_hz": float(args.sample_hz),
+                }
                 queued = submit_trajectory_command(
                     session_artifact_path=Path(args.runtime_session_artifact),
                     owner="sysid",
                     expected_q_start=q_center,
                     q_points=q_points,
                     dq_points=dq_points,
+                    ddq_points=ddq_points,
+                    artifact_policy=artifact_policy,
                     send_hz=args.sample_hz,
                     max_start_error_rad=0.02,
                     heartbeat_timeout_s=max(0.5, float(args.duration) + 1.0),
-                    max_heartbeat_age_s=1.0,
+                    max_heartbeat_age_s=args.max_heartbeat_age_s,
                     start_pose_policy="live_hold",
                     max_tracking_error_rad=args.max_tracking_error_rad,
                     max_tau_abs=args.max_tau_abs,
+                )
+                queued = _annotate_motion_submit_payload(
+                    queued,
+                    motion_kind="joint-trajectory",
+                    legacy_equivalent="armctrl sysid run ... --adapter sdk",
                 )
             except (RuntimeSessionError, RuntimeError, ValueError) as error:
                 payload = {
@@ -3479,10 +4318,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "runtime_command": {
                     "command_id": queued["command_id"],
                     "status": "queued",
+                    "command_surface": queued.get("command_surface"),
+                    "motion_kind": queued.get("motion_kind"),
                     "artifacts": queued["artifacts"],
                     "sample_count": len(q_points),
                     "send_hz": args.sample_hz,
+                    "artifact_policy": artifact_policy,
                 },
+                "command_surface": queued.get("command_surface"),
+                "motion_kind": queued.get("motion_kind"),
+                "legacy_equivalent": queued.get("legacy_equivalent"),
                 "artifacts": plan.artifacts,
                 "fault_landing_mode": "damping",
                 "recording_starts_after_safe_state": True,
@@ -3503,8 +4348,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     duration_s=args.duration,
                     amplitude_rad=args.amplitude,
                     q_center=q_center,
-                    urdf_path=args.urdf_path,
-                    safe_config_path=args.safe_config,
+                    urdf_path=_repo_default_path(args.urdf_path),
+                    safe_config_path=_repo_default_path(args.safe_config),
                     output_dir=Path(args.output),
                     runtime_session_artifact_path=(
                         Path(args.runtime_session_artifact)
@@ -3576,6 +4421,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = SysIdSolver().run(dataset_path)
         payload = {"status": "ok", **result.to_json()}
         return _emit(payload, as_json=args.as_json)
+
+    if args.command == "sysid" and args.sysid_command == "analyze-measured":
+        result = MeasuredSysIdAnalyzer().run(
+            MeasuredSysIdAnalyzeRequest(
+                dataset_dir=Path(args.dataset),
+                urdf_path=args.urdf_path,
+                primary_label=args.primary,
+                validation_labels=tuple(args.validation),
+                output_dir=Path(args.output),
+                filter_method=args.filter_method,
+                savgol_window_samples=args.savgol_window_samples,
+                savgol_polyorder=args.savgol_polyorder,
+            )
+        )
+        return _emit(result.to_json(), as_json=args.as_json)
 
     if args.command == "sysid" and args.sysid_command == "review-candidate":
         result = SysIdOfflineReviewer().review(
@@ -3753,10 +4613,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "fault_landing_mode": "damping",
                 "next_gate": "inspect session and measured robot state before retrying jog",
             }
+            payload = _diagnostic_only_sdk_payload(payload)
             payload = _attach_output_artifact(payload, args.output, artifact_key="jog")
             _emit(payload, as_json=args.as_json)
             return 3
-        payload = {"status": "ok", **result.to_json()}
+        payload = _diagnostic_only_sdk_payload({"status": "ok", **result.to_json()})
         run_status = payload.get("run_status")
         if run_status is not None and run_status != "completed":
             payload["status"] = str(run_status)
@@ -3795,6 +4656,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "fault_landing_mode": "damping",
                 "next_gate": "inspect measured startup recovery inputs before retrying",
             }
+            payload = _diagnostic_only_sdk_payload(payload)
             payload = _attach_output_artifact(
                 payload,
                 args.output,
@@ -3802,7 +4664,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             _emit(payload, as_json=args.as_json)
             return 3
-        payload = {"status": "ok", **result.to_json()}
+        payload = _diagnostic_only_sdk_payload({"status": "ok", **result.to_json()})
         run_status = payload.get("run_status")
         if run_status is not None and run_status != "completed":
             payload["status"] = str(run_status)
@@ -3907,6 +4769,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "fault_landing_mode": "damping",
                 "next_gate": "install arx5_interface on the target Linux host and rerun sdk-doctor before tiny motion",
             }
+            payload = _diagnostic_only_sdk_payload(payload)
             payload = _attach_output_artifact(payload, args.output)
             _emit(payload, as_json=args.as_json)
             return 3
@@ -3924,6 +4787,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "next_gate": "plan an explicit measured-state recovery before retrying tiny motion",
                 **error.to_rejection_payload(),
             }
+            payload = _diagnostic_only_sdk_payload(payload)
             payload = _attach_output_artifact(payload, args.output)
             _emit(payload, as_json=args.as_json)
             return 3
@@ -3956,10 +4820,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "fault_landing_mode": "damping",
                     "next_gate": "rerun sdk-doctor and sdk-hold-damping-check before real tiny motion",
                 }
+            payload = _diagnostic_only_sdk_payload(payload)
             payload = _attach_output_artifact(payload, args.output)
             _emit(payload, as_json=args.as_json)
             return 3
-        payload = {"status": "ok", **result.to_json()}
+        payload = _diagnostic_only_sdk_payload({"status": "ok", **result.to_json()})
         run_status = payload.get("run_status")
         if run_status is not None and run_status != "completed":
             payload["status"] = str(run_status)
@@ -4002,7 +4867,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 json.loads(
                     Path(args.runtime_status_artifact).read_text(encoding="utf-8")
                 ),
-                max_heartbeat_age_s=1.0,
+                max_heartbeat_age_s=args.max_heartbeat_age_s,
             )
             if args.runtime_status_artifact is not None
             else None
@@ -4076,6 +4941,338 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     parser.error("unsupported command")
     return 2
+
+
+def _repo_default_path(path_text: str) -> str:
+    """Resolve built-in repo-relative defaults without changing custom paths."""
+
+    path = Path(path_text)
+    if path.is_absolute():
+        return str(path)
+    repo_path = REPO_ROOT / path
+    if repo_path.exists():
+        return str(repo_path)
+    return path_text
+
+
+def _motion_profile_catalog(*, include_description: bool) -> list[dict[str, object]]:
+    profiles: list[dict[str, object]] = []
+    for name, profile in sorted(MOTION_PROFILES.items()):
+        item: dict[str, object] = {
+            "name": name,
+            "runtime_backend": profile.get("runtime_backend"),
+            "owner": profile.get("owner"),
+            "start_pose_policy": profile.get("start_pose_policy"),
+            "supported_motion_kinds": profile.get("supported_motion_kinds"),
+            "status": profile.get("status", "available"),
+        }
+        if include_description:
+            item["description"] = str(profile.get("description"))
+            item["readiness"] = profile.get("readiness")
+            item["legacy_entrypoints"] = profile.get("legacy_entrypoints", [])
+        profiles.append(item)
+    return profiles
+
+
+def _motion_surface_catalog() -> dict[str, object]:
+    return {
+        "submit_schema": MOTION_COMMAND_SURFACE,
+        "supported_submit_kinds": [
+            "joint-trajectory",
+            "joint-intent",
+            "eef-delta",
+            "eef-twist",
+            "eef-pose",
+            "joint-jog",
+        ],
+        "hardware_not_implemented_yet": ["eef-pose", "joint-jog"],
+        "reserved_contract_kinds": {
+            "eef-pose": "absolute EEF pose command contract; rejected until a mature pose backend is configured",
+            "joint-jog": "teleop/manual jog command contract; rejected until deadman and jog backend are configured",
+        },
+        "formal_cli": [
+            "armctrl motion submit joint-trajectory",
+            "armctrl motion submit joint-intent",
+            "armctrl motion submit eef-delta",
+            "armctrl motion submit eef-twist",
+            "armctrl motion submit eef-pose",
+            "armctrl motion submit joint-jog",
+        ],
+    }
+
+
+def _handle_motion_submit(args: argparse.Namespace) -> int:
+    try:
+        if args.motion_kind == "joint-trajectory":
+            payload = submit_trajectory_command(
+                session_artifact_path=Path(args.session_artifact),
+                owner=args.owner,
+                expected_q_start=tuple(args.expected_q_start),
+                q_points=tuple(tuple(point) for point in args.q_point),
+                send_hz=args.send_hz,
+                trajectory_sample_hz=args.trajectory_sample_hz,
+                start_pose_policy=args.start_pose_policy,
+                max_start_error_rad=args.max_start_error_rad,
+                heartbeat_timeout_s=args.heartbeat_timeout_s,
+                max_heartbeat_age_s=args.max_heartbeat_age_s,
+                output_path=None,
+                max_tracking_error_rad=args.max_tracking_error_rad,
+                max_tau_abs=args.max_tau_abs,
+            )
+            payload = _annotate_motion_submit_payload(
+                payload,
+                motion_kind="joint-trajectory",
+                legacy_equivalent="armctrl runtime submit-trajectory",
+            )
+            payload = _attach_output_artifact(
+                payload,
+                args.output,
+                artifact_key="motion_submit",
+            )
+            _emit(payload, as_json=args.as_json)
+            return 0
+
+        if args.motion_kind == "joint-intent":
+            payload = submit_intent_command(
+                session_artifact_path=Path(args.session_artifact),
+                owner=args.owner,
+                expected_q_start=tuple(args.expected_q_start),
+                q_target=tuple(args.q_target),
+                control_period_s=args.control_period_s,
+                send_hz=args.send_hz,
+                start_pose_policy=args.start_pose_policy,
+                max_joint_delta_rad=args.max_joint_delta_rad,
+                max_start_error_rad=args.max_start_error_rad,
+                heartbeat_timeout_s=args.heartbeat_timeout_s,
+                max_heartbeat_age_s=args.max_heartbeat_age_s,
+                output_path=None,
+                max_tracking_error_rad=args.max_tracking_error_rad,
+                max_tau_abs=args.max_tau_abs,
+            )
+            payload = _annotate_motion_submit_payload(
+                payload,
+                motion_kind="joint-intent",
+                legacy_equivalent="armctrl runtime submit-intent",
+            )
+            payload = _attach_output_artifact(
+                payload,
+                args.output,
+                artifact_key="motion_submit",
+            )
+            _emit(payload, as_json=args.as_json)
+            return 0
+
+        if args.motion_kind == "eef-delta":
+            payload = submit_eef_command(
+                session_artifact_path=Path(args.session_artifact),
+                owner=args.owner,
+                backend=args.backend,
+                kind="eef_pose_delta",
+                frame=args.frame,
+                expected_q_start=tuple(args.expected_q_start),
+                control_period_s=args.control_period_s,
+                send_hz=args.send_hz,
+                start_pose_policy=args.start_pose_policy,
+                max_start_error_rad=args.max_start_error_rad,
+                heartbeat_timeout_s=args.heartbeat_timeout_s,
+                max_heartbeat_age_s=args.max_heartbeat_age_s,
+                delta_position_m=tuple(args.delta_position),
+                delta_rpy_rad=tuple(args.delta_rpy),
+                output_path=None,
+            )
+            payload = _annotate_motion_submit_payload(
+                payload,
+                motion_kind="eef-delta",
+                legacy_equivalent="armctrl runtime submit-eef --kind eef_pose_delta",
+            )
+            payload = _attach_output_artifact(
+                payload,
+                args.output,
+                artifact_key="motion_submit",
+            )
+            _emit(payload, as_json=args.as_json)
+            return 0
+
+        if args.motion_kind == "eef-twist":
+            payload = submit_eef_command(
+                session_artifact_path=Path(args.session_artifact),
+                owner=args.owner,
+                backend=args.backend,
+                kind="eef_twist",
+                frame=args.frame,
+                expected_q_start=tuple(args.expected_q_start),
+                control_period_s=args.control_period_s,
+                send_hz=args.send_hz,
+                start_pose_policy=args.start_pose_policy,
+                max_start_error_rad=args.max_start_error_rad,
+                heartbeat_timeout_s=args.heartbeat_timeout_s,
+                max_heartbeat_age_s=args.max_heartbeat_age_s,
+                linear_mps=tuple(args.linear),
+                angular_rps=tuple(args.angular),
+                output_path=None,
+            )
+            payload = _annotate_motion_submit_payload(
+                payload,
+                motion_kind="eef-twist",
+                legacy_equivalent="armctrl runtime submit-eef --kind eef_twist",
+            )
+            payload = _attach_output_artifact(
+                payload,
+                args.output,
+                artifact_key="motion_submit",
+            )
+            _emit(payload, as_json=args.as_json)
+            return 0
+
+        if args.motion_kind in {"eef-pose", "joint-jog"}:
+            payload = _unsupported_motion_submit_payload(args)
+            payload = _attach_output_artifact(
+                payload,
+                args.output,
+                artifact_key="motion_submit",
+            )
+            _emit(payload, as_json=args.as_json)
+            return 3
+    except RuntimeSessionError as error:
+        payload = {
+            **error.payload,
+            "status": "rejected",
+            "schema": "armctrl.arm_runtime_submit.v1",
+            "command_surface": MOTION_COMMAND_SURFACE,
+            "motion_kind": args.motion_kind,
+            "reason": str(error),
+            "movement_command_sent": False,
+        }
+        payload = _attach_output_artifact(
+            payload,
+            args.output,
+            artifact_key="motion_submit",
+        )
+        _emit(payload, as_json=args.as_json)
+        return 3
+    except ValueError as error:
+        payload = {
+            "status": "rejected",
+            "schema": "armctrl.arm_runtime_submit.v1",
+            "command_surface": MOTION_COMMAND_SURFACE,
+            "motion_kind": args.motion_kind,
+            "owner": getattr(args, "owner", None),
+            "reason": str(error),
+            "movement_command_sent": False,
+        }
+        payload = _attach_output_artifact(
+            payload,
+            args.output,
+            artifact_key="motion_submit",
+        )
+        _emit(payload, as_json=args.as_json)
+        return 3
+    raise AssertionError(f"unsupported motion kind: {args.motion_kind}")
+
+
+def _annotate_motion_submit_payload(
+    payload: dict[str, object],
+    *,
+    motion_kind: str,
+    legacy_equivalent: str,
+) -> dict[str, object]:
+    annotated = dict(payload)
+    annotated["command_surface"] = MOTION_COMMAND_SURFACE
+    annotated["motion_kind"] = motion_kind
+    annotated["legacy_equivalent"] = legacy_equivalent
+    _annotate_motion_command_artifact(
+        annotated,
+        motion_kind=motion_kind,
+        legacy_equivalent=legacy_equivalent,
+    )
+    return annotated
+
+
+def _annotate_motion_command_artifact(
+    payload: dict[str, object],
+    *,
+    motion_kind: str,
+    legacy_equivalent: str,
+) -> None:
+    artifacts = payload.get("artifacts")
+    if not isinstance(artifacts, dict):
+        return
+    command_path_value = artifacts.get("command")
+    if not isinstance(command_path_value, str):
+        return
+    command_path = Path(command_path_value)
+    try:
+        command = json.loads(command_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(command, dict):
+        return
+    command["command_surface"] = MOTION_COMMAND_SURFACE
+    command["motion_kind"] = motion_kind
+    command["legacy_equivalent"] = legacy_equivalent
+    _write_json_atomic(command_path, command)
+
+
+def _unsupported_motion_submit_payload(args: argparse.Namespace) -> dict[str, object]:
+    if args.motion_kind == "eef-pose":
+        reason = (
+            "eef-pose is a formal command kind, but absolute EEF hardware execution "
+            "requires a mature pose backend; heuristic joint fallback is forbidden"
+        )
+        backend = args.backend
+        owner = args.owner
+        command_space = "eef"
+        requested_command = {
+            "kind": "eef_pose",
+            "frame": args.frame,
+            "position_m": (
+                [float(value) for value in args.position]
+                if args.position is not None
+                else None
+            ),
+            "rpy_rad": (
+                [float(value) for value in args.rpy] if args.rpy is not None else None
+            ),
+        }
+    else:
+        reason = (
+            "joint-jog is reserved for teleop/manual control and requires a deadman "
+            "and mature jog backend before hardware execution"
+        )
+        backend = "not_configured"
+        owner = args.owner
+        command_space = "joint"
+        requested_command = {
+            "kind": "joint_jog",
+            "joint_delta_rad": (
+                [float(value) for value in args.joint_delta]
+                if args.joint_delta is not None
+                else None
+            ),
+            "velocity_rad_s": (
+                [float(value) for value in args.velocity]
+                if args.velocity is not None
+                else None
+            ),
+            "deadman": bool(args.deadman),
+        }
+    return {
+        "status": "rejected",
+        "schema": "armctrl.arm_runtime_submit.v1",
+        "command_surface": MOTION_COMMAND_SURFACE,
+        "motion_kind": args.motion_kind,
+        "owner": owner,
+        "backend": backend,
+        "command_space": command_space,
+        "requested_command": requested_command,
+        "reason": reason,
+        "movement_command_sent": False,
+        "runtime": {
+            "single_motion_owner": True,
+            "session_artifact": str(args.session_artifact),
+        },
+        "next_gate": "configure mature runtime backend adapter before hardware execution",
+    }
 
 
 def _emit(payload: dict[str, object], *, as_json: bool) -> int:
@@ -4332,19 +5529,16 @@ def _read_agent_sysid_readiness_from_payload(
 ) -> dict[str, object]:
     if not isinstance(readiness, dict):
         raise ValueError("readiness artifact must contain a JSON object")
-    if readiness.get("schema") == "armctrl.arm_runtime_status.v1":
-        runtime_readiness_payload = readiness.get("readiness")
-        if (
-            not isinstance(runtime_readiness_payload, dict)
-            or runtime_readiness_payload.get("agent_sysid_smoke_allowed") is not True
-        ):
-            raise RuntimeError("live runtime readiness is not passed")
-        return readiness
+    if readiness.get("schema") != "armctrl.arm_runtime_status.v1":
+        raise RuntimeError(
+            "real Agent runtime smoke requires live arm runtime status readiness"
+        )
+    runtime_readiness_payload = readiness.get("readiness")
     if (
-        readiness.get("schema") != "armctrl.sysid_agent_smoke_readiness.v1"
-        or readiness.get("agent_sysid_smoke_allowed") is not True
+        not isinstance(runtime_readiness_payload, dict)
+        or runtime_readiness_payload.get("agent_sysid_smoke_allowed") is not True
     ):
-        raise RuntimeError("agent/sysid smoke readiness is not passed")
+        raise RuntimeError("live runtime readiness is not passed")
     return readiness
 
 
@@ -4483,6 +5677,26 @@ def _read_sysid_execution_dq_points(
     ]
 
 
+def _read_sysid_execution_ddq_points(
+    path: Path,
+    *,
+    dof: int,
+) -> list[tuple[float, ...]] | None:
+    with path.open(newline="", encoding="utf-8") as file:
+        reader = csv.DictReader(file)
+        rows = list(reader)
+        fieldnames = set(reader.fieldnames or [])
+    if not rows:
+        raise ValueError(f"execution trajectory has no rows: {path}")
+    required = {f"ddq_cmd_{joint_index + 1}" for joint_index in range(dof)}
+    if not required.issubset(fieldnames):
+        return None
+    return [
+        tuple(float(row[f"ddq_cmd_{joint_index + 1}"]) for joint_index in range(dof))
+        for row in rows
+    ]
+
+
 def _derive_sysid_execution_dq_points(
     q_points: Sequence[Sequence[float]],
     *,
@@ -4537,12 +5751,40 @@ def _arx5_active_hold_tick(
     return hold_tick
 
 
+def _sdk_cartesian_active_hold_tick(
+    *,
+    backend: Arx5SdkCartesianRuntimeBackend,
+    hold_hz: float,
+) -> Callable[[dict[str, object]], None]:
+    def hold_tick(payload: dict[str, object]) -> None:
+        if payload.get("mode") != "hold_safe":
+            return
+        if hold_hz <= 0.0:
+            raise RuntimeError("hold_hz must be positive")
+        backend.hold()
+
+    return hold_tick
+
+
+def _diagnostic_only_sdk_payload(payload: dict[str, object]) -> dict[str, object]:
+    annotated = dict(payload)
+    annotated["diagnostic_only"] = True
+    annotated["formal_runtime_gateway"] = False
+    annotated["runtime_gateway_note"] = (
+        "Bringup diagnostic only. Formal Agent/SysID/Recipe motion must attach "
+        "to a live ArmRuntime session and submit joint_intent or joint_trajectory."
+    )
+    return annotated
+
+
 def _attach_sysid_run_manifest(
     payload: dict[str, object],
     output_dir: str,
 ) -> dict[str, object]:
     manifest_path = Path(output_dir) / "manifest.json"
     payload_with_artifact = dict(payload)
+    if "quality" not in payload_with_artifact:
+        payload_with_artifact["quality"] = _sysid_run_quality(payload_with_artifact)
     existing_artifacts = payload_with_artifact.get("artifacts")
     artifacts = dict(existing_artifacts) if isinstance(existing_artifacts, dict) else {}
     artifacts["manifest"] = str(manifest_path)
@@ -4555,11 +5797,49 @@ def _attach_sysid_run_manifest(
     return payload_with_artifact
 
 
+def _sysid_run_quality(payload: dict[str, object]) -> dict[str, object]:
+    status = payload.get("status")
+    if status == "queued":
+        return {
+            "motion_smoke_pass": None,
+            "runtime_quality_pass": None,
+            "sysid_dataset_ready": False,
+            "failure_class": None,
+            "stage": "queued_pending_runtime_result",
+        }
+    if status in {"rejected", "blocked"}:
+        return {
+            "motion_smoke_pass": False,
+            "runtime_quality_pass": False,
+            "sysid_dataset_ready": False,
+            "failure_class": _sysid_failure_class(payload),
+            "stage": "admission",
+        }
+    return {
+        "motion_smoke_pass": None,
+        "runtime_quality_pass": None,
+        "sysid_dataset_ready": False,
+        "failure_class": None,
+        "stage": "unknown",
+    }
+
+
+def _sysid_failure_class(payload: dict[str, object]) -> str:
+    reason = str(payload.get("reason") or "")
+    if "readiness" in reason or "runtime" in reason:
+        return "readiness_failure"
+    if "safety" in reason or payload.get("safety"):
+        return "admission_failure"
+    return "admission_failure"
+
+
 def _runtime_first_sysid_readiness_artifact(
     readiness_artifact: dict[str, object],
     *,
     runtime_session_artifact_path: Path | None = None,
+    max_heartbeat_age_s: float = 1.0,
 ) -> dict[str, object]:
+    readiness_artifact = _unwrap_runtime_status_artifact(readiness_artifact)
     if (
         readiness_artifact.get("schema") != "armctrl.arm_runtime_status.v1"
         and runtime_session_artifact_path is None
@@ -4572,12 +5852,22 @@ def _runtime_first_sysid_readiness_artifact(
         if live_payload.get("schema") == "armctrl.arm_runtime_session.v1":
             return refresh_runtime_status_payload(
                 live_payload,
-                max_heartbeat_age_s=1.0,
+                max_heartbeat_age_s=max_heartbeat_age_s,
             )
     return refresh_runtime_status_payload(
         readiness_artifact,
-        max_heartbeat_age_s=1.0,
+        max_heartbeat_age_s=max_heartbeat_age_s,
     )
+
+
+def _unwrap_runtime_status_artifact(
+    payload: dict[str, object],
+) -> dict[str, object]:
+    if payload.get("schema") == "armctrl.runtime_console_status.v1":
+        runtime = payload.get("runtime")
+        if isinstance(runtime, dict):
+            return runtime
+    return payload
 
 
 def _runtime_result_check_payload(
@@ -4773,16 +6063,13 @@ def _runtime_result_artifact_paths_for_run_dir(run_dir: Path) -> list[Path]:
 
 
 def _sysid_run_readiness_allowed(readiness_artifact: dict[str, object]) -> bool:
-    if readiness_artifact.get("schema") == "armctrl.arm_runtime_status.v1":
-        readiness = readiness_artifact.get("readiness")
-        return (
-            isinstance(readiness, dict)
-            and readiness.get("agent_sysid_smoke_allowed") is True
-        )
+    if readiness_artifact.get("schema") != "armctrl.arm_runtime_status.v1":
+        return False
+    readiness = readiness_artifact.get("readiness")
     return (
-        readiness_artifact.get("schema")
-        == "armctrl.sysid_agent_smoke_readiness.v1"
-        and readiness_artifact.get("agent_sysid_smoke_allowed") is True
+        isinstance(readiness, dict)
+        and readiness.get("live_hold_allowed") is True
+        and readiness.get("safe_center_allowed") is True
     )
 
 
@@ -4801,10 +6088,16 @@ def _sysid_readiness_summary(
     readiness_artifact_path: Path,
     readiness_artifact: dict[str, object],
 ) -> dict[str, object]:
+    readiness = (
+        readiness_artifact.get("readiness")
+        if isinstance(readiness_artifact.get("readiness"), dict)
+        else {}
+    )
     return {
         "artifact_path": str(readiness_artifact_path),
-        "agent_sysid_smoke_allowed": readiness_artifact.get(
-            "agent_sysid_smoke_allowed"
+        "agent_sysid_smoke_allowed": readiness.get(
+            "agent_sysid_smoke_allowed",
+            readiness_artifact.get("agent_sysid_smoke_allowed"),
         ),
         "prerequisites": readiness_artifact.get("prerequisites"),
         "tiny_motion": readiness_artifact.get("tiny_motion"),

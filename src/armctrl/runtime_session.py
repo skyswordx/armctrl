@@ -151,6 +151,95 @@ def start_arx5_runtime_session(
     return payload
 
 
+def start_arx5_cartesian_runtime_session(
+    *,
+    backend: MotionBackend,
+    model: str,
+    interface: str,
+    safe_center: Sequence[float],
+    send_hz: float,
+    hold_hz: float,
+    max_start_error_rad: float,
+    max_heartbeat_age_s: float,
+) -> dict[str, object]:
+    enter = getattr(backend, "enter_hold_or_damping", None)
+    if callable(enter):
+        enter()
+    safe_center_tuple = _float_tuple(safe_center, name="safe_center")
+    state = backend.read_joint_state()
+    q_meas = tuple(float(value) for value in state.q_meas)
+    if len(q_meas) != len(safe_center_tuple):
+        try:
+            backend.damping()
+        finally:
+            raise RuntimeError(
+                "sdk_cartesian runtime requires current q_meas length to match SAFE_CENTER"
+            )
+    startup_guard = {
+        "status": "pass",
+        "policy": "current_measured_cartesian_takeover",
+        "q_meas": list(q_meas),
+        "safe_center": list(safe_center_tuple),
+        "max_start_error_rad": float(max_start_error_rad),
+        "q_meas_to_safe_center_max_abs_rad": max(
+            abs(measured - expected)
+            for measured, expected in zip(q_meas, safe_center_tuple, strict=True)
+        ),
+        "failed_checks": [],
+    }
+    runtime = ArmRuntime(
+        backend=backend,
+        safe_center=safe_center_tuple,
+    )
+    runtime.mark_hold_safe(q_hold=q_meas)
+    hold_mode = backend.hold()
+    status = runtime.status()
+    payload = runtime_status_payload(
+        status=status,
+        schema=RUNTIME_SESSION_SCHEMA,
+        backend="sdk_cartesian",
+        send_hz=float(send_hz),
+        hold_hz=float(hold_hz),
+        max_heartbeat_age_s=float(max_heartbeat_age_s),
+        recovery={
+            "status": "skipped",
+            "reason": "sdk_cartesian runtime takes over from current measured EEF pose; use arx5_sdk joint runtime for SysID SAFE_CENTER recovery",
+            "landing_mode": hold_mode or MotionMode.HOLD.value,
+        },
+    )
+    payload["last_hold_wall_time_s"] = time.time()
+    payload["hold_fresh"] = True
+    payload["hold_age_s"] = 0.0
+    payload["startup_guard"] = startup_guard
+    payload.update(
+        {
+            "model": model,
+            "interface": interface,
+            "hardware_motion": True,
+            "sdk_opened": True,
+            "movement_command_sent": True,
+            "requires_confirm": ARX5_RUNTIME_START_CONFIRMATION,
+            "fault_landing_mode": MotionMode.DAMPING.value,
+            "readiness_pose_policy": "current_measured_pose",
+            "runtime_contract": {
+                "state_machine": "current_measured_cartesian_takeover->hold_safe->owner_lease",
+                "single_motion_owner": True,
+                "readiness_requires_live_hold": True,
+                "backend_role": "agent_eef_sdk_cartesian",
+                "droop_recovery_supported": False,
+                "safe_center_required": False,
+            },
+        }
+    )
+    payload["readiness"] = runtime_readiness(payload)
+    payload["status"] = (
+        "ok"
+        if payload["readiness"]["agent_sysid_smoke_allowed"] is True
+        else "blocked"
+    )
+    return payload
+
+
 def runtime_status_from_artifact(
     *,
     session_artifact_path: Path,
@@ -620,6 +709,7 @@ def runtime_readiness(payload: dict[str, object]) -> dict[str, object]:
     heartbeat = payload.get("heartbeat")
     failed_checks: list[str] = []
     safe_center_failed_checks: list[str] = []
+    pose_policy = str(payload.get("readiness_pose_policy") or "safe_center")
     if payload.get("schema") not in {RUNTIME_SESSION_SCHEMA, RUNTIME_STATUS_SCHEMA}:
         failed_checks.append("schema")
         safe_center_failed_checks.append("schema")
@@ -630,8 +720,9 @@ def runtime_readiness(payload: dict[str, object]) -> dict[str, object]:
         failed_checks.append("no_owner")
         safe_center_failed_checks.append("no_owner")
     if not _q_close(payload.get("q_meas"), payload.get("q_hold"), max_error_rad=0.02):
-        failed_checks.append("q_meas_close_to_hold")
         safe_center_failed_checks.append("q_meas_close_to_hold")
+        if pose_policy != "current_measured_pose":
+            failed_checks.append("q_meas_close_to_hold")
     if not _q_close(payload.get("q_hold"), payload.get("safe_center"), max_error_rad=0.02):
         safe_center_failed_checks.append("q_hold_close_to_safe_center")
     if not isinstance(heartbeat, dict) or heartbeat.get("fresh") is not True:
@@ -647,6 +738,7 @@ def runtime_readiness(payload: dict[str, object]) -> dict[str, object]:
         "agent_sysid_smoke_allowed": not failed_checks,
         "live_hold_allowed": not failed_checks,
         "safe_center_allowed": not safe_center_failed_checks,
+        "pose_policy": pose_policy,
         "failed_checks": failed_checks,
         "safe_center_failed_checks": safe_center_failed_checks,
     }

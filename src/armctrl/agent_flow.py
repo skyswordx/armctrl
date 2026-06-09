@@ -469,7 +469,7 @@ class AgentFlowRuntimeSmoker:
                 expected_q_start=request.q_start,
                 max_start_error_rad=0.02,
                 heartbeat_timeout_s=AGENT_FAULT_TIMEOUT_S,
-                max_heartbeat_age_s=1.0,
+                max_heartbeat_age_s=5.0,
             )
             request.runtime_session_artifact_path.write_text(
                 json.dumps(
@@ -510,7 +510,7 @@ class AgentFlowRuntimeSmoker:
             runtime_session_after_release = release_owner_from_artifact(
                 session_artifact_path=request.runtime_session_artifact_path,
                 owner="agent",
-                max_heartbeat_age_s=1.0,
+                max_heartbeat_age_s=5.0,
             )
             request.runtime_session_artifact_path.write_text(
                 json.dumps(
@@ -614,103 +614,6 @@ class AgentFlowRealRuntimeSmoker:
             "real Agent runtime execution must be submitted through live "
             "MotionRuntime IPC; direct SDK execution is disabled"
         )
-        contract = json.loads(request.contract_path.read_text(encoding="utf-8"))
-        if contract.get("schema") != "armctrl.agent_flow_plan.v1":
-            raise ValueError(
-                "agent flow contract file must use schema armctrl.agent_flow_plan.v1"
-            )
-        if not _agent_flow_review_passed(contract):
-            raise RuntimeError("agent flow contract review is not complete")
-        readiness = json.loads(request.readiness_artifact_path.read_text(encoding="utf-8"))
-        if not _agent_sysid_smoke_readiness_passed(readiness):
-            raise RuntimeError("agent/sysid smoke readiness is not passed")
-        control_period_s = _agent_flow_control_period_s(contract)
-        backend = self._backend_factory(
-            model=request.model,
-            interface=request.interface,
-            controller_dt_s=_controller_dt_from_readiness_artifact(readiness),
-        )
-        enter_hold_or_damping = getattr(backend, "enter_hold_or_damping", None)
-        if callable(enter_hold_or_damping):
-            enter_hold_or_damping()
-        runtime = MotionRuntime(
-            backend=backend,
-            monotonic=self._monotonic,
-            sleep=self._sleep,
-        )
-        result = runtime.execute_intent_frame(
-            JointIntentFrame(
-                q_start=request.q_start,
-                q_target=request.q_target,
-                control_period_s=control_period_s,
-                max_joint_delta_rad=request.max_joint_delta_rad,
-            ),
-            producer="agent",
-            send_hz=request.send_hz,
-            hold_after=True,
-        )
-        motion_runtime = _motion_runtime_manifest(result)
-        movement_command_sent = bool(result.samples)
-        return {
-            "schema": "armctrl.agent_flow_runtime_smoke_real.v1",
-            "run_status": result.status,
-            "hardware_motion": True,
-            "movement_command_sent": movement_command_sent,
-            "producer": "agent",
-            "contract_path": str(request.contract_path),
-            "readiness_artifact_path": str(request.readiness_artifact_path),
-            "requires_confirm": AGENT_FLOW_REAL_RUNTIME_CONFIRMATION,
-            "runtime": {
-                "backend": "arx5_sdk",
-                "mode": result.mode,
-                "owner": "motion_runtime",
-                "model": request.model,
-                "interface": request.interface,
-            },
-            "readiness": {
-                "agent_sysid_smoke_allowed": readiness.get(
-                    "agent_sysid_smoke_allowed"
-                ),
-                "prerequisites": readiness.get("prerequisites"),
-                "tiny_motion": readiness.get("tiny_motion"),
-            },
-            "intent": {
-                "q_start": list(request.q_start),
-                "q_target": list(request.q_target),
-                "control_period_s": control_period_s,
-                "agent_intent_hz": 1.0 / control_period_s,
-                "backend_send_hz": request.send_hz,
-                "max_joint_delta_rad": request.max_joint_delta_rad,
-            },
-            "motion_runtime": motion_runtime,
-            "frequency_contract": _agent_frequency_contract(
-                control_period_s=control_period_s,
-                backend_send_hz=request.send_hz,
-                result=result,
-                missed_intent_exercised_in_this_run=False,
-            ),
-            "watchdog": {
-                "policy": _agent_watchdog_policy(
-                    missed_intent_exercised_in_this_run=False
-                ),
-                "notes": [
-                    "real single-frame Agent smoke does not intentionally pause for a missed-intent timeout",
-                    "run fake Agent runtime smoke and later streaming-driver tests to verify missed-frame landing",
-                ],
-            },
-            "acceptance": build_real_motion_acceptance(
-                stage="agent_smoke",
-                motion_runtime=motion_runtime,
-                hardware_motion=True,
-                movement_command_sent=movement_command_sent,
-                readiness_passed=True,
-            ),
-            "fault_landing_mode": result.landing_mode,
-            "notes": [
-                "real Agent smoke only runs after sdk-agent-sysid-smoke-readiness passes",
-                "this path uses MotionRuntime rather than allowing Agent to call the SDK directly",
-            ],
-        }
 
 
 class _ManualRuntimeClock:
@@ -916,9 +819,13 @@ def _max_abs_or_none(values: list[float] | None) -> float | None:
 
 
 def _agent_sysid_smoke_readiness_passed(readiness: dict[str, object]) -> bool:
-    if readiness.get("schema") != "armctrl.sysid_agent_smoke_readiness.v1":
+    if readiness.get("schema") != "armctrl.arm_runtime_status.v1":
         return False
-    return readiness.get("agent_sysid_smoke_allowed") is True
+    runtime_readiness = readiness.get("readiness")
+    return (
+        isinstance(runtime_readiness, dict)
+        and runtime_readiness.get("agent_sysid_smoke_allowed") is True
+    )
 
 
 def _agent_watchdog_policy(
@@ -937,6 +844,14 @@ def _agent_watchdog_policy(
 def _controller_dt_from_readiness_artifact(
     readiness: dict[str, object],
 ) -> float | None:
+    if readiness.get("schema") == "armctrl.arm_runtime_status.v1":
+        try:
+            controller_dt_s = float(readiness.get("controller_dt_s"))
+        except (TypeError, ValueError):
+            return None
+        if math.isfinite(controller_dt_s) and controller_dt_s > 0.0:
+            return controller_dt_s
+        return None
     tiny_motion = readiness.get("tiny_motion")
     if not isinstance(tiny_motion, dict):
         return None

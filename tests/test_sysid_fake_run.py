@@ -17,6 +17,10 @@ from armctrl.runtime_session import (
     start_fake_runtime_session,
 )
 
+ROOT = Path(__file__).resolve().parents[1]
+X5_URDF = ROOT / "configs" / "models" / "X5_camera.urdf"
+X5_SAFE_CONFIG = ROOT / "configs" / "x5.safe.yaml"
+
 
 def _passing_readiness_artifact() -> dict[str, object]:
     return {
@@ -81,6 +85,13 @@ def _write_live_runtime_status(path: Path) -> None:
         max_heartbeat_age_s=5.0,
     )
     payload = refresh_runtime_status_payload(payload, max_heartbeat_age_s=5.0)
+    payload["readiness"] = {
+        "agent_sysid_smoke_allowed": True,
+        "live_hold_allowed": True,
+        "safe_center_allowed": True,
+        "failed_checks": [],
+        "safe_center_failed_checks": [],
+    }
     path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -100,11 +111,15 @@ def _install_fake_submit_trajectory_command(monkeypatch, cli, tmp_path: Path) ->
         command_path = pending_dir / f"command-{len(submitted_commands)}.json"
         result_path = results_dir / f"command-{len(submitted_commands)}.json"
         command_payload = {
+            "kind": "joint_trajectory",
+            "source": str(kwargs.get("owner", "sysid")),
+            "owner": str(kwargs.get("owner", "sysid")),
             "expected_q_start": list(kwargs["expected_q_start"]),
             "start_pose_policy": kwargs.get("start_pose_policy", "live_hold"),
             "q_points": [list(point) for point in kwargs.get("q_points", [])],
             "send_hz": kwargs.get("send_hz"),
             "trajectory_sample_hz": kwargs.get("trajectory_sample_hz"),
+            "max_heartbeat_age_s": kwargs.get("max_heartbeat_age_s"),
             "start_pose_guard": {
                 "policy": kwargs.get("start_pose_policy", "live_hold"),
                 "q_hold": list(kwargs["expected_q_start"]),
@@ -114,6 +129,12 @@ def _install_fake_submit_trajectory_command(monkeypatch, cli, tmp_path: Path) ->
             command_payload["dq_points"] = [
                 list(point) for point in kwargs["dq_points"]
             ]
+        if kwargs.get("ddq_points") is not None:
+            command_payload["ddq_points"] = [
+                list(point) for point in kwargs["ddq_points"]
+            ]
+        if kwargs.get("artifact_policy") is not None:
+            command_payload["artifact_policy"] = kwargs["artifact_policy"]
         if kwargs.get("max_tracking_error_rad") is not None:
             command_payload["max_tracking_error_rad"] = kwargs[
                 "max_tracking_error_rad"
@@ -538,6 +559,8 @@ def test_cli_sysid_run_sdk_rejects_legacy_failed_smoke_readiness(tmp_path: Path)
             SDK_CONFIRMATION,
             "--readiness-artifact",
             str(readiness_artifact),
+            "--max-heartbeat-age-s",
+            "5",
             "--json",
         ],
         capture_output=True,
@@ -586,6 +609,8 @@ def test_cli_sysid_run_sdk_accepts_confirm_and_readiness_but_requires_runtime(
             SDK_CONFIRMATION,
             "--readiness-artifact",
             str(readiness_artifact),
+            "--max-heartbeat-age-s",
+            "5",
             "--json",
         ],
         capture_output=True,
@@ -665,6 +690,8 @@ def test_cli_sysid_run_sdk_with_runtime_blocks_until_live_queue_exists(
             "0.04",
             "--max-tau-abs",
             "2.0",
+            "--max-heartbeat-age-s",
+            "5",
             "--json",
         ]
     )
@@ -684,8 +711,26 @@ def test_cli_sysid_run_sdk_with_runtime_blocks_until_live_queue_exists(
     assert payload["movement_allowed"] is True
     assert payload["movement_command_sent"] is False
     assert payload["runtime_command"]["status"] == "queued"
+    assert payload["command_surface"] == "armctrl.motion.submit.v1"
+    assert payload["motion_kind"] == "joint-trajectory"
+    assert payload["legacy_equivalent"] == "armctrl sysid run ... --adapter sdk"
+    assert payload["runtime_command"]["command_surface"] == "armctrl.motion.submit.v1"
+    assert payload["runtime_command"]["motion_kind"] == "joint-trajectory"
     assert command["max_tracking_error_rad"] == 0.04
     assert command["max_tau_abs"] == 2.0
+    assert command["max_heartbeat_age_s"] == 5.0
+    assert command["kind"] == "joint_trajectory"
+    assert command["source"] == "sysid"
+    assert command["command_surface"] == "armctrl.motion.submit.v1"
+    assert command["motion_kind"] == "joint-trajectory"
+    assert command["legacy_equivalent"] == "armctrl sysid run ... --adapter sdk"
+    assert payload["quality"] == {
+        "motion_smoke_pass": None,
+        "runtime_quality_pass": None,
+        "sysid_dataset_ready": False,
+        "failure_class": None,
+        "stage": "queued_pending_runtime_result",
+    }
     assert Path(payload["runtime_command"]["artifacts"]["command"]).exists()
     assert payload["next_gate"] == "wait for live runtime command result artifact"
     assert manifest == payload
@@ -784,8 +829,20 @@ def test_cli_sysid_run_sdk_with_runtime_acquires_from_live_hold_pose(
     command = json.loads(command_artifact.read_text(encoding="utf-8"))
     assert command["expected_q_start"] == list(live_hold)
     assert command["start_pose_policy"] == "live_hold"
+    assert command["command_surface"] == "armctrl.motion.submit.v1"
+    assert command["motion_kind"] == "joint-trajectory"
     assert "dq_points" in command
     assert len(command["dq_points"]) == len(command["q_points"])
+    assert "ddq_points" not in command
+    assert command["artifact_policy"] == {
+        "schema": "armctrl.sysid_runtime_compiler_policy.v1",
+        "trajectory_artifact": payload["artifacts"]["execution_trajectory"],
+        "q_cmd": "preserved",
+        "dq_cmd": "derived_finite_difference",
+        "ddq_cmd": "missing",
+        "sample_hz": 20.0,
+    }
+    assert payload["runtime_command"]["artifact_policy"] == command["artifact_policy"]
     assert command["start_pose_guard"]["policy"] == "live_hold"
 
 
@@ -1336,8 +1393,8 @@ def test_arx5_interface_backend_sends_joint_commands_and_lands_damping() -> None
         duration_s=1,
         amplitude_rad=0.05,
         q_center=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
-        urdf_path="configs/models/X5_camera.urdf",
-        safe_config_path="configs/x5.safe.yaml",
+        urdf_path=str(X5_URDF),
+        safe_config_path=str(X5_SAFE_CONFIG),
         output_dir=Path("unused"),
     )
     backend = Arx5InterfaceCollectionBackend(

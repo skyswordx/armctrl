@@ -584,6 +584,8 @@ def test_cli_recipe_runtime_submit_queues_live_runtime_owner(
             str(plan_dir),
             "--runtime-session-artifact",
             str(runtime_session_artifact),
+            "--max-heartbeat-age-s",
+            "5",
             "--max-tracking-error-rad",
             "0.035",
             "--max-tau-abs",
@@ -611,7 +613,7 @@ def test_cli_recipe_runtime_submit_queues_live_runtime_owner(
     assert payload["runtime_command"]["send_hz"] == 50.0
     assert payload["start_pose_policy"] == "live_hold"
     assert command["owner"] == "recipe"
-    assert command["kind"] == "trajectory"
+    assert command["kind"] == "joint_trajectory"
     assert command["start_pose_policy"] == "live_hold"
     assert command["max_tracking_error_rad"] == 0.035
     assert command["max_tau_abs"] == 1.8
@@ -707,6 +709,8 @@ def test_cli_recipe_runtime_submit_explicit_q_requires_preposition(
             str(runtime_session_artifact),
             "--start-pose-policy",
             "explicit_q",
+            "--max-heartbeat-age-s",
+            "5",
             "--json",
         ],
         capture_output=True,

@@ -6,6 +6,9 @@
 
 ### Added
 
+- Added `armctrl sysid analyze-measured` as an offline-only measured SysID analysis pipeline for real-arm Fourier data: it traces `tau_meas` semantics, preprocesses `q_meas/dq_meas/tau_meas`, reports measured quality gates, uses Pinocchio regressor metrics when available, records numeric QR base-proxy limits, runs OLS validation, and writes a preliminary X5 body-dynamics parameter bundle without touching runtime/CAN/SDK execution code.
+- Added measured SysID prediction artifacts: `tau_pred.csv`, `tau_residual.csv`, per-joint RMSE/max/NRMSE metrics, and a clean 36-parameter numeric-QR base-proxy `parameters.json` payload inside the X5 body-dynamics parameter bundle so offline fits can be audited without treating solver reports as deployable controller parameters.
+- Added pure-offline measured SysID fit review artifacts: estimator comparison across OLS, residual-variance WLS, and SciPy `soft_l1` robust least squares; residual/outlier diagnostics; physical-consistency screening; and Pinocchio default-model gravity sanity reports while preserving `tau_meas` as an uncalibrated effort signal.
 - Added `docs/lab_hardware_validation_checklist.md` as the short lab-facing gate sequence for `sdk-doctor -> hold/damping -> tiny motion -> readiness -> Agent smoke -> SysID smoke`, with explicit stop conditions and artifact fields for real hardware bring-up.
 - Added Chinese SysID acceptance guides for X5 excitation design and result-quality review, consolidating the gravity/friction/Fourier bring-up lessons, frequency-layering fixes, OED condition targets, safety-space gates, and final parameter-bundle acceptance criteria into the indexed docs.
 - Added profile-aware SysID OED safety settings: Fourier multisine now gets a wider offline OED amplitude envelope while gravity/friction can keep conservative hardware bring-up constraints.

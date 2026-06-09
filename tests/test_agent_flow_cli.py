@@ -909,6 +909,8 @@ def test_cli_agent_flow_runtime_smoke_real_routes_to_gated_smoker(
             str(runtime_session),
             "--max-tau-abs",
             "1.7",
+            "--max-heartbeat-age-s",
+            "5",
             "--output",
             str(output_artifact),
             "--json",
@@ -1010,6 +1012,8 @@ def test_cli_agent_flow_runtime_smoke_real_rejects_legacy_readiness_with_runtime
             str(runtime_session),
             "--max-tau-abs",
             "1.7",
+            "--max-heartbeat-age-s",
+            "5",
             "--output",
             str(output_artifact),
             "--json",
@@ -1111,6 +1115,8 @@ def test_cli_agent_flow_runtime_smoke_real_acquires_from_live_hold_pose(
             str(runtime_session),
             "--max-tau-abs",
             "1.7",
+            "--max-heartbeat-age-s",
+            "5",
             "--output",
             str(output_artifact),
             "--json",
@@ -1127,6 +1133,7 @@ def test_cli_agent_flow_runtime_smoke_real_acquires_from_live_hold_pose(
     command = json.loads(command_artifact.read_text(encoding="utf-8"))
     assert command["expected_q_start"] == list(live_hold)
     assert command["max_tau_abs"] == 1.7
+    assert command["max_heartbeat_age_s"] == 5.0
 
 
 def test_cli_agent_flow_runtime_smoke_real_requires_runtime_session_artifact(
