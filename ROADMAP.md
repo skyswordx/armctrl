@@ -18,6 +18,17 @@ Current package version: `0.6.0-rc.3`.
 
 Release readiness: `simulation_safety_preview_nonhardware_verified`.
 
+## Current Runtime Gateway Corrections
+
+- `sysid run --adapter sdk` is no longer a hardware roadmap item. `sysid run`
+  is offline/fake only.
+- Real SysID hardware collection uses `sysid compile-runtime` plus
+  `motion submit joint-trajectory --compiled-command` so the long-lived
+  runtime owns SDK/CAN, owner lease, tracking evidence, and landing behavior.
+- Future n100d validation should collect gravity, friction, and Fourier data
+  through that runtime-owned path, not by reviving source-specific direct SDK
+  replay.
+
 ### v0.2.0 - Governance And Safety Boundary
 
 - [x] 保持 `README.md`、`ROADMAP.md`、`CHANGELOG.md`、`docs/README.md` 为唯一当前入口。

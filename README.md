@@ -888,10 +888,35 @@ uv run armctrl sysid run gravity_sweep \
 ```
 
 The fake runner writes `raw_samples.csv` and a run `manifest.json`.
-`--adapter sdk` remains rejected from the public CLI unless the exact operator
-confirmation is present and a verified backend is configured. Internally the SDK
-runner skeleton is tested with an injected backend: it enters hold/damping before
-recording and always lands in damping on completion or failure.
+`sysid run` is offline/fake only. Real SysID hardware execution no longer has a
+`--adapter sdk` runner; the reviewed `execution_trajectory.csv` must first be
+compiled into a runtime-owned joint trajectory command, then submitted through
+the live runtime gateway:
+
+```bash
+uv run armctrl sysid compile-runtime \
+  --execution-trajectory runs/ident-plan-preview/execution_trajectory.csv \
+  --dof 6 \
+  --sample-hz 100 \
+  --expected-q-start 0 0.3 0.3 0 0 0 \
+  --owner sysid \
+  --start-pose-policy live_hold \
+  --send-hz 100 \
+  --output runs/ident-runtime-compile \
+  --json
+
+uv run armctrl motion submit joint-trajectory \
+  --session-artifact "$RUN_DIR/runtime_session.json" \
+  --compiled-command runs/ident-runtime-compile/compiled_motion_command.json \
+  --max-heartbeat-age-s 1.0 \
+  --heartbeat-timeout-s 3.0 \
+  --output runs/ident-runtime-submit.json \
+  --json
+```
+
+This keeps SDK/CAN ownership inside the long-lived `arx5_sdk` runtime and gives
+SysID the same owner lease, live readiness, tracking, jitter, and landing
+artifacts as Agent/Recipe joint trajectory execution.
 
 Check the SDK environment without moving hardware:
 
@@ -906,7 +931,7 @@ This command is read-only. It checks `arx5_interface` importability and records
 the requested model/interface labels, but does not open CAN or instantiate robot
 objects.
 
-Preview the required SDK collection handshake before any real runner exists:
+Preview the historical SDK collection handshake contract without moving hardware:
 
 ```bash
 uv run armctrl sysid sdk-handshake-plan \
@@ -915,9 +940,9 @@ uv run armctrl sysid sdk-handshake-plan \
   --json
 ```
 
-This is also read-only. It fixes the future hardware sequence as: preflight,
-explicit operator confirmation, enter hold/damping, start recording only after a
-safe state, and land Ctrl-C or faults in damping.
+This is also read-only. It is retained only as a diagnostic contract reference;
+the current hardware collection path is the runtime-owned compiler + motion
+submit sequence above.
 
 Postprocess a dataset:
 

@@ -513,6 +513,7 @@ def test_sysid_run_module_does_not_keep_legacy_sdk_runner_gate() -> None:
     assert not hasattr(sysid_run, "SdkSysIdRunnerGate")
     assert "sdk-agent-sysid-smoke-readiness" not in source
     assert "complete real tiny motion before sdk sysid run" not in source
+    assert "before sysid run" not in source
 
 
 def test_cli_sysid_run_sdk_removed_even_with_live_runtime_and_candidate(

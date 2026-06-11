@@ -27,6 +27,10 @@
 
 ### Changed
 
+- Clarified the current SysID hardware command surface: `sysid run` is
+  offline/fake only, while real collection uses `sysid compile-runtime` plus
+  `motion submit joint-trajectory --compiled-command` through the long-lived
+  runtime owner.
 - Updated the ARX5 SDK readiness contract to match the n100d `arx5-interface==0.1.2` Python binding: `set_to_hold` is no longer required when the installed SDK only exposes `set_to_damping`, and real-motion artifacts now report `damping_only` landing instead of pretending a hold mode was applied.
 - Tightened real-motion CLI gate semantics: real tiny motion, Agent real smoke, and SysID SDK smoke now require both `run_status == "completed"` and `acceptance.status == "pass"`; completed runs with `acceptance.status` of `incomplete` or `review_required` return nonzero and preserve their audit artifacts for review.
 - Changed URDF HTML trajectory previews to embed local mesh assets as data URIs, so X5 previews render the real STL geometry when opened outside the machine that generated the file instead of falling back to the FK skeleton.

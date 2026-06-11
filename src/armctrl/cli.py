@@ -4446,7 +4446,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "owner": error.payload.get("owner"),
                     "readiness": error.payload.get("readiness"),
                 },
-                "next_gate": "release active runtime owner or recover runtime to hold_safe before sysid run",
+                "next_gate": (
+                    "release active runtime owner or recover runtime to hold_safe "
+                    "before compiling/submitting SysID runtime motion"
+                ),
             }
             _emit(payload, as_json=args.as_json)
             return 3
