@@ -137,6 +137,16 @@ def submit_trajectory_command(
         "trajectory_sample_hz": float(trajectory_sample_hz),
         "q_points": points,
         "joint_trajectory_safety": joint_trajectory_safety,
+        "max_joint_segment_delta_rad": (
+            None
+            if max_joint_segment_delta_rad is None
+            else float(max_joint_segment_delta_rad)
+        ),
+        "max_joint_velocity_rad_s": (
+            None
+            if max_joint_velocity_rad_s is None
+            else float(max_joint_velocity_rad_s)
+        ),
         "submitted_wall_time_s": time.time(),
         "session_artifact": str(session_artifact_path),
         "result_artifact": str(result_path),
@@ -890,12 +900,8 @@ def _resolve_command_execution_backend(
         command["_resolved_eef_adapter"] = adapter_name
         command["_eef_adapter_resolution"] = "configured_adapter_registry"
         return eef_backends[adapter_name]
-    command["_resolved_eef_adapter"] = (
-        adapter_name
-        if callable(getattr(primary_backend, "execute_eef_command", None))
-        else None
-    )
-    command["_eef_adapter_resolution"] = "primary_backend"
+    command["_resolved_eef_adapter"] = None
+    command["_eef_adapter_resolution"] = "missing_adapter_registry"
     return primary_backend
 
 
@@ -982,6 +988,12 @@ def _ensure_command_has_executable_backend(
 ) -> None:
     if command.get("kind") not in EEF_COMMAND_KINDS:
         return
+    if command.get("_eef_adapter_resolution") != "configured_adapter_registry":
+        raise ValueError(
+            "EEF runtime command requires a configured mature backend adapter "
+            "inside the same long-lived runtime; primary backend fallback and "
+            "heuristic joint fallback are forbidden"
+        )
     executor = getattr(backend, "execute_eef_command", None)
     if callable(executor):
         return

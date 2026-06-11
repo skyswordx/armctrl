@@ -1323,9 +1323,16 @@ def test_runtime_eef_current_measured_pose_executes_despite_cartesian_q_drift(
     session["q_meas"] = [1.458571434020996, 0.00629425048828125, 0.04444074630737305]
     session["readiness"] = runtime_readiness(session)
     session_artifact.write_text(json.dumps(session), encoding="utf-8")
-    backend = FakeCartesianEefBackend(q_state=tuple(float(value) for value in session["q_meas"]))
+    primary_backend = FakeMotionBackend()
+    primary_backend.send_joint_command(
+        tuple(float(value) for value in session["q_meas"]),
+        producer="test_bootstrap",
+        mode=MotionMode.HOLD,
+        monotonic_s=0.0,
+    )
+    eef_adapter = FakeCartesianEefBackend(q_state=tuple(float(value) for value in session["q_meas"]))
     runtime = ArmRuntime(
-        backend=backend,
+        backend=primary_backend,
         safe_center=tuple(float(value) for value in session["safe_center"]),
         runtime_session_id=str(session["runtime_session_id"]),
     )
@@ -1349,8 +1356,9 @@ def test_runtime_eef_current_measured_pose_executes_despite_cartesian_q_drift(
 
     result = execute_pending_runtime_commands(
         session_artifact_path=session_artifact,
-        backend=backend,
+        backend=primary_backend,
         runtime=runtime,
+        eef_backends={"sdk_cartesian": eef_adapter},
         max_heartbeat_age_s=5.0,
     )
 
@@ -1537,9 +1545,16 @@ def test_runtime_eef_command_revalidates_reference_limit_before_execute(
     session_artifact = tmp_path / "runtime_session.json"
     _start_fake_hold_session(session_artifact)
     session = json.loads(session_artifact.read_text(encoding="utf-8"))
-    backend = FakeCartesianEefBackend(q_state=tuple(float(value) for value in session["q_hold"]))
+    primary_backend = FakeMotionBackend()
+    primary_backend.send_joint_command(
+        tuple(float(value) for value in session["q_hold"]),
+        producer="test_bootstrap",
+        mode=MotionMode.HOLD,
+        monotonic_s=0.0,
+    )
+    eef_adapter = FakeCartesianEefBackend(q_state=tuple(float(value) for value in session["q_hold"]))
     runtime = ArmRuntime(
-        backend=backend,
+        backend=primary_backend,
         safe_center=tuple(float(value) for value in session["safe_center"]),
         runtime_session_id=str(session["runtime_session_id"]),
     )
@@ -1566,8 +1581,9 @@ def test_runtime_eef_command_revalidates_reference_limit_before_execute(
 
     result = execute_pending_runtime_commands(
         session_artifact_path=session_artifact,
-        backend=backend,
+        backend=primary_backend,
         runtime=runtime,
+        eef_backends={"moveit_servo": eef_adapter},
         max_heartbeat_age_s=5.0,
     )
 
@@ -1585,14 +1601,21 @@ def test_runtime_eef_pose_requires_adapter_reference_limiter_before_execute(
     _start_fake_hold_session(session_artifact)
     session = json.loads(session_artifact.read_text(encoding="utf-8"))
     published: list[dict[str, object]] = []
-    backend = MoveItServoRuntimeBackend(
+    primary_backend = FakeMotionBackend()
+    primary_backend.send_joint_command(
+        tuple(float(value) for value in session["q_hold"]),
+        producer="test_bootstrap",
+        mode=MotionMode.HOLD,
+        monotonic_s=0.0,
+    )
+    eef_adapter = MoveItServoRuntimeBackend(
         q_state=tuple(float(value) for value in session["q_hold"]),
         publisher=lambda message: published.append(message),
         monotonic=lambda: 10.0,
         sleep=lambda _duration_s: None,
     )
     runtime = ArmRuntime(
-        backend=backend,
+        backend=primary_backend,
         safe_center=tuple(float(value) for value in session["safe_center"]),
         runtime_session_id=str(session["runtime_session_id"]),
     )
@@ -1619,8 +1642,9 @@ def test_runtime_eef_pose_requires_adapter_reference_limiter_before_execute(
 
     result = execute_pending_runtime_commands(
         session_artifact_path=session_artifact,
-        backend=backend,
+        backend=primary_backend,
         runtime=runtime,
+        eef_backends={"moveit_servo": eef_adapter},
         max_heartbeat_age_s=5.0,
     )
 
@@ -1638,9 +1662,16 @@ def test_runtime_eef_command_rejects_backend_that_releases_owner_during_switch(
     session_artifact = tmp_path / "runtime_session.json"
     _start_fake_hold_session(session_artifact)
     session = json.loads(session_artifact.read_text(encoding="utf-8"))
-    backend = OwnerReleasingEefBackend(q_state=tuple(float(value) for value in session["q_hold"]))
+    primary_backend = FakeMotionBackend()
+    primary_backend.send_joint_command(
+        tuple(float(value) for value in session["q_hold"]),
+        producer="test_bootstrap",
+        mode=MotionMode.HOLD,
+        monotonic_s=0.0,
+    )
+    eef_adapter = OwnerReleasingEefBackend(q_state=tuple(float(value) for value in session["q_hold"]))
     runtime = ArmRuntime(
-        backend=backend,
+        backend=primary_backend,
         safe_center=tuple(float(value) for value in session["safe_center"]),
         runtime_session_id=str(session["runtime_session_id"]),
     )
@@ -1663,8 +1694,9 @@ def test_runtime_eef_command_rejects_backend_that_releases_owner_during_switch(
 
     result = execute_pending_runtime_commands(
         session_artifact_path=session_artifact,
-        backend=backend,
+        backend=primary_backend,
         runtime=runtime,
+        eef_backends={"moveit_servo": eef_adapter},
         max_heartbeat_age_s=5.0,
     )
 
@@ -1672,7 +1704,7 @@ def test_runtime_eef_command_rejects_backend_that_releases_owner_during_switch(
     assert result["status"] == "rejected"
     assert result["movement_command_sent"] is False
     assert "EEF servo switch warmup failed" in result["reason"]
-    assert backend.executed is False
+    assert eef_adapter.executed is False
 
 
 def test_moveit_servo_runtime_backend_builds_twist_from_pose_delta() -> None:
@@ -1747,14 +1779,21 @@ def test_runtime_eef_command_executes_with_configured_moveit_backend(
     _start_fake_hold_session(session_artifact)
     session = json.loads(session_artifact.read_text(encoding="utf-8"))
     published: list[dict[str, object]] = []
-    backend = MoveItServoRuntimeBackend(
+    primary_backend = FakeMotionBackend()
+    primary_backend.send_joint_command(
+        tuple(float(value) for value in session["q_hold"]),
+        producer="test_bootstrap",
+        mode=MotionMode.HOLD,
+        monotonic_s=0.0,
+    )
+    moveit_adapter = MoveItServoRuntimeBackend(
         q_state=tuple(float(value) for value in session["q_hold"]),
         publisher=lambda message: published.append(message),
         monotonic=lambda: 10.0,
         sleep=lambda _duration_s: None,
     )
     runtime = ArmRuntime(
-        backend=backend,
+        backend=primary_backend,
         safe_center=tuple(float(value) for value in session["safe_center"]),
         runtime_session_id=str(session["runtime_session_id"]),
     )
@@ -1777,8 +1816,9 @@ def test_runtime_eef_command_executes_with_configured_moveit_backend(
 
     result = execute_pending_runtime_commands(
         session_artifact_path=session_artifact,
-        backend=backend,
+        backend=primary_backend,
         runtime=runtime,
+        eef_backends={"moveit_servo": moveit_adapter},
         max_heartbeat_age_s=5.0,
     )
 
@@ -1864,6 +1904,55 @@ def test_runtime_eef_command_executes_with_primary_runtime_and_adapter_registry(
     updated_session = json.loads(session_artifact.read_text(encoding="utf-8"))
     assert updated_session["mode"] == "hold_safe"
     assert updated_session["owner"] is None
+
+
+def test_runtime_eef_command_rejects_primary_backend_without_adapter_registry(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    primary_backend = MoveItServoRuntimeBackend(
+        q_state=tuple(float(value) for value in session["q_hold"]),
+        publisher=lambda _message: None,
+        monotonic=lambda: 10.0,
+        sleep=lambda _duration_s: None,
+    )
+    runtime = ArmRuntime(
+        backend=primary_backend,
+        safe_center=tuple(float(value) for value in session["safe_center"]),
+        runtime_session_id=str(session["runtime_session_id"]),
+    )
+    runtime.mark_hold_safe(q_hold=tuple(float(value) for value in session["q_hold"]))
+    submit_eef_command(
+        session_artifact_path=session_artifact,
+        owner="agent",
+        backend="moveit_servo",
+        kind="eef_pose_delta",
+        frame="eef_link",
+        expected_q_start=tuple(session["q_hold"]),
+        control_period_s=0.1,
+        send_hz=50.0,
+        delta_position_m=(0.002, 0.0, 0.0),
+        delta_rpy_rad=(0.0, 0.0, 0.0),
+        max_start_error_rad=0.02,
+        heartbeat_timeout_s=0.5,
+        max_heartbeat_age_s=5.0,
+    )
+
+    result = execute_pending_runtime_commands(
+        session_artifact_path=session_artifact,
+        backend=primary_backend,
+        runtime=runtime,
+        max_heartbeat_age_s=5.0,
+    )
+
+    assert result is not None
+    assert result["status"] == "rejected"
+    assert "configured mature backend adapter" in result["reason"]
+    assert result["eef_command"]["eef_adapter"] is None
+    assert result["eef_command"]["adapter_resolution"] == "missing_adapter_registry"
+    assert result["movement_command_sent"] is False
 
 
 def test_runtime_eef_pose_executes_with_configured_adapter_registry(

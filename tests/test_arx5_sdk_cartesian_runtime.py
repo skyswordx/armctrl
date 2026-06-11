@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from armctrl.arx5_sdk_cartesian_runtime import Arx5SdkCartesianRuntimeBackend
-from armctrl.motion_runtime import ArmRuntime
+from armctrl.motion_runtime import ArmRuntime, FakeMotionBackend
 from armctrl.runtime_ipc import execute_pending_runtime_commands, submit_eef_command
 from armctrl.runtime_session import start_arx5_cartesian_runtime_session, start_fake_runtime_session
 
@@ -271,8 +271,9 @@ def test_runtime_queue_executes_sdk_cartesian_eef_command(tmp_path) -> None:
 
     result = execute_pending_runtime_commands(
         session_artifact_path=session_artifact,
-        backend=backend,
+        backend=FakeMotionBackend(),
         runtime=runtime,
+        eef_backends={"sdk_cartesian": backend},
         max_heartbeat_age_s=5.0,
     )
 
