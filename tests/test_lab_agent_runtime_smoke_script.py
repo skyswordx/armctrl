@@ -38,6 +38,9 @@ def test_lab_agent_runtime_smoke_script_documents_runtime_agent_flow() -> None:
     assert 'AGENT_EEF_BACKEND_DEFAULT="${ARMCTRL_AGENT_EEF_BACKEND:-moveit_servo}"' in text
     assert "start_args+=(--eef-adapter moveit_servo)" in text
     assert "fake rehearsal registers the MoveIt Servo-style adapter" in text
+    assert "require_eef_adapter_ready" in text
+    assert "eef_adapter_manager.eef_command_executable=true" in text
+    assert "block run-eef before queuing" in text
     assert "--max-linear-step-m" in text
     assert "stretches it into a 50 Hz" in text
     assert "trajectory_q_point_args" not in text

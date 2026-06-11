@@ -112,7 +112,8 @@ SysID 交付证据必须显式分三层质量标签：
 EEF / Cartesian action 当前已支持 `eef_pose_delta`、`eef_twist`、`eef_pose` 进入同一个
 runtime owner/readiness/queue 入口。没有成熟 backend adapter 之前，不允许把 EEF action
 悄悄退化成 heuristic joint 真机控制。首选成熟后端是 MoveIt Servo；在 `moveit_servo`
-adapter 未接通前，serve 端必须 rejected，并产出可审计 result artifact，不能发送任何 joint command。
+adapter 未接通前，submit 端必须 `blocked` 且不得写 pending command；serve 端仍保留
+二次 rejected 防线，不能发送任何 joint command。
 absolute `eef_pose` 只能作为 mature adapter 的 pose reference handoff；必须带
 `adapter_live_reference_limit` 证据，不能被当作一帧大步 joint/Cartesian jump。
 
@@ -120,14 +121,16 @@ absolute `eef_pose` 只能作为 mature adapter 的 pose reference handoff；必
 使用 primary runtime backend 持有 owner/hold/watchdog，同时可通过 `eef_backends` registry
 把 EEF command 分发给声明的 mature adapter。result artifact 必须区分 `runtime_backend`
 和 `eef_adapter`。真机阶段仍不得自动为 EEF command 另开一个 SDK/CAN owner；没有配置 adapter
-时应明确 rejected。
+时应明确 `blocked` / `rejected`，不能留下“queued 但无 result”的现场假象。
 
 现场脚本入口：
 
 - `scripts/lab_fourier_sysid.sh`：SysID slow/reduced/full Fourier 真机流程。
 - `scripts/lab_agent_runtime_smoke.sh`：Agent `joint-intent` / `joint-trajectory` / `eef-delta` runtime gateway smoke。无硬件环境可用 `ARMCTRL_BACKEND=fake` 预演，真机环境默认使用 `arx5_sdk`。
   fake 预演会在 `runtime start --serve` 时注册 `--eef-adapter moveit_servo`，因此 `run-eef`
-  会被 runtime serve 消费并产出 EEF result artifact，而不是停留在 queued 状态。
+  会被 runtime serve 消费并产出 EEF result artifact，而不是停留在 queued 状态。真实
+  `arx5_sdk` runtime 若尚未暴露 `eef_adapter_manager.eef_command_executable=true`，
+  `run-eef` 应在提交前被脚本 blocked；这是正确安全门，不是真机 EEF 验收失败。
 
 这些脚本现在只应编排正式入口：`console status`、`sysid compile-runtime`、
 `motion submit`、`motion result`。SysID 的 `sysid run --adapter sdk`

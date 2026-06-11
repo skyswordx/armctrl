@@ -68,7 +68,8 @@ Expected lab flow:
 
   Agent EEF contract path:
     # Terminal 1 keeps the long-lived arx5_sdk runtime holding a controlled pose.
-    # EEF commands should be consumed by a mature in-runtime servo backend.
+    # EEF commands are submitted only when runtime status proves a mature
+    # in-runtime servo adapter is configured and executable.
     scripts/lab_agent_runtime_smoke.sh start
 
     # Terminal 2:
@@ -95,11 +96,13 @@ Expected phenomena:
   - start-eef is diagnostic-only disconnected takeover and is not the target architecture.
   - fake start uses the same runtime queue/session contract without touching CAN.
   - fake rehearsal registers the MoveIt Servo-style adapter so run-eef is consumed
-    by runtime serve instead of only being queued.
+    by runtime serve. A real arx5_sdk runtime without an adapter manager should
+    block run-eef before queuing; that is expected and safe.
   - plan does not move hardware; it writes an optional EEF/Cartesian Agent contract for review only.
   - run-intent submits motion kind=joint-intent, owner=agent through live runtime IPC.
   - run-trajectory submits motion kind=joint-trajectory, owner=agent through live runtime IPC.
-  - run-eef submits motion kind=eef-delta, owner=agent through live runtime IPC.
+  - run-eef submits motion kind=eef-delta only after live status reports
+    eef_adapter_manager.eef_command_executable=true for AGENT_EEF_BACKEND.
   - Visible-large profile v10: the default real motion is a wide base-yaw
     sweep, joint1 +3.00 rad over 45.0 s.
   - The default EEF delta smoke uses +750 mm in eef_link x over 45.0 s. This is
@@ -182,6 +185,44 @@ runtime_status() {
     --max-heartbeat-age-s 1.0 \
     --output "$RUN_DIR/console_status_${label}.json" \
     --json
+}
+
+require_eef_adapter_ready() {
+  local status_path="$1"
+  "$ARMCTRL_UV_BIN" run python - "$status_path" "$AGENT_EEF_BACKEND" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+requested = sys.argv[2]
+runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else payload
+manager = (
+    runtime.get("eef_adapter_manager")
+    if isinstance(runtime, dict) and isinstance(runtime.get("eef_adapter_manager"), dict)
+    else {}
+)
+configured = manager.get("configured_adapters") if isinstance(manager, dict) else []
+if not isinstance(configured, list):
+    configured = []
+executable = bool(manager.get("eef_command_executable")) if isinstance(manager, dict) else False
+if executable and requested in [str(item) for item in configured]:
+    raise SystemExit(0)
+print(
+    json.dumps(
+        {
+            "status": "blocked",
+            "reason": "Agent EEF smoke requires a configured mature in-runtime EEF adapter before queuing hardware motion",
+            "requested_backend": requested,
+            "eef_adapter_manager": manager,
+            "next_gate": "start a runtime that exposes eef_adapter_manager.eef_command_executable=true for the requested backend; fake rehearsal can use ARMCTRL_BACKEND=fake start",
+        },
+        ensure_ascii=False,
+    ),
+    file=sys.stderr,
+)
+raise SystemExit(3)
+PY
 }
 
 runtime_stop_if_present() {
@@ -362,6 +403,7 @@ EOF
   run-eef)
     ensure_state
     runtime_status "before_agent_eef"
+    require_eef_adapter_ready "$RUN_DIR/console_status_before_agent_eef.json"
     live_q_hold=$("$ARMCTRL_UV_BIN" run python - "$RUN_DIR/console_status_before_agent_eef.json" <<'PY'
 import json
 import sys
