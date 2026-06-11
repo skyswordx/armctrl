@@ -231,6 +231,14 @@ def submit_intent_command(
     expected_runtime_sample_count = (
         max(1, int(round(float(control_period_s) * float(send_hz)))) + 1
     )
+    intent_trajectory_contract = _joint_intent_trajectory_contract(
+        q_start=q_start,
+        q_target=target,
+        control_period_s=float(control_period_s),
+        send_hz=float(send_hz),
+        max_joint_delta_rad=max_joint_delta_rad,
+        max_joint_velocity_rad_s=max_joint_velocity_rad_s,
+    )
     session = _read_json_object(session_artifact_path)
     start_pose_guard = _ensure_can_queue_command(
         session,
@@ -266,6 +274,7 @@ def submit_intent_command(
             else float(max_joint_velocity_rad_s)
         ),
         "joint_intent_safety": joint_intent_safety,
+        "intent_trajectory_contract": intent_trajectory_contract,
         "resampling_policy": "intent_frame_to_runtime_send_hz",
         "interpolation_policy": "smoothstep_intent_frame",
         "expected_runtime_sample_count": expected_runtime_sample_count,
@@ -295,6 +304,7 @@ def submit_intent_command(
         "start_pose_policy": str(start_pose_policy),
         "start_pose_guard": start_pose_guard,
         "joint_intent_safety": joint_intent_safety,
+        "intent_trajectory_contract": intent_trajectory_contract,
         "resampling_policy": "intent_frame_to_runtime_send_hz",
         "interpolation_policy": "smoothstep_intent_frame",
         "expected_runtime_sample_count": expected_runtime_sample_count,
@@ -1957,6 +1967,7 @@ def _intent_motion_contract(command: dict[str, object]) -> dict[str, object]:
             None if control_period_s is None else 1.0 / control_period_s
         ),
         "interpolation_policy": "smoothstep_intent_frame",
+        "intent_trajectory_contract": command.get("intent_trajectory_contract"),
         "max_joint_delta_rad": _optional_float(command.get("max_joint_delta_rad")),
         "max_joint_velocity_rad_s": _optional_float(
             command.get("max_joint_velocity_rad_s")
@@ -1965,6 +1976,59 @@ def _intent_motion_contract(command: dict[str, object]) -> dict[str, object]:
         "missed_intent_policy": "hold_then_damping",
         "missed_intent_timeout_s": 0.3,
         "fault_timeout_s": _optional_float(command.get("heartbeat_timeout_s")),
+    }
+
+
+def _joint_intent_trajectory_contract(
+    *,
+    q_start: Sequence[float],
+    q_target: Sequence[float],
+    control_period_s: float,
+    send_hz: float,
+    max_joint_delta_rad: float | None,
+    max_joint_velocity_rad_s: float | None,
+) -> dict[str, object]:
+    if control_period_s <= 0.0:
+        raise ValueError("control_period_s must be positive")
+    if send_hz <= 0.0:
+        raise ValueError("send_hz must be positive")
+    deltas = [
+        float(target) - float(start)
+        for start, target in zip(q_start, q_target, strict=True)
+    ]
+    max_abs_delta = max((abs(value) for value in deltas), default=0.0)
+    max_abs_velocity = max_abs_delta / float(control_period_s)
+    expected_runtime_sample_count = (
+        max(1, int(round(float(control_period_s) * float(send_hz)))) + 1
+    )
+    return {
+        "schema": "armctrl.joint_intent_trajectory_contract.v1",
+        "command_space": "joint",
+        "source_mode": "joint_intent",
+        "q_policy": "live_hold_to_target_smoothstep",
+        "dq_policy": "derived_smoothstep_analytic",
+        "ddq_policy": "not_commanded_runtime_smoothstep",
+        "interpolation_policy": "smoothstep_intent_frame",
+        "resampling_policy": "intent_frame_to_runtime_send_hz",
+        "runtime_send_hz": float(send_hz),
+        "control_period_s": float(control_period_s),
+        "expected_runtime_sample_count": expected_runtime_sample_count,
+        "max_joint_delta_rad": (
+            None if max_joint_delta_rad is None else float(max_joint_delta_rad)
+        ),
+        "max_joint_velocity_rad_s": (
+            None
+            if max_joint_velocity_rad_s is None
+            else float(max_joint_velocity_rad_s)
+        ),
+        "per_joint_delta_rad": deltas,
+        "max_abs_delta_rad": max_abs_delta,
+        "max_abs_velocity_rad_s": max_abs_velocity,
+        "runtime_controller": "MotionRuntime.execute_owner_intent_frame",
+        "artifact_role": (
+            "short-horizon smooth trajectory contract for low-frequency Agent "
+            "joint targets"
+        ),
     }
 
 

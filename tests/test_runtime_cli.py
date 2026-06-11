@@ -184,6 +184,17 @@ def test_cli_motion_submit_joint_intent_queues_runtime_command(tmp_path: Path) -
     assert command["motion_kind"] == "joint-intent"
     assert command["max_joint_velocity_rad_s"] == pytest.approx(0.25)
     assert command["joint_intent_safety"]["status"] == "pass"
+    assert command["intent_trajectory_contract"]["schema"] == (
+        "armctrl.joint_intent_trajectory_contract.v1"
+    )
+    assert command["intent_trajectory_contract"]["q_policy"] == (
+        "live_hold_to_target_smoothstep"
+    )
+    assert command["intent_trajectory_contract"]["dq_policy"] == (
+        "derived_smoothstep_analytic"
+    )
+    assert command["intent_trajectory_contract"]["runtime_send_hz"] == pytest.approx(50.0)
+    assert command["intent_trajectory_contract"]["expected_runtime_sample_count"] == 6
 
 
 def test_cli_motion_submit_joint_intent_rejects_overfast_visible_step(
@@ -289,6 +300,8 @@ def test_cli_motion_submit_joint_intent_allows_visible_slow_sweep_with_shape_pol
     assert command["resampling_policy"] == "intent_frame_to_runtime_send_hz"
     assert command["expected_runtime_sample_count"] == 601
     assert payload["expected_runtime_sample_count"] == 601
+    assert command["intent_trajectory_contract"]["max_joint_velocity_rad_s"] == pytest.approx(0.08)
+    assert command["intent_trajectory_contract"]["max_abs_velocity_rad_s"] < 0.08
 
 
 def test_cli_motion_submit_joint_trajectory_queues_runtime_command(
@@ -5310,6 +5323,18 @@ def test_runtime_queue_agent_intent_records_frequency_and_missed_intent_policy(
     assert result["motion"]["interpolation_policy"] == "smoothstep_intent_frame"
     assert result["motion"]["max_joint_velocity_rad_s"] == pytest.approx(0.25)
     assert result["motion"]["joint_intent_safety"]["status"] == "pass"
+    assert result["motion"]["intent_trajectory_contract"]["schema"] == (
+        "armctrl.joint_intent_trajectory_contract.v1"
+    )
+    assert result["motion"]["intent_trajectory_contract"]["q_policy"] == (
+        "live_hold_to_target_smoothstep"
+    )
+    assert result["motion"]["intent_trajectory_contract"]["dq_policy"] == (
+        "derived_smoothstep_analytic"
+    )
+    assert result["motion"]["intent_trajectory_contract"][
+        "expected_runtime_sample_count"
+    ] == 6
     assert result["motion"]["resampling_policy"] == "intent_frame_to_runtime_send_hz"
     assert result["motion"]["missed_intent_policy"] == "hold_then_damping"
     assert result["motion"]["missed_intent_timeout_s"] == pytest.approx(0.3)
@@ -5318,6 +5343,9 @@ def test_runtime_queue_agent_intent_records_frequency_and_missed_intent_policy(
     assert result["motion"]["samples"][0]["q_cmd"] == [0.0, 0.3, 0.3]
     assert result["motion"]["samples"][-1]["q_cmd"] == [0.01, 0.3, 0.3]
     assert result_artifact["motion"]["missed_intent_policy"] == "hold_then_damping"
+    assert result_artifact["motion"]["intent_trajectory_contract"] == (
+        result["motion"]["intent_trajectory_contract"]
+    )
     assert observed_owner_leases
     assert observed_owner_leases[0]["landing_policy"] == "missed_intent_hold_then_damping"
     assert observed_owner_leases[0]["last_intent_wall_time_s"] is not None
