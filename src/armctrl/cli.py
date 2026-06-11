@@ -723,6 +723,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--max-tracking-error-rad",
         type=float,
     )
+    motion_compile_joint_trajectory_parser.add_argument(
+        "--tracking-error-grace-samples",
+        type=int,
+        default=3,
+    )
+    motion_compile_joint_trajectory_parser.add_argument(
+        "--tracking-error-consecutive-samples",
+        type=int,
+        default=3,
+    )
     motion_compile_joint_trajectory_parser.add_argument("--max-tau-abs", type=float)
     motion_compile_joint_trajectory_parser.add_argument("--output", required=True)
     motion_compile_joint_trajectory_parser.add_argument(
@@ -773,6 +783,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     motion_joint_trajectory_parser.add_argument(
         "--max-tracking-error-rad",
         type=float,
+    )
+    motion_joint_trajectory_parser.add_argument(
+        "--tracking-error-grace-samples",
+        type=int,
+        default=3,
+    )
+    motion_joint_trajectory_parser.add_argument(
+        "--tracking-error-consecutive-samples",
+        type=int,
+        default=3,
     )
     motion_joint_trajectory_parser.add_argument("--max-tau-abs", type=float)
     motion_joint_trajectory_parser.add_argument(
@@ -834,6 +854,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     motion_joint_intent_parser.add_argument(
         "--max-tracking-error-rad",
         type=float,
+    )
+    motion_joint_intent_parser.add_argument(
+        "--tracking-error-grace-samples",
+        type=int,
+        default=3,
+    )
+    motion_joint_intent_parser.add_argument(
+        "--tracking-error-consecutive-samples",
+        type=int,
+        default=3,
     )
     motion_joint_intent_parser.add_argument("--max-tau-abs", type=float)
     motion_joint_intent_parser.add_argument(
@@ -1633,6 +1663,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     sysid_compile_runtime_parser.add_argument("--send-hz", type=float)
     sysid_compile_runtime_parser.add_argument("--max-tracking-error-rad", type=float)
+    sysid_compile_runtime_parser.add_argument(
+        "--tracking-error-grace-samples",
+        type=int,
+        default=3,
+    )
+    sysid_compile_runtime_parser.add_argument(
+        "--tracking-error-consecutive-samples",
+        type=int,
+        default=3,
+    )
     sysid_compile_runtime_parser.add_argument("--max-tau-abs", type=float)
     sysid_compile_runtime_parser.add_argument("--output", required=True)
     sysid_compile_runtime_parser.add_argument(
@@ -4321,6 +4361,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 start_pose_policy=args.start_pose_policy,
                 send_hz=args.send_hz,
                 max_tracking_error_rad=args.max_tracking_error_rad,
+                tracking_error_grace_samples=args.tracking_error_grace_samples,
+                tracking_error_consecutive_samples=(
+                    args.tracking_error_consecutive_samples
+                ),
                 max_tau_abs=args.max_tau_abs,
                 output_dir=Path(args.output),
             )
@@ -5099,6 +5143,10 @@ def _handle_motion_compile(args: argparse.Namespace) -> int:
                 requested_limit=args.max_joint_velocity_rad_s,
             ),
             max_tracking_error_rad=args.max_tracking_error_rad,
+            tracking_error_grace_samples=args.tracking_error_grace_samples,
+            tracking_error_consecutive_samples=(
+                args.tracking_error_consecutive_samples
+            ),
             max_tau_abs=args.max_tau_abs,
             output_dir=Path(args.output),
         )
@@ -5150,6 +5198,10 @@ def _handle_motion_submit(args: argparse.Namespace) -> int:
                 max_heartbeat_age_s=args.max_heartbeat_age_s,
                 output_path=None,
                 max_tracking_error_rad=args.max_tracking_error_rad,
+                tracking_error_grace_samples=args.tracking_error_grace_samples,
+                tracking_error_consecutive_samples=(
+                    args.tracking_error_consecutive_samples
+                ),
                 max_tau_abs=args.max_tau_abs,
                 max_joint_segment_delta_rad=args.max_joint_segment_delta_rad,
                 max_joint_velocity_rad_s=_agent_default_joint_velocity_limit(
@@ -5186,6 +5238,10 @@ def _handle_motion_submit(args: argparse.Namespace) -> int:
                 max_heartbeat_age_s=args.max_heartbeat_age_s,
                 output_path=None,
                 max_tracking_error_rad=args.max_tracking_error_rad,
+                tracking_error_grace_samples=args.tracking_error_grace_samples,
+                tracking_error_consecutive_samples=(
+                    args.tracking_error_consecutive_samples
+                ),
                 max_tau_abs=args.max_tau_abs,
             )
             payload = _annotate_motion_submit_payload(
@@ -5491,6 +5547,16 @@ def _submit_compiled_joint_trajectory_command(
             if args.max_tracking_error_rad is not None
             else _optional_float(compiled.get("max_tracking_error_rad"))
         ),
+        tracking_error_grace_samples=(
+            args.tracking_error_grace_samples
+            if args.tracking_error_grace_samples is not None
+            else _optional_int(compiled.get("tracking_error_grace_samples"))
+        ),
+        tracking_error_consecutive_samples=(
+            args.tracking_error_consecutive_samples
+            if args.tracking_error_consecutive_samples is not None
+            else _optional_int(compiled.get("tracking_error_consecutive_samples"))
+        ),
         max_tau_abs=(
             args.max_tau_abs
             if args.max_tau_abs is not None
@@ -5539,6 +5605,8 @@ def _compile_joint_trajectory_command(
     max_joint_segment_delta_rad: float | None,
     max_joint_velocity_rad_s: float | None,
     max_tracking_error_rad: float | None,
+    tracking_error_grace_samples: int | None,
+    tracking_error_consecutive_samples: int | None,
     max_tau_abs: float | None,
     output_dir: Path,
 ) -> dict[str, object]:
@@ -5641,6 +5709,14 @@ def _compile_joint_trajectory_command(
         command["duration_s"] = float(duration_s)
     if max_tracking_error_rad is not None:
         command["max_tracking_error_rad"] = float(max_tracking_error_rad)
+        command["tracking_error_grace_samples"] = int(
+            3 if tracking_error_grace_samples is None else tracking_error_grace_samples
+        )
+        command["tracking_error_consecutive_samples"] = int(
+            3
+            if tracking_error_consecutive_samples is None
+            else tracking_error_consecutive_samples
+        )
     if max_tau_abs is not None:
         command["max_tau_abs"] = float(max_tau_abs)
     _write_json_atomic(command_path, command)
@@ -5877,6 +5953,12 @@ def _optional_float(value: object) -> float | None:
     if value is None:
         return None
     return float(value)
+
+
+def _optional_int(value: object) -> int | None:
+    if value is None:
+        return None
+    return int(value)
 
 
 def _numeric_list(values: object, *, name: str) -> list[float]:
@@ -6212,6 +6294,8 @@ def _compile_sysid_runtime_command(
     start_pose_policy: str,
     send_hz: float | None,
     max_tracking_error_rad: float | None,
+    tracking_error_grace_samples: int | None,
+    tracking_error_consecutive_samples: int | None,
     max_tau_abs: float | None,
     output_dir: Path,
 ) -> dict[str, object]:
@@ -6268,6 +6352,14 @@ def _compile_sysid_runtime_command(
         command["ddq_points"] = [list(point) for point in ddq_points]
     if max_tracking_error_rad is not None:
         command["max_tracking_error_rad"] = float(max_tracking_error_rad)
+        command["tracking_error_grace_samples"] = int(
+            3 if tracking_error_grace_samples is None else tracking_error_grace_samples
+        )
+        command["tracking_error_consecutive_samples"] = int(
+            3
+            if tracking_error_consecutive_samples is None
+            else tracking_error_consecutive_samples
+        )
     if max_tau_abs is not None:
         command["max_tau_abs"] = float(max_tau_abs)
     _write_json_atomic(command_path, command)

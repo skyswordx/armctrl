@@ -33,6 +33,8 @@ EEF_BACKENDS = {"moveit_servo", "sdk_cartesian"}
 DEFAULT_EEF_MAX_LINEAR_STEP_M = 0.005
 DEFAULT_EEF_MAX_ANGULAR_STEP_RAD = 0.05
 DEFAULT_AGENT_MAX_JOINT_VELOCITY_RAD_S = 0.25
+DEFAULT_TRACKING_ERROR_GRACE_SAMPLES = 3
+DEFAULT_TRACKING_ERROR_CONSECUTIVE_SAMPLES = 3
 
 
 def submit_trajectory_command(
@@ -52,6 +54,10 @@ def submit_trajectory_command(
     output_path: Path | None = None,
     start_pose_policy: str = "live_hold",
     max_tracking_error_rad: float | None = None,
+    tracking_error_grace_samples: int | None = DEFAULT_TRACKING_ERROR_GRACE_SAMPLES,
+    tracking_error_consecutive_samples: int | None = (
+        DEFAULT_TRACKING_ERROR_CONSECUTIVE_SAMPLES
+    ),
     max_tau_abs: float | None = None,
     max_joint_segment_delta_rad: float | None = None,
     max_joint_velocity_rad_s: float | None = None,
@@ -159,6 +165,16 @@ def submit_trajectory_command(
         command["artifact_policy"] = dict(artifact_policy)
     if max_tracking_error_rad is not None:
         command["max_tracking_error_rad"] = float(max_tracking_error_rad)
+        command["tracking_error_grace_samples"] = int(
+            DEFAULT_TRACKING_ERROR_GRACE_SAMPLES
+            if tracking_error_grace_samples is None
+            else tracking_error_grace_samples
+        )
+        command["tracking_error_consecutive_samples"] = int(
+            DEFAULT_TRACKING_ERROR_CONSECUTIVE_SAMPLES
+            if tracking_error_consecutive_samples is None
+            else tracking_error_consecutive_samples
+        )
     if max_tau_abs is not None:
         command["max_tau_abs"] = float(max_tau_abs)
     pending_path.parent.mkdir(parents=True, exist_ok=True)
@@ -205,6 +221,10 @@ def submit_intent_command(
     output_path: Path | None = None,
     start_pose_policy: str = "live_hold",
     max_tracking_error_rad: float | None = None,
+    tracking_error_grace_samples: int | None = DEFAULT_TRACKING_ERROR_GRACE_SAMPLES,
+    tracking_error_consecutive_samples: int | None = (
+        DEFAULT_TRACKING_ERROR_CONSECUTIVE_SAMPLES
+    ),
     max_tau_abs: float | None = None,
     max_joint_velocity_rad_s: float | None = DEFAULT_AGENT_MAX_JOINT_VELOCITY_RAD_S,
 ) -> dict[str, object]:
@@ -288,6 +308,16 @@ def submit_intent_command(
     }
     if max_tracking_error_rad is not None:
         command["max_tracking_error_rad"] = float(max_tracking_error_rad)
+        command["tracking_error_grace_samples"] = int(
+            DEFAULT_TRACKING_ERROR_GRACE_SAMPLES
+            if tracking_error_grace_samples is None
+            else tracking_error_grace_samples
+        )
+        command["tracking_error_consecutive_samples"] = int(
+            DEFAULT_TRACKING_ERROR_CONSECUTIVE_SAMPLES
+            if tracking_error_consecutive_samples is None
+            else tracking_error_consecutive_samples
+        )
     if max_tau_abs is not None:
         command["max_tau_abs"] = float(max_tau_abs)
     pending_path.parent.mkdir(parents=True, exist_ok=True)
@@ -870,6 +900,14 @@ def _execute_motion_command(
             max_tracking_error_rad=_optional_float(
                 command.get("max_tracking_error_rad")
             ),
+            tracking_error_grace_samples=_optional_int(
+                command.get("tracking_error_grace_samples")
+            )
+            or 0,
+            tracking_error_consecutive_samples=_optional_int(
+                command.get("tracking_error_consecutive_samples")
+            )
+            or 1,
             max_tau_abs=_optional_float(command.get("max_tau_abs")),
         )
     if kind == "joint_intent":
@@ -897,6 +935,14 @@ def _execute_motion_command(
             max_tracking_error_rad=_optional_float(
                 command.get("max_tracking_error_rad")
             ),
+            tracking_error_grace_samples=_optional_int(
+                command.get("tracking_error_grace_samples")
+            )
+            or 0,
+            tracking_error_consecutive_samples=_optional_int(
+                command.get("tracking_error_consecutive_samples")
+            )
+            or 1,
             max_tau_abs=_optional_float(command.get("max_tau_abs")),
         )
     if kind in EEF_COMMAND_KINDS:
@@ -1261,6 +1307,7 @@ def _command_result_payload(
         "max_tracking_error_rad": _optional_float(
             command.get("max_tracking_error_rad")
         ),
+        "tracking_error_policy": _tracking_error_policy(command),
         "tau_meas": _tau_summary(motion.samples),
         "max_tau_abs": _optional_float(command.get("max_tau_abs")),
         "controller_dt_s": motion.controller_dt_s,
@@ -1333,6 +1380,26 @@ def _eef_motion_contract(command: dict[str, object]) -> dict[str, object]:
         "eef_command": command.get("eef_command"),
         "eef_reference_limit": command.get("eef_reference_limit"),
         "mature_backend_policy": command.get("mature_backend_policy"),
+    }
+
+
+def _tracking_error_policy(command: dict[str, object]) -> dict[str, object]:
+    max_error = _optional_float(command.get("max_tracking_error_rad"))
+    grace_samples = _optional_int(command.get("tracking_error_grace_samples"))
+    consecutive_samples = _optional_int(
+        command.get("tracking_error_consecutive_samples")
+    )
+    return {
+        "schema": "armctrl.tracking_error_policy.v1",
+        "enabled": max_error is not None and max_error > 0.0,
+        "max_tracking_error_rad": max_error,
+        "grace_samples": 0 if grace_samples is None else grace_samples,
+        "consecutive_samples": (
+            1 if consecutive_samples is None else consecutive_samples
+        ),
+        "landing_mode_on_violation": MotionMode.HOLD.value,
+        "damping_on_tracking_error": False,
+        "policy": "controlled_hold_after_debounced_tracking_error",
     }
 
 

@@ -91,6 +91,34 @@ class MotionExecutionResult:
     error: dict[str, str] | None = None
 
 
+@dataclass
+class _TrackingErrorGate:
+    max_error_rad: float | None
+    grace_samples: int = 0
+    consecutive_samples: int = 1
+    _sample_count: int = 0
+    _consecutive_exceeded: int = 0
+
+    def __post_init__(self) -> None:
+        if self.grace_samples < 0:
+            raise ValueError("tracking_error_grace_samples must be non-negative")
+        if self.consecutive_samples <= 0:
+            raise ValueError("tracking_error_consecutive_samples must be positive")
+
+    def exceeded(self, sample: MotionAuditSample) -> bool:
+        self._sample_count += 1
+        if not _tracking_error_exceeded(
+            sample,
+            max_tracking_error_rad=self.max_error_rad,
+        ):
+            self._consecutive_exceeded = 0
+            return False
+        if self._sample_count <= self.grace_samples:
+            return False
+        self._consecutive_exceeded += 1
+        return self._consecutive_exceeded >= self.consecutive_samples
+
+
 class MotionBackend(Protocol):
     def send_joint_command(
         self,
@@ -209,6 +237,8 @@ class MotionRuntime:
         watchdog: Callable[[], dict[str, object] | None] | None = None,
         on_sample: Callable[[MotionAuditSample], None] | None = None,
         max_tracking_error_rad: float | None = None,
+        tracking_error_grace_samples: int = 0,
+        tracking_error_consecutive_samples: int = 1,
         max_tau_abs: float | None = None,
     ) -> MotionExecutionResult:
         points = list(trajectory)
@@ -219,6 +249,11 @@ class MotionRuntime:
         token = self.acquire_mode(MotionMode.TRAJECTORY_REPLAY, producer=producer)
         sent_times: list[float] = []
         samples: list[MotionAuditSample] = []
+        tracking_gate = _TrackingErrorGate(
+            max_error_rad=max_tracking_error_rad,
+            grace_samples=int(tracking_error_grace_samples),
+            consecutive_samples=int(tracking_error_consecutive_samples),
+        )
         landing_mode = "released"
         try:
             begin_trajectory = getattr(self._backend, "begin_joint_trajectory", None)
@@ -289,10 +324,7 @@ class MotionRuntime:
                         samples=samples,
                         landing_mode=MotionMode.DAMPING.value,
                     )
-                if _tracking_error_exceeded(
-                    sample,
-                    max_tracking_error_rad=max_tracking_error_rad,
-                ):
+                if tracking_gate.exceeded(sample):
                     landing_mode = self._hold()
                     return _motion_execution_result(
                         status="aborted",
@@ -304,7 +336,12 @@ class MotionRuntime:
                         controller_dt_s=getattr(self._backend, "controller_dt_s", None),
                         samples=samples,
                         landing_mode=landing_mode,
-                        error=_tracking_error_limit_error(),
+                        error=_tracking_error_limit_error(
+                            debounced=(
+                                tracking_gate.grace_samples > 0
+                                or tracking_gate.consecutive_samples > 1
+                            ),
+                        ),
                     )
                 if _tau_limit_exceeded(sample, max_tau_abs=max_tau_abs):
                     self._damping()
@@ -378,6 +415,8 @@ class MotionRuntime:
         watchdog: Callable[[], dict[str, object] | None] | None = None,
         on_sample: Callable[[MotionAuditSample], None] | None = None,
         max_tracking_error_rad: float | None = None,
+        tracking_error_grace_samples: int = 0,
+        tracking_error_consecutive_samples: int = 1,
         max_tau_abs: float | None = None,
     ) -> MotionExecutionResult:
         if send_hz <= 0.0:
@@ -386,6 +425,11 @@ class MotionRuntime:
         token = self.acquire_mode(MotionMode.AGENT_SERVO, producer=producer)
         sent_times: list[float] = []
         samples: list[MotionAuditSample] = []
+        tracking_gate = _TrackingErrorGate(
+            max_error_rad=max_tracking_error_rad,
+            grace_samples=int(tracking_error_grace_samples),
+            consecutive_samples=int(tracking_error_consecutive_samples),
+        )
         landing_mode = "released"
         try:
             begin_trajectory = getattr(self._backend, "begin_joint_trajectory", None)
@@ -458,10 +502,7 @@ class MotionRuntime:
                         samples=samples,
                         landing_mode=MotionMode.DAMPING.value,
                     )
-                if _tracking_error_exceeded(
-                    sample,
-                    max_tracking_error_rad=max_tracking_error_rad,
-                ):
+                if tracking_gate.exceeded(sample):
                     landing_mode = self._hold()
                     return _motion_execution_result(
                         status="aborted",
@@ -473,7 +514,12 @@ class MotionRuntime:
                         controller_dt_s=getattr(self._backend, "controller_dt_s", None),
                         samples=samples,
                         landing_mode=landing_mode,
-                        error=_tracking_error_limit_error(),
+                        error=_tracking_error_limit_error(
+                            debounced=(
+                                tracking_gate.grace_samples > 0
+                                or tracking_gate.consecutive_samples > 1
+                            ),
+                        ),
                     )
                 if _tau_limit_exceeded(sample, max_tau_abs=max_tau_abs):
                     self._damping()
@@ -776,6 +822,8 @@ class ArmRuntime:
         watchdog: Callable[[], dict[str, object] | None] | None = None,
         on_sample: Callable[[MotionAuditSample], None] | None = None,
         max_tracking_error_rad: float | None = None,
+        tracking_error_grace_samples: int = 0,
+        tracking_error_consecutive_samples: int = 1,
         max_tau_abs: float | None = None,
     ) -> MotionExecutionResult:
         self._raise_if_not_owned(owner=owner, mode=MotionMode.TRAJECTORY_REPLAY)
@@ -792,6 +840,8 @@ class ArmRuntime:
             watchdog=watchdog,
             on_sample=on_sample,
             max_tracking_error_rad=max_tracking_error_rad,
+            tracking_error_grace_samples=tracking_error_grace_samples,
+            tracking_error_consecutive_samples=tracking_error_consecutive_samples,
             max_tau_abs=max_tau_abs,
         )
         return self._finish_owner_motion(owner=owner, result=result)
@@ -805,6 +855,8 @@ class ArmRuntime:
         watchdog: Callable[[], dict[str, object] | None] | None = None,
         on_sample: Callable[[MotionAuditSample], None] | None = None,
         max_tracking_error_rad: float | None = None,
+        tracking_error_grace_samples: int = 0,
+        tracking_error_consecutive_samples: int = 1,
         max_tau_abs: float | None = None,
     ) -> MotionExecutionResult:
         self._raise_if_not_owned(owner=owner, mode=MotionMode.AGENT_SERVO)
@@ -821,6 +873,8 @@ class ArmRuntime:
             watchdog=watchdog,
             on_sample=on_sample,
             max_tracking_error_rad=max_tracking_error_rad,
+            tracking_error_grace_samples=tracking_error_grace_samples,
+            tracking_error_consecutive_samples=tracking_error_consecutive_samples,
             max_tau_abs=max_tau_abs,
         )
         return self._finish_owner_motion(owner=owner, result=result)
@@ -993,8 +1047,13 @@ def _watchdog_error(event: dict[str, object]) -> dict[str, str]:
     return {"type": "watchdog", "message": reason}
 
 
-def _tracking_error_limit_error() -> dict[str, str]:
-    return {"type": "tracking_error", "message": "max tracking error exceeded"}
+def _tracking_error_limit_error(*, debounced: bool = False) -> dict[str, str]:
+    message = (
+        "max tracking error exceeded after debounce"
+        if debounced
+        else "max tracking error exceeded"
+    )
+    return {"type": "tracking_error", "message": message}
 
 
 def _tau_limit_error() -> dict[str, str]:

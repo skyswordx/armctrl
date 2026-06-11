@@ -514,6 +514,8 @@ def test_cli_motion_compile_agent_joint_target_writes_shared_joint_trajectory_co
             "0.02",
             "--max-joint-velocity-rad-s",
             "0.25",
+            "--max-tracking-error-rad",
+            "0.04",
             "--output",
             str(output_dir),
             "--json",
@@ -545,6 +547,8 @@ def test_cli_motion_compile_agent_joint_target_writes_shared_joint_trajectory_co
     assert len(command["ddq_points"]) == 301
     assert command["dq_points"][0] == pytest.approx([0.0, 0.0, 0.0])
     assert command["dq_points"][-1] == pytest.approx([0.0, 0.0, 0.0])
+    assert command["tracking_error_grace_samples"] == 3
+    assert command["tracking_error_consecutive_samples"] == 3
     assert command["artifact_policy"]["schema"] == "armctrl.joint_trajectory_compiler_policy.v1"
     assert command["artifact_policy"]["q_cmd"] == "generated_smoothstep_joint_target"
     assert command["artifact_policy"]["dq_cmd"] == "derived_smoothstep_analytic"
@@ -4006,6 +4010,8 @@ def test_runtime_command_tracking_error_limit_aborts_to_controlled_hold(
     command_path = Path(submitted["artifacts"]["command"])
     command = json.loads(command_path.read_text(encoding="utf-8"))
     command["max_tracking_error_rad"] = 0.005
+    command["tracking_error_grace_samples"] = 0
+    command["tracking_error_consecutive_samples"] = 1
     command_path.write_text(json.dumps(command), encoding="utf-8")
 
     result = execute_pending_runtime_commands(
@@ -4025,12 +4031,94 @@ def test_runtime_command_tracking_error_limit_aborts_to_controlled_hold(
         "message": "max tracking error exceeded",
     }
     assert result["motion"]["tracking_error"]["max_abs_rad"] == pytest.approx(0.01)
+    assert result["motion"]["tracking_error_policy"] == {
+        "schema": "armctrl.tracking_error_policy.v1",
+        "enabled": True,
+        "max_tracking_error_rad": pytest.approx(0.005),
+        "grace_samples": 0,
+        "consecutive_samples": 1,
+        "landing_mode_on_violation": "hold",
+        "damping_on_tracking_error": False,
+        "policy": "controlled_hold_after_debounced_tracking_error",
+    }
     assert result_artifact["status"] == "aborted"
     assert updated_session["status"] == "ok"
     assert updated_session["mode"] == "hold_safe"
     assert updated_session["owner"] is None
     assert updated_session["owner_lease"] is None
     assert backend.hold_count >= 1
+    assert backend.damping_count == 0
+
+
+def test_runtime_command_default_tracking_error_policy_debounces_transient_lag(
+    tmp_path: Path,
+) -> None:
+    class StartupLagBackend(LaggingReadbackBackend):
+        def __init__(self) -> None:
+            super().__init__(lagging_q=(0.0, 0.3, 0.3))
+            self._motion_read_count: int | None = None
+
+        def begin_joint_trajectory(self, points) -> None:
+            self._motion_read_count = 0
+
+        def read_joint_state(self) -> JointStateSnapshot:
+            if self._motion_read_count is None:
+                return JointStateSnapshot(q_meas=self._last_q or self._lagging_q)
+            self._motion_read_count += 1
+            if self._motion_read_count <= 2:
+                return JointStateSnapshot(q_meas=self._lagging_q)
+            return JointStateSnapshot(q_meas=self._last_q or self._lagging_q)
+
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    clock = ManualClock()
+    backend = StartupLagBackend()
+    backend.send_joint_command(
+        tuple(float(value) for value in session["q_meas"]),
+        producer="test_bootstrap",
+        mode=MotionMode.HOLD,
+        monotonic_s=0.0,
+    )
+    runtime = ArmRuntime(
+        backend=backend,
+        safe_center=tuple(float(value) for value in session["safe_center"]),
+        runtime_session_id=str(session["runtime_session_id"]),
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+    runtime.mark_hold_safe(q_hold=tuple(float(value) for value in session["q_hold"]))
+    submitted = submit_trajectory_command(
+        session_artifact_path=session_artifact,
+        owner="agent",
+        expected_q_start=(0.0, 0.3, 0.3),
+        q_points=[
+            (0.0, 0.3, 0.3),
+            (0.01, 0.3, 0.3),
+            (0.02, 0.3, 0.3),
+            (0.03, 0.3, 0.3),
+        ],
+        send_hz=50.0,
+        max_start_error_rad=0.02,
+        heartbeat_timeout_s=0.5,
+        max_heartbeat_age_s=1.0,
+        max_tracking_error_rad=0.005,
+        max_joint_velocity_rad_s=1.0,
+    )
+
+    result = execute_pending_runtime_commands(
+        session_artifact_path=session_artifact,
+        backend=backend,
+        runtime=runtime,
+        max_heartbeat_age_s=1.0,
+    )
+
+    assert result is not None
+    assert result["status"] == "completed"
+    assert result["landing_mode"] == "hold"
+    assert result["motion"]["tracking_error_policy"]["grace_samples"] == 3
+    assert result["motion"]["tracking_error_policy"]["consecutive_samples"] == 3
+    assert result["motion"]["tracking_error"]["max_abs_rad"] == pytest.approx(0.01)
     assert backend.damping_count == 0
 
 

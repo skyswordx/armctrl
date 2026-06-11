@@ -416,6 +416,88 @@ def test_execute_trajectory_tracking_error_aborts_to_hold_not_damping():
     assert runtime.mode == MotionMode.HOLD
 
 
+def test_execute_trajectory_allows_tracking_error_grace_before_controlled_hold():
+    class StartupLagBackend(FakeMotionBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            self._read_count = 0
+
+        def read_joint_state(self) -> JointStateSnapshot:
+            self._read_count += 1
+            if self._read_count <= 2:
+                return JointStateSnapshot(q_meas=(0.0, 0.0))
+            return super().read_joint_state()
+
+    clock = ManualClock()
+    backend = StartupLagBackend()
+    runtime = MotionRuntime(backend=backend, monotonic=clock.monotonic, sleep=clock.sleep)
+
+    result = runtime.execute_trajectory(
+        [
+            JointTrajectoryPoint(time_s=0.0, q=(0.0, 0.0)),
+            JointTrajectoryPoint(time_s=0.01, q=(0.01, 0.0)),
+            JointTrajectoryPoint(time_s=0.02, q=(0.02, 0.0)),
+            JointTrajectoryPoint(time_s=0.03, q=(0.03, 0.0)),
+        ],
+        producer="sysid",
+        trajectory_sample_hz=100.0,
+        hold_after=True,
+        max_tracking_error_rad=0.005,
+        tracking_error_grace_samples=2,
+        tracking_error_consecutive_samples=2,
+    )
+
+    assert result.status == "completed"
+    assert result.landing_mode == "hold"
+    assert [command.q for command in backend.joint_commands] == [
+        (0.0, 0.0),
+        (0.01, 0.0),
+        (0.02, 0.0),
+        (0.03, 0.0),
+    ]
+    assert backend.hold_count == 1
+    assert backend.damping_count == 0
+
+
+def test_execute_trajectory_debounces_persistent_tracking_error_to_hold():
+    class LaggingReadBackend(FakeMotionBackend):
+        def read_joint_state(self) -> JointStateSnapshot:
+            return JointStateSnapshot(q_meas=(0.0, 0.0))
+
+    clock = ManualClock()
+    backend = LaggingReadBackend()
+    runtime = MotionRuntime(backend=backend, monotonic=clock.monotonic, sleep=clock.sleep)
+
+    result = runtime.execute_trajectory(
+        [
+            JointTrajectoryPoint(time_s=0.0, q=(0.0, 0.0)),
+            JointTrajectoryPoint(time_s=0.01, q=(0.01, 0.0)),
+            JointTrajectoryPoint(time_s=0.02, q=(0.02, 0.0)),
+            JointTrajectoryPoint(time_s=0.03, q=(0.03, 0.0)),
+        ],
+        producer="sysid",
+        trajectory_sample_hz=100.0,
+        hold_after=True,
+        max_tracking_error_rad=0.005,
+        tracking_error_grace_samples=1,
+        tracking_error_consecutive_samples=2,
+    )
+
+    assert result.status == "aborted"
+    assert result.landing_mode == "hold"
+    assert result.error == {
+        "type": "tracking_error",
+        "message": "max tracking error exceeded after debounce",
+    }
+    assert [command.q for command in backend.joint_commands] == [
+        (0.0, 0.0),
+        (0.01, 0.0),
+        (0.02, 0.0),
+    ]
+    assert backend.hold_count == 1
+    assert backend.damping_count == 0
+
+
 def test_execute_trajectory_returns_aborted_result_on_send_exception():
     clock = ManualClock()
     backend = FailingSendBackend(fail_on_send=2)
