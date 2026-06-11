@@ -6397,7 +6397,16 @@ def _compile_sysid_runtime_command(
         "dq_cmd": dq_policy,
         "ddq_cmd": ddq_policy,
         "sample_hz": float(sample_hz),
+        "send_hz": effective_send_hz,
     }
+    joint_trajectory_safety = _compiled_joint_trajectory_safety(
+        owner=owner,
+        q_points=q_points,
+        trajectory_sample_hz=float(sample_hz),
+        max_joint_segment_delta_rad=None,
+        max_joint_velocity_rad_s=None,
+        max_joint_acceleration_rad_s2=None,
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
     command_path = output_dir / "compiled_motion_command.json"
     manifest_path = output_dir / "compile_runtime_manifest.json"
@@ -6414,6 +6423,9 @@ def _compile_sysid_runtime_command(
         "trajectory_sample_hz": float(sample_hz),
         "start_pose_policy": str(start_pose_policy),
         "artifact_policy": artifact_policy,
+        "joint_trajectory_safety": joint_trajectory_safety,
+        "interpolation_policy": "bounded_cubic_hermite_joint_position_velocity",
+        "resampling_policy": "compiled_joint_trajectory_to_runtime_send_hz",
         "source_artifacts": {
             "execution_trajectory": str(execution_trajectory_path),
         },
@@ -6446,6 +6458,9 @@ def _compile_sysid_runtime_command(
         "sample_hz": float(sample_hz),
         "send_hz": effective_send_hz,
         "artifact_policy": artifact_policy,
+        "joint_trajectory_safety": joint_trajectory_safety,
+        "interpolation_policy": command["interpolation_policy"],
+        "resampling_policy": command["resampling_policy"],
         "artifacts": {
             "compiled_command": str(command_path),
             "compile_runtime_manifest": str(manifest_path),

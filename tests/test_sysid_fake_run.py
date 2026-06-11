@@ -260,6 +260,17 @@ def test_cli_sysid_compile_runtime_writes_compiled_motion_command(
     assert command["q_points"] == [[0.0, 0.3, 0.3], [0.002, 0.3, 0.3]]
     assert command["dq_points"] == [[0.0, 0.0, 0.0], [0.2, 0.0, 0.0]]
     assert "ddq_points" not in command
+    assert command["joint_trajectory_safety"]["schema"] == (
+        "armctrl.joint_trajectory_safety.v1"
+    )
+    assert command["joint_trajectory_safety"]["status"] == "pass"
+    assert command["joint_trajectory_safety"]["policy"] == (
+        "record_only_for_non_agent_joint_trajectory"
+    )
+    assert command["interpolation_policy"] == (
+        "bounded_cubic_hermite_joint_position_velocity"
+    )
+    assert command["resampling_policy"] == "compiled_joint_trajectory_to_runtime_send_hz"
     assert command["artifact_policy"] == {
         "schema": "armctrl.sysid_runtime_compiler_policy.v1",
         "trajectory_artifact": str(execution_trajectory),
@@ -267,7 +278,11 @@ def test_cli_sysid_compile_runtime_writes_compiled_motion_command(
         "dq_cmd": "preserved",
         "ddq_cmd": "missing",
         "sample_hz": 100.0,
+        "send_hz": 100.0,
     }
+    assert payload["joint_trajectory_safety"] == command["joint_trajectory_safety"]
+    assert payload["interpolation_policy"] == command["interpolation_policy"]
+    assert payload["resampling_policy"] == command["resampling_policy"]
 
 
 def test_cli_sysid_run_fake_writes_raw_samples_and_manifest(tmp_path: Path) -> None:
