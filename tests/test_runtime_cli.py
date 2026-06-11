@@ -314,6 +314,58 @@ def test_cli_motion_submit_joint_intent_rejects_overfast_visible_step(
     assert "joint_velocity_within_limit" in payload["reason"]
 
 
+def test_cli_motion_submit_joint_intent_rejects_too_abrupt_smoothstep(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "motion",
+            "submit",
+            "joint-intent",
+            "--session-artifact",
+            str(session_artifact),
+            "--owner",
+            "agent",
+            "--expected-q-start",
+            "0.0",
+            "0.3",
+            "0.3",
+            "--q-target",
+            "0.01",
+            "0.3",
+            "0.3",
+            "--control-period-s",
+            "0.1",
+            "--send-hz",
+            "50",
+            "--max-joint-delta-rad",
+            "0.02",
+            "--max-joint-velocity-rad-s",
+            "0.25",
+            "--max-joint-acceleration-rad-s2",
+            "5.0",
+            "--max-heartbeat-age-s",
+            "5",
+            "--json",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(completed.stdout)
+
+    assert completed.returncode == 3
+    assert payload["status"] == "rejected"
+    assert payload["motion_kind"] == "joint-intent"
+    assert "joint_acceleration_within_limit" in payload["reason"]
+
+
 def test_cli_motion_submit_joint_intent_allows_visible_slow_sweep_with_shape_policy(
     tmp_path: Path,
 ) -> None:
@@ -348,6 +400,8 @@ def test_cli_motion_submit_joint_intent_allows_visible_slow_sweep_with_shape_pol
             "0.85",
             "--max-joint-velocity-rad-s",
             "0.08",
+            "--max-joint-acceleration-rad-s2",
+            "0.05",
             "--max-heartbeat-age-s",
             "5",
             "--json",
@@ -368,7 +422,17 @@ def test_cli_motion_submit_joint_intent_allows_visible_slow_sweep_with_shape_pol
     assert command["expected_runtime_sample_count"] == 601
     assert payload["expected_runtime_sample_count"] == 601
     assert command["intent_trajectory_contract"]["max_joint_velocity_rad_s"] == pytest.approx(0.08)
+    assert command["max_joint_acceleration_rad_s2"] == pytest.approx(0.05)
+    assert command["joint_intent_safety"]["max_joint_acceleration_rad_s2"] == (
+        pytest.approx(0.05)
+    )
+    assert command["intent_trajectory_contract"]["max_joint_acceleration_rad_s2"] == (
+        pytest.approx(0.05)
+    )
     assert command["intent_trajectory_contract"]["max_abs_velocity_rad_s"] < 0.08
+    assert (
+        command["intent_trajectory_contract"]["max_abs_acceleration_rad_s2"] < 0.05
+    )
 
 
 def test_cli_motion_submit_joint_trajectory_queues_runtime_command(
@@ -857,6 +921,65 @@ def test_runtime_revalidates_agent_joint_intent_safety_before_execute(
     assert result["status"] == "rejected"
     assert "joint intent safety failed" in result["reason"]
     assert "joint_velocity_within_limit" in result["reason"]
+    assert result["movement_command_sent"] is False
+    assert not any(
+        command.producer == "agent"
+        and command.mode == MotionMode.AGENT_SERVO.value
+        for command in backend.joint_commands
+    )
+
+
+def test_runtime_revalidates_agent_joint_intent_acceleration_before_execute(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    submitted = submit_intent_command(
+        session_artifact_path=session_artifact,
+        owner="agent",
+        expected_q_start=(0.0, 0.3, 0.3),
+        q_target=(0.004, 0.3, 0.3),
+        control_period_s=0.1,
+        send_hz=50.0,
+        max_joint_delta_rad=0.02,
+        max_start_error_rad=0.02,
+        heartbeat_timeout_s=0.5,
+        max_heartbeat_age_s=5.0,
+        max_joint_velocity_rad_s=0.25,
+        max_joint_acceleration_rad_s2=3.0,
+    )
+    command_path = Path(submitted["artifacts"]["command"])
+    command = json.loads(command_path.read_text(encoding="utf-8"))
+    command["q_target"] = [0.01, 0.3, 0.3]
+    command.pop("joint_intent_safety", None)
+    command_path.write_text(json.dumps(command), encoding="utf-8")
+
+    session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    backend = FakeMotionBackend()
+    backend.send_joint_command(
+        tuple(float(value) for value in session["q_meas"]),
+        producer="test_bootstrap",
+        mode=MotionMode.HOLD,
+        monotonic_s=0.0,
+    )
+    runtime = ArmRuntime(
+        backend=backend,
+        safe_center=tuple(float(value) for value in session["safe_center"]),
+        runtime_session_id=str(session["runtime_session_id"]),
+    )
+    runtime.mark_hold_safe(q_hold=tuple(float(value) for value in session["q_hold"]))
+
+    result = execute_pending_runtime_commands(
+        session_artifact_path=session_artifact,
+        backend=backend,
+        runtime=runtime,
+        max_heartbeat_age_s=5.0,
+    )
+
+    assert result is not None
+    assert result["status"] == "rejected"
+    assert "joint intent safety failed" in result["reason"]
+    assert "joint_acceleration_within_limit" in result["reason"]
     assert result["movement_command_sent"] is False
     assert not any(
         command.producer == "agent"
@@ -5725,6 +5848,7 @@ def test_runtime_queue_agent_intent_records_frequency_and_missed_intent_policy(
         max_start_error_rad=0.02,
         heartbeat_timeout_s=1.0,
         max_heartbeat_age_s=1.0,
+        max_joint_acceleration_rad_s2=10.0,
     )
 
     result = execute_pending_runtime_commands(
@@ -5743,7 +5867,14 @@ def test_runtime_queue_agent_intent_records_frequency_and_missed_intent_policy(
     assert result["motion"]["runtime_send_hz"] == 50.0
     assert result["motion"]["interpolation_policy"] == "smoothstep_intent_frame"
     assert result["motion"]["max_joint_velocity_rad_s"] == pytest.approx(0.25)
+    assert result["motion"]["max_joint_acceleration_rad_s2"] == pytest.approx(10.0)
     assert result["motion"]["joint_intent_safety"]["status"] == "pass"
+    assert result["motion"]["joint_intent_safety"][
+        "max_joint_acceleration_rad_s2"
+    ] == pytest.approx(10.0)
+    assert result["motion"]["joint_intent_safety"][
+        "max_abs_acceleration_rad_s2"
+    ] == pytest.approx(6.0)
     assert result["motion"]["intent_trajectory_contract"]["schema"] == (
         "armctrl.joint_intent_trajectory_contract.v1"
     )
@@ -5753,6 +5884,12 @@ def test_runtime_queue_agent_intent_records_frequency_and_missed_intent_policy(
     assert result["motion"]["intent_trajectory_contract"]["dq_policy"] == (
         "derived_smoothstep_analytic"
     )
+    assert result["motion"]["intent_trajectory_contract"]["ddq_policy"] == (
+        "derived_smoothstep_analytic_not_commanded"
+    )
+    assert result["motion"]["intent_trajectory_contract"][
+        "max_abs_acceleration_rad_s2"
+    ] == pytest.approx(6.0)
     assert result["motion"]["intent_trajectory_contract"][
         "expected_runtime_sample_count"
     ] == 6

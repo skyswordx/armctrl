@@ -45,6 +45,7 @@ class JointIntentFrame:
     control_period_s: float
     max_joint_delta_rad: float | None = None
     max_joint_velocity_rad_s: float | None = None
+    max_joint_acceleration_rad_s2: float | None = None
 
 
 @dataclass(frozen=True)
@@ -1158,6 +1159,19 @@ def _intent_frame_points(
                 "max_joint_velocity_rad_s exceeded: "
                 f"{observed_velocity_rad_s:.6g} rad/s > "
                 f"{max_joint_velocity_rad_s:.6g} rad/s"
+            )
+    if intent.max_joint_acceleration_rad_s2 is not None:
+        max_joint_acceleration_rad_s2 = float(intent.max_joint_acceleration_rad_s2)
+        if max_joint_acceleration_rad_s2 <= 0.0:
+            raise ValueError("max_joint_acceleration_rad_s2 must be positive")
+        observed_acceleration_rad_s2 = (
+            6.0 * observed_delta_rad / (float(intent.control_period_s) ** 2)
+        )
+        if observed_acceleration_rad_s2 > max_joint_acceleration_rad_s2:
+            raise ValueError(
+                "max_joint_acceleration_rad_s2 exceeded: "
+                f"{observed_acceleration_rad_s2:.6g} rad/s^2 > "
+                f"{max_joint_acceleration_rad_s2:.6g} rad/s^2"
             )
     interval_count = max(1, int(round(float(intent.control_period_s) * send_hz)))
     points: list[JointTrajectoryPoint] = []

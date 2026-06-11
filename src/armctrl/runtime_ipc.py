@@ -240,6 +240,7 @@ def submit_intent_command(
     ),
     max_tau_abs: float | None = None,
     max_joint_velocity_rad_s: float | None = DEFAULT_AGENT_MAX_JOINT_VELOCITY_RAD_S,
+    max_joint_acceleration_rad_s2: float | None = None,
 ) -> dict[str, object]:
     q_start = _float_list(expected_q_start, name="expected_q_start")
     target = _float_list(q_target, name="q_target")
@@ -255,6 +256,7 @@ def submit_intent_command(
         control_period_s=float(control_period_s),
         max_joint_delta_rad=max_joint_delta_rad,
         max_joint_velocity_rad_s=max_joint_velocity_rad_s,
+        max_joint_acceleration_rad_s2=max_joint_acceleration_rad_s2,
     )
     if joint_intent_safety["status"] != "pass":
         raise ValueError(
@@ -271,6 +273,7 @@ def submit_intent_command(
         send_hz=float(send_hz),
         max_joint_delta_rad=max_joint_delta_rad,
         max_joint_velocity_rad_s=max_joint_velocity_rad_s,
+        max_joint_acceleration_rad_s2=max_joint_acceleration_rad_s2,
     )
     session = _read_json_object(session_artifact_path)
     start_pose_guard = _ensure_can_queue_command(
@@ -305,6 +308,11 @@ def submit_intent_command(
             None
             if max_joint_velocity_rad_s is None
             else float(max_joint_velocity_rad_s)
+        ),
+        "max_joint_acceleration_rad_s2": (
+            None
+            if max_joint_acceleration_rad_s2 is None
+            else float(max_joint_acceleration_rad_s2)
         ),
         "joint_intent_safety": joint_intent_safety,
         "intent_trajectory_contract": intent_trajectory_contract,
@@ -1060,6 +1068,11 @@ def _execute_motion_command(
                     None
                     if command.get("max_joint_velocity_rad_s") is None
                     else float(command.get("max_joint_velocity_rad_s"))
+                ),
+                max_joint_acceleration_rad_s2=(
+                    None
+                    if command.get("max_joint_acceleration_rad_s2") is None
+                    else float(command.get("max_joint_acceleration_rad_s2"))
                 ),
             ),
             owner=str(command.get("owner")),
@@ -2276,6 +2289,9 @@ def _intent_motion_contract(command: dict[str, object]) -> dict[str, object]:
         "max_joint_velocity_rad_s": _optional_float(
             command.get("max_joint_velocity_rad_s")
         ),
+        "max_joint_acceleration_rad_s2": _optional_float(
+            command.get("max_joint_acceleration_rad_s2")
+        ),
         "joint_intent_safety": command.get("joint_intent_safety"),
         "missed_intent_policy": "hold_then_damping",
         "missed_intent_timeout_s": 0.3,
@@ -2291,6 +2307,7 @@ def _joint_intent_trajectory_contract(
     send_hz: float,
     max_joint_delta_rad: float | None,
     max_joint_velocity_rad_s: float | None,
+    max_joint_acceleration_rad_s2: float | None,
 ) -> dict[str, object]:
     if control_period_s <= 0.0:
         raise ValueError("control_period_s must be positive")
@@ -2302,6 +2319,11 @@ def _joint_intent_trajectory_contract(
     ]
     max_abs_delta = max((abs(value) for value in deltas), default=0.0)
     max_abs_velocity = max_abs_delta / float(control_period_s)
+    per_joint_abs_acceleration = [
+        6.0 * abs(value) / (float(control_period_s) ** 2)
+        for value in deltas
+    ]
+    max_abs_acceleration = max(per_joint_abs_acceleration, default=0.0)
     expected_runtime_sample_count = (
         max(1, int(round(float(control_period_s) * float(send_hz)))) + 1
     )
@@ -2311,7 +2333,7 @@ def _joint_intent_trajectory_contract(
         "source_mode": "joint_intent",
         "q_policy": "live_hold_to_target_smoothstep",
         "dq_policy": "derived_smoothstep_analytic",
-        "ddq_policy": "not_commanded_runtime_smoothstep",
+        "ddq_policy": "derived_smoothstep_analytic_not_commanded",
         "interpolation_policy": "smoothstep_intent_frame",
         "resampling_policy": "intent_frame_to_runtime_send_hz",
         "runtime_send_hz": float(send_hz),
@@ -2325,9 +2347,16 @@ def _joint_intent_trajectory_contract(
             if max_joint_velocity_rad_s is None
             else float(max_joint_velocity_rad_s)
         ),
+        "max_joint_acceleration_rad_s2": (
+            None
+            if max_joint_acceleration_rad_s2 is None
+            else float(max_joint_acceleration_rad_s2)
+        ),
         "per_joint_delta_rad": deltas,
+        "per_joint_abs_acceleration_rad_s2": per_joint_abs_acceleration,
         "max_abs_delta_rad": max_abs_delta,
         "max_abs_velocity_rad_s": max_abs_velocity,
+        "max_abs_acceleration_rad_s2": max_abs_acceleration,
         "runtime_controller": "MotionRuntime.execute_owner_intent_frame",
         "artifact_role": (
             "short-horizon smooth trajectory contract for low-frequency Agent "
@@ -2439,13 +2468,26 @@ def _ensure_joint_intent_safety(command: dict[str, object]) -> None:
         if isinstance(existing, dict)
         else None
     )
+    existing_max_acceleration = (
+        _optional_float(existing.get("max_joint_acceleration_rad_s2"))
+        if isinstance(existing, dict)
+        else None
+    )
     command_max_delta = _optional_float(command.get("max_joint_delta_rad"))
     command_max_velocity = _optional_float(command.get("max_joint_velocity_rad_s"))
+    command_max_acceleration = _optional_float(
+        command.get("max_joint_acceleration_rad_s2")
+    )
     max_delta = existing_max_delta if existing_max_delta is not None else command_max_delta
     max_velocity = (
         existing_max_velocity
         if existing_max_velocity is not None
         else command_max_velocity
+    )
+    max_acceleration = (
+        existing_max_acceleration
+        if existing_max_acceleration is not None
+        else command_max_acceleration
     )
     if max_velocity is None and str(command.get("owner")) == "agent":
         max_velocity = DEFAULT_AGENT_MAX_JOINT_VELOCITY_RAD_S
@@ -2455,6 +2497,7 @@ def _ensure_joint_intent_safety(command: dict[str, object]) -> None:
         control_period_s=float(command.get("control_period_s")),
         max_joint_delta_rad=max_delta,
         max_joint_velocity_rad_s=max_velocity,
+        max_joint_acceleration_rad_s2=max_acceleration,
     )
     command["joint_intent_safety"] = guard
     if guard["status"] != "pass":
@@ -2568,6 +2611,7 @@ def _joint_intent_safety_guard(
     control_period_s: float,
     max_joint_delta_rad: float | None,
     max_joint_velocity_rad_s: float | None,
+    max_joint_acceleration_rad_s2: float | None,
 ) -> dict[str, object]:
     if control_period_s <= 0.0:
         raise ValueError("control_period_s must be positive")
@@ -2578,8 +2622,13 @@ def _joint_intent_safety_guard(
     per_joint_abs_velocity = [
         abs(value) / float(control_period_s) for value in deltas
     ]
+    per_joint_abs_acceleration = [
+        6.0 * abs(value) / (float(control_period_s) ** 2)
+        for value in deltas
+    ]
     max_abs_delta = max(per_joint_abs_delta, default=0.0)
     max_abs_velocity = max(per_joint_abs_velocity, default=0.0)
+    max_abs_acceleration = max(per_joint_abs_acceleration, default=0.0)
     failed_checks: list[str] = []
     max_delta = None if max_joint_delta_rad is None else float(max_joint_delta_rad)
     if max_delta is not None:
@@ -2597,18 +2646,31 @@ def _joint_intent_safety_guard(
             raise ValueError("max_joint_velocity_rad_s must be positive")
         if max_abs_velocity > max_velocity:
             failed_checks.append("joint_velocity_within_limit")
+    max_acceleration = (
+        None
+        if max_joint_acceleration_rad_s2 is None
+        else float(max_joint_acceleration_rad_s2)
+    )
+    if max_acceleration is not None:
+        if max_acceleration <= 0.0:
+            raise ValueError("max_joint_acceleration_rad_s2 must be positive")
+        if max_abs_acceleration > max_acceleration:
+            failed_checks.append("joint_acceleration_within_limit")
     return {
         "schema": "armctrl.joint_intent_safety.v1",
         "status": "pass" if not failed_checks else "fail",
-        "policy": "reject_oversized_or_too_fast_joint_intent",
+        "policy": "reject_oversized_too_fast_or_too_abrupt_joint_intent",
         "control_period_s": float(control_period_s),
         "max_joint_delta_rad": max_delta,
         "max_joint_velocity_rad_s": max_velocity,
+        "max_joint_acceleration_rad_s2": max_acceleration,
         "per_joint_delta_rad": deltas,
         "per_joint_abs_delta_rad": per_joint_abs_delta,
         "per_joint_abs_velocity_rad_s": per_joint_abs_velocity,
+        "per_joint_abs_acceleration_rad_s2": per_joint_abs_acceleration,
         "max_abs_delta_rad": max_abs_delta,
         "max_abs_velocity_rad_s": max_abs_velocity,
+        "max_abs_acceleration_rad_s2": max_abs_acceleration,
         "failed_checks": failed_checks,
     }
 

@@ -591,6 +591,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=0.25,
     )
     runtime_submit_intent_parser.add_argument(
+        "--max-joint-acceleration-rad-s2",
+        type=float,
+    )
+    runtime_submit_intent_parser.add_argument(
         "--max-start-error-rad",
         type=float,
         default=0.02,
@@ -862,6 +866,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--max-joint-velocity-rad-s",
         type=float,
         default=0.25,
+    )
+    motion_joint_intent_parser.add_argument(
+        "--max-joint-acceleration-rad-s2",
+        type=float,
     )
     motion_joint_intent_parser.add_argument(
         "--max-tracking-error-rad",
@@ -1405,6 +1413,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--max-joint-delta-rad",
         type=float,
         default=0.005,
+    )
+    agent_flow_real_runtime_smoke_parser.add_argument(
+        "--max-joint-velocity-rad-s",
+        type=float,
+    )
+    agent_flow_real_runtime_smoke_parser.add_argument(
+        "--max-joint-acceleration-rad-s2",
+        type=float,
     )
     agent_flow_real_runtime_smoke_parser.add_argument(
         "--max-tracking-error-rad",
@@ -2739,6 +2755,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 send_hz=args.send_hz,
                 max_joint_delta_rad=args.max_joint_delta_rad,
                 max_joint_velocity_rad_s=args.max_joint_velocity_rad_s,
+                max_joint_acceleration_rad_s2=args.max_joint_acceleration_rad_s2,
                 max_start_error_rad=args.max_start_error_rad,
                 heartbeat_timeout_s=args.heartbeat_timeout_s,
                 max_heartbeat_age_s=args.max_heartbeat_age_s,
@@ -3530,6 +3547,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 control_period_s=control_period_s,
                 send_hz=args.send_hz,
                 max_joint_delta_rad=args.max_joint_delta_rad,
+                max_joint_velocity_rad_s=_agent_default_joint_velocity_limit(
+                    owner="agent",
+                    requested_limit=args.max_joint_velocity_rad_s,
+                ),
+                max_joint_acceleration_rad_s2=args.max_joint_acceleration_rad_s2,
                 max_start_error_rad=0.02,
                 heartbeat_timeout_s=0.5,
                 max_heartbeat_age_s=args.max_heartbeat_age_s,
@@ -5219,6 +5241,7 @@ def _handle_motion_submit(args: argparse.Namespace) -> int:
                 start_pose_policy=args.start_pose_policy,
                 max_joint_delta_rad=args.max_joint_delta_rad,
                 max_joint_velocity_rad_s=args.max_joint_velocity_rad_s,
+                max_joint_acceleration_rad_s2=args.max_joint_acceleration_rad_s2,
                 max_start_error_rad=args.max_start_error_rad,
                 heartbeat_timeout_s=args.heartbeat_timeout_s,
                 max_heartbeat_age_s=args.max_heartbeat_age_s,
