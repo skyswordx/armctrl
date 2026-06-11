@@ -18,6 +18,7 @@ from armctrl.motion_runtime import (
 )
 from armctrl.cli import (
     _attach_eef_adapter_manager_from_args,
+    _runtime_result_check_payload,
     _runtime_stop_request_path,
     _serve_runtime_session_until_stopped,
 )
@@ -4409,7 +4410,7 @@ def test_runtime_command_result_records_tracking_error_summary(
     assert result_artifact["motion"]["tracking_error"] == tracking
 
 
-def test_runtime_command_tracking_error_limit_aborts_to_controlled_hold(
+def test_runtime_command_tracking_error_limit_records_quality_without_online_abort(
     tmp_path: Path,
 ) -> None:
     session_artifact = tmp_path / "runtime_session.json"
@@ -4458,12 +4459,9 @@ def test_runtime_command_tracking_error_limit_aborts_to_controlled_hold(
     updated_session = json.loads(session_artifact.read_text(encoding="utf-8"))
 
     assert result is not None
-    assert result["status"] == "aborted"
+    assert result["status"] == "completed"
     assert result["landing_mode"] == "hold"
-    assert result["motion"]["error"] == {
-        "type": "tracking_error",
-        "message": "max tracking error exceeded",
-    }
+    assert result["motion"]["error"] is None
     assert result["motion"]["tracking_error"]["max_abs_rad"] == pytest.approx(0.01)
     assert result["motion"]["tracking_error_policy"] == {
         "schema": "armctrl.tracking_error_policy.v1",
@@ -4471,11 +4469,22 @@ def test_runtime_command_tracking_error_limit_aborts_to_controlled_hold(
         "max_tracking_error_rad": pytest.approx(0.005),
         "grace_samples": 0,
         "consecutive_samples": 1,
-        "landing_mode_on_violation": "hold",
+        "landing_mode_on_violation": None,
         "damping_on_tracking_error": False,
-        "policy": "controlled_hold_after_debounced_tracking_error",
+        "online_abort_on_tracking_error": False,
+        "policy": "record_quality_evidence_only_result_check_decides_pass_fail",
     }
-    assert result_artifact["status"] == "aborted"
+    assert result_artifact["status"] == "completed"
+    check = _runtime_result_check_payload(
+        result_artifact_path=Path(submitted["artifacts"]["result"]),
+        expect_owner="sysid",
+        expect_mode="trajectory_replay",
+        expect_sample_count=2,
+        max_jitter_p99_ms=None,
+        max_tracking_error_rad=0.005,
+    )
+    assert check["status"] == "fail"
+    assert check["checks"]["tracking_error_within_limit"] is False
     assert updated_session["status"] == "ok"
     assert updated_session["mode"] == "hold_safe"
     assert updated_session["owner"] is None

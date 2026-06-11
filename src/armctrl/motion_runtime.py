@@ -120,6 +120,21 @@ class _TrackingErrorGate:
         return self._consecutive_exceeded >= self.consecutive_samples
 
 
+def _validate_tracking_error_policy(
+    *,
+    max_error_rad: float | None,
+    grace_samples: int,
+    consecutive_samples: int,
+) -> None:
+    # Tracking error is a quality/evidence gate, not an online kill-switch.
+    # Fault flags, watchdog timeout, torque limit, and send failures still stop motion.
+    _TrackingErrorGate(
+        max_error_rad=max_error_rad,
+        grace_samples=grace_samples,
+        consecutive_samples=consecutive_samples,
+    )
+
+
 class MotionBackend(Protocol):
     def send_joint_command(
         self,
@@ -250,7 +265,7 @@ class MotionRuntime:
         token = self.acquire_mode(MotionMode.TRAJECTORY_REPLAY, producer=producer)
         sent_times: list[float] = []
         samples: list[MotionAuditSample] = []
-        tracking_gate = _TrackingErrorGate(
+        _validate_tracking_error_policy(
             max_error_rad=max_tracking_error_rad,
             grace_samples=int(tracking_error_grace_samples),
             consecutive_samples=int(tracking_error_consecutive_samples),
@@ -324,25 +339,6 @@ class MotionRuntime:
                         controller_dt_s=getattr(self._backend, "controller_dt_s", None),
                         samples=samples,
                         landing_mode=MotionMode.DAMPING.value,
-                    )
-                if tracking_gate.exceeded(sample):
-                    landing_mode = self._hold()
-                    return _motion_execution_result(
-                        status="aborted",
-                        producer=producer,
-                        mode=MotionMode.TRAJECTORY_REPLAY,
-                        trajectory_sample_hz=float(trajectory_sample_hz),
-                        sent_times=sent_times,
-                        expected_period_s=1.0 / float(trajectory_sample_hz),
-                        controller_dt_s=getattr(self._backend, "controller_dt_s", None),
-                        samples=samples,
-                        landing_mode=landing_mode,
-                        error=_tracking_error_limit_error(
-                            debounced=(
-                                tracking_gate.grace_samples > 0
-                                or tracking_gate.consecutive_samples > 1
-                            ),
-                        ),
                     )
                 if _tau_limit_exceeded(sample, max_tau_abs=max_tau_abs):
                     self._damping()
@@ -426,7 +422,7 @@ class MotionRuntime:
         token = self.acquire_mode(MotionMode.AGENT_SERVO, producer=producer)
         sent_times: list[float] = []
         samples: list[MotionAuditSample] = []
-        tracking_gate = _TrackingErrorGate(
+        _validate_tracking_error_policy(
             max_error_rad=max_tracking_error_rad,
             grace_samples=int(tracking_error_grace_samples),
             consecutive_samples=int(tracking_error_consecutive_samples),
@@ -502,25 +498,6 @@ class MotionRuntime:
                         controller_dt_s=getattr(self._backend, "controller_dt_s", None),
                         samples=samples,
                         landing_mode=MotionMode.DAMPING.value,
-                    )
-                if tracking_gate.exceeded(sample):
-                    landing_mode = self._hold()
-                    return _motion_execution_result(
-                        status="aborted",
-                        producer=producer,
-                        mode=MotionMode.AGENT_SERVO,
-                        trajectory_sample_hz=float(send_hz),
-                        sent_times=sent_times,
-                        expected_period_s=1.0 / float(send_hz),
-                        controller_dt_s=getattr(self._backend, "controller_dt_s", None),
-                        samples=samples,
-                        landing_mode=landing_mode,
-                        error=_tracking_error_limit_error(
-                            debounced=(
-                                tracking_gate.grace_samples > 0
-                                or tracking_gate.consecutive_samples > 1
-                            ),
-                        ),
                     )
                 if _tau_limit_exceeded(sample, max_tau_abs=max_tau_abs):
                     self._damping()
@@ -1046,15 +1023,6 @@ def _motion_error(exc: Exception) -> dict[str, str]:
 def _watchdog_error(event: dict[str, object]) -> dict[str, str]:
     reason = str(event.get("reason") or "watchdog_timeout")
     return {"type": "watchdog", "message": reason}
-
-
-def _tracking_error_limit_error(*, debounced: bool = False) -> dict[str, str]:
-    message = (
-        "max tracking error exceeded after debounce"
-        if debounced
-        else "max tracking error exceeded"
-    )
-    return {"type": "tracking_error", "message": message}
 
 
 def _tau_limit_error() -> dict[str, str]:

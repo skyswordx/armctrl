@@ -98,6 +98,12 @@ Runtime 执行前必须重新计算 Agent `joint_intent` 和 `joint_trajectory` 
 的 pending command 缺失 safety artifact，runtime 会回退到默认 Agent 速度阈值并在执行前
 拒绝过快 intent/trajectory。这个复核不替代 SysID compiler/review/result-check 证据链。
 
+`max_tracking_error_rad` 是执行质量和数据可用性 gate，不是在线急停阈值。普通 tracking lag
+必须记录到 result artifact，并由 `armctrl motion result` / `runtime result-check` 判定
+`runtime_quality_pass` 或 `sysid_dataset_ready` 是否失败；它不能默认在运动中途触发 damping，也不能把
+hold-capable 的受控状态降级成 passive/damping 掉臂。只有 fault flags、watchdog/deadman timeout、
+发送异常、torque limit 等硬故障才应进入 damping。
+
 正式 Agent/SysID runtime gateway 的 readiness 只接受 live runtime status 证据。operator 可以使用
 `armctrl console status`，内部会解包为 `armctrl.arm_runtime_status.v1`；也可以直接使用
 `armctrl runtime status`。旧的

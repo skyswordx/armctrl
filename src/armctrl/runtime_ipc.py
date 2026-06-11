@@ -1565,9 +1565,10 @@ def _tracking_error_policy(command: dict[str, object]) -> dict[str, object]:
         "consecutive_samples": (
             1 if consecutive_samples is None else consecutive_samples
         ),
-        "landing_mode_on_violation": MotionMode.HOLD.value,
+        "landing_mode_on_violation": None,
         "damping_on_tracking_error": False,
-        "policy": "controlled_hold_after_debounced_tracking_error",
+        "online_abort_on_tracking_error": False,
+        "policy": "record_quality_evidence_only_result_check_decides_pass_fail",
     }
 
 
