@@ -1534,6 +1534,7 @@ def test_runtime_eef_current_measured_pose_executes_despite_cartesian_q_drift(
     assert result["start_pose_policy"] == "current_measured_pose"
     assert result["motion"]["eef_command"]["command_space"] == "eef"
     assert result["eef_switch"]["status"] == "pass"
+    assert result["eef_switch"]["checks"]["adapter_prepare_hook_present"] is True
     assert result["eef_switch"]["disconnected_takeover_allowed"] is False
     assert result["eef_switch"]["sdk_owner_released"] is False
     updated_session = json.loads(session_artifact.read_text(encoding="utf-8"))
@@ -1546,6 +1547,22 @@ class FakeCartesianEefBackend(FakeMotionBackend):
     def __init__(self, *, q_state: tuple[float, ...]) -> None:
         super().__init__()
         self._last_q = tuple(float(value) for value in q_state)
+
+    def prepare_eef_servo_switch(self, command: dict[str, object]) -> dict[str, object]:
+        return {
+            "schema": "armctrl.eef_servo_switch.v1",
+            "status": "pass",
+            "backend": command.get("backend"),
+            "policy": "adapter_declared_live_state_zero_command_warmup",
+            "target_seed": "current_live_state",
+            "zero_command_warmup_ticks": 1,
+            "checks": {
+                "sdk_owner_released": False,
+                "adapter_prepare_hook_present": True,
+                "target_seeded_from_current_state": True,
+                "zero_command_warmup_completed": True,
+            },
+        }
 
     def execute_eef_command(
         self,
@@ -1580,6 +1597,91 @@ class FakeCartesianEefBackend(FakeMotionBackend):
             samples=(sample,),
             landing_mode=MotionMode.HOLD.value,
         )
+
+
+class NoWarmupEefBackend(FakeMotionBackend):
+    def __init__(self, *, q_state: tuple[float, ...]) -> None:
+        super().__init__()
+        self._last_q = tuple(float(value) for value in q_state)
+        self.executed = False
+
+    def execute_eef_command(
+        self,
+        command: dict[str, object],
+        *,
+        owner: str,
+        watchdog=None,
+        on_sample=None,
+    ) -> MotionExecutionResult:
+        self.executed = True
+        return MotionExecutionResult(
+            status="completed",
+            producer=owner,
+            mode=MotionMode.AGENT_SERVO.value,
+            trajectory_sample_hz=None,
+            actual_send_hz=None,
+            send_jitter_ms_p95=None,
+            send_jitter_ms_p99=None,
+            controller_dt_s=None,
+            samples=(),
+            landing_mode=MotionMode.HOLD.value,
+        )
+
+
+def test_runtime_eef_rejects_adapter_without_declared_warmup(tmp_path: Path) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    _configure_eef_adapter_manager(session_artifact, adapter="moveit_servo")
+    primary_backend = FakeMotionBackend()
+    primary_backend.send_joint_command(
+        tuple(float(value) for value in session["q_meas"]),
+        producer="test_bootstrap",
+        mode=MotionMode.HOLD,
+        monotonic_s=0.0,
+    )
+    eef_adapter = NoWarmupEefBackend(
+        q_state=tuple(float(value) for value in session["q_meas"])
+    )
+    runtime = ArmRuntime(
+        backend=primary_backend,
+        safe_center=tuple(float(value) for value in session["safe_center"]),
+        runtime_session_id=str(session["runtime_session_id"]),
+    )
+    runtime.mark_hold_safe(q_hold=tuple(float(value) for value in session["q_hold"]))
+    submit_eef_command(
+        session_artifact_path=session_artifact,
+        owner="agent",
+        backend="moveit_servo",
+        kind="eef_pose_delta",
+        frame="eef_link",
+        expected_q_start=tuple(float(value) for value in session["q_hold"]),
+        control_period_s=0.1,
+        send_hz=50.0,
+        delta_position_m=(0.001, 0.0, 0.0),
+        delta_rpy_rad=(0.0, 0.0, 0.0),
+        max_start_error_rad=0.02,
+        heartbeat_timeout_s=0.5,
+        max_heartbeat_age_s=5.0,
+    )
+
+    result = execute_pending_runtime_commands(
+        session_artifact_path=session_artifact,
+        backend=primary_backend,
+        runtime=runtime,
+        eef_backends={"moveit_servo": eef_adapter},
+        max_heartbeat_age_s=5.0,
+    )
+
+    assert result is not None
+    assert result["status"] == "rejected"
+    assert result["movement_command_sent"] is False
+    assert result["eef_switch"]["status"] == "fail"
+    assert result["eef_switch"]["checks"]["adapter_prepare_hook_present"] is False
+    assert eef_adapter.executed is False
+    updated_session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    assert updated_session["mode"] == "hold_safe"
+    assert updated_session["owner"] is None
 
 
 class OwnerReleasingEefBackend(FakeCartesianEefBackend):

@@ -37,6 +37,12 @@ DEFAULT_TRACKING_ERROR_GRACE_SAMPLES = 3
 DEFAULT_TRACKING_ERROR_CONSECUTIVE_SAMPLES = 3
 
 
+class _EefServoSwitchError(ValueError):
+    def __init__(self, message: str, *, payload: dict[str, object]) -> None:
+        super().__init__(message)
+        self.payload = payload
+
+
 def submit_trajectory_command(
     *,
     session_artifact_path: Path,
@@ -872,6 +878,49 @@ def execute_runtime_command(
         )
     except (ArmRuntimeError, RuntimeSessionError, ValueError) as error:
         rejected_wall_time_s = time.time()
+        eef_switch_error = error if isinstance(error, _EefServoSwitchError) else None
+        if "live_runtime" in locals() and isinstance(live_runtime, ArmRuntime):
+            try:
+                live_runtime.release_owner(owner=owner)
+            except Exception:
+                try:
+                    live_runtime.mark_hold_safe(
+                        q_hold=tuple(
+                            float(value)
+                            for value in backend.read_joint_state().q_meas
+                        )
+                    )
+                    backend.hold()
+                except Exception:
+                    pass
+            try:
+                session = _session_from_runtime_status(
+                    session,
+                    status=live_runtime.status(),
+                    max_heartbeat_age_s=max_heartbeat_age_s,
+                )
+                if session.get("mode") == "hold_safe":
+                    session["hold_fresh"] = True
+                    session["last_hold_wall_time_s"] = time.time()
+                    session["hold_age_s"] = 0.0
+                    session["readiness"] = runtime_readiness(session)
+                    session["status"] = (
+                        "ok"
+                        if session["readiness"]["agent_sysid_smoke_allowed"] is True
+                        else "blocked"
+                    )
+                    _write_json_atomic(session_artifact_path, session)
+            except Exception:
+                pass
+        rejected_eef_switch = (
+            eef_switch_error.payload
+            if eef_switch_error is not None
+            else (
+                _eef_switch_rejected_contract(command)
+                if command.get("kind") in EEF_COMMAND_KINDS
+                else None
+            )
+        )
         return {
             "status": "rejected",
             "schema": RUNTIME_COMMAND_RESULT_SCHEMA,
@@ -893,15 +942,14 @@ def execute_runtime_command(
                 else None
             ),
             "eef_switch": (
-                _eef_switch_rejected_contract(command)
-                if command.get("kind") in EEF_COMMAND_KINDS
-                else None
+                rejected_eef_switch
             ),
             "eef_controller_manager": (
                 _eef_controller_manager_contract(
                     command=command,
                     session=session,
                     phase="rejected",
+                    eef_switch=rejected_eef_switch,
                     rejection_reason=str(error),
                 )
                 if command.get("kind") in EEF_COMMAND_KINDS
@@ -1079,30 +1127,32 @@ def _prepare_eef_servo_switch(
 
     q_before = tuple(float(value) for value in backend.read_joint_state().q_meas)
     prepare = getattr(backend, "prepare_eef_servo_switch", None)
-    if callable(prepare):
+    if not callable(prepare):
+        payload = {
+            "schema": "armctrl.eef_servo_switch.v1",
+            "status": "fail",
+            "policy": "adapter_declared_live_state_zero_command_warmup",
+            "backend": command.get("backend"),
+            "target_seed": "unavailable",
+            "zero_command_warmup_ticks": 0,
+            "checks": {
+                "sdk_owner_released": False,
+                "adapter_prepare_hook_present": False,
+                "target_seeded_from_current_state": False,
+                "zero_command_warmup_completed": False,
+            },
+        }
+    else:
         payload = prepare(command)
         if not isinstance(payload, dict):
             raise ValueError("prepare_eef_servo_switch must return a JSON object")
         payload = dict(payload)
-    else:
-        payload = {
-            "schema": "armctrl.eef_servo_switch.v1",
-            "status": "pass",
-            "policy": "default_live_state_zero_command_warmup",
-            "backend": command.get("backend"),
-            "target_seed": "current_live_state",
-            "zero_command_warmup_ticks": 1,
-            "checks": {
-                "sdk_owner_released": False,
-                "target_seeded_from_current_state": True,
-                "zero_command_warmup_completed": True,
-            },
-        }
     checks = payload.get("checks")
     if not isinstance(checks, dict):
         checks = {}
     checks = dict(checks)
     checks.setdefault("sdk_owner_released", False)
+    checks.setdefault("adapter_prepare_hook_present", callable(prepare))
     checks.setdefault("target_seeded_from_current_state", True)
     checks.setdefault("zero_command_warmup_completed", True)
     checks["live_q_read_before_switch"] = bool(q_before)
@@ -1127,8 +1177,12 @@ def _prepare_eef_servo_switch(
     payload["failed_checks"] = failed_checks
     if failed_checks or payload["sdk_owner_released"]:
         payload["status"] = "fail"
-        raise ValueError(
-            "EEF servo switch warmup failed: " + ", ".join(failed_checks or ["sdk_owner_released"])
+        reason = "EEF servo switch warmup failed: " + ", ".join(
+            failed_checks or ["sdk_owner_released"]
+        )
+        raise _EefServoSwitchError(
+            reason,
+            payload=payload,
         )
     return payload
 
