@@ -90,6 +90,8 @@ Agent joint target / joint waypoints 先编译成统一 JointTrajectory contract
 `max_joint_velocity_rad_s` guard；现场脚本还会显式传入 `max_joint_segment_delta_rad`。
 `joint_intent` 使用低频 target + runtime 50 Hz smoothstep
 整形，必须同时检查总跨度和平均速度，避免“肌无力 smoke”和过激 step 两种失败模式。
+`joint_intent` 的 command/result artifact 还必须写出等价短 horizon `q_points/dq_points/ddq_points`，
+让 Agent 低频 intent 和 SysID/Recipe 的 `joint_trajectory` 共享同一套轨迹质量审计语义。
 SysID `--compiled-command` 不默认套 Agent guard，因为它的安全与辨识质量证据来自
 `sysid compile-runtime`、offline review、`q/dq/ddq` artifact policy 和 result-check。
 

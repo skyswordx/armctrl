@@ -263,6 +263,12 @@ def test_cli_motion_submit_joint_intent_queues_runtime_command(tmp_path: Path) -
     )
     assert command["intent_trajectory_contract"]["runtime_send_hz"] == pytest.approx(50.0)
     assert command["intent_trajectory_contract"]["expected_runtime_sample_count"] == 6
+    assert command["intent_trajectory_contract"]["q_points"][0] == [0.0, 0.3, 0.3]
+    assert command["intent_trajectory_contract"]["q_points"][-1] == [0.004, 0.3, 0.3]
+    assert len(command["intent_trajectory_contract"]["dq_points"]) == 6
+    assert len(command["intent_trajectory_contract"]["ddq_points"]) == 6
+    assert command["intent_trajectory_contract"]["dq_points"][0] == [0.0, 0.0, 0.0]
+    assert command["intent_trajectory_contract"]["dq_points"][-1] == [0.0, 0.0, 0.0]
 
 
 def test_cli_motion_submit_joint_intent_rejects_overfast_visible_step(
@@ -5976,6 +5982,23 @@ def test_runtime_queue_agent_intent_records_frequency_and_missed_intent_policy(
     assert result["motion"]["intent_trajectory_contract"][
         "expected_runtime_sample_count"
     ] == 6
+    for contract_q, sample in zip(
+        result["motion"]["intent_trajectory_contract"]["q_points"],
+        result["motion"]["samples"],
+        strict=True,
+    ):
+        assert contract_q == pytest.approx(sample["q_cmd"])
+    assert result["motion"]["intent_trajectory_contract"]["dq_points"][0] == [
+        0.0,
+        0.0,
+        0.0,
+    ]
+    assert result["motion"]["intent_trajectory_contract"]["dq_points"][-1] == [
+        0.0,
+        0.0,
+        0.0,
+    ]
+    assert len(result["motion"]["intent_trajectory_contract"]["ddq_points"]) == 6
     assert result["motion"]["resampling_policy"] == "intent_frame_to_runtime_send_hz"
     assert result["motion"]["missed_intent_policy"] == "hold_then_damping"
     assert result["motion"]["missed_intent_timeout_s"] == pytest.approx(0.3)

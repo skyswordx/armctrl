@@ -2343,6 +2343,12 @@ def _joint_intent_trajectory_contract(
     expected_runtime_sample_count = (
         max(1, int(round(float(control_period_s) * float(send_hz)))) + 1
     )
+    q_points, dq_points, ddq_points = _smoothstep_intent_contract_points(
+        q_start=q_start,
+        q_target=q_target,
+        control_period_s=float(control_period_s),
+        send_hz=float(send_hz),
+    )
     return {
         "schema": "armctrl.joint_intent_trajectory_contract.v1",
         "command_space": "joint",
@@ -2355,6 +2361,9 @@ def _joint_intent_trajectory_contract(
         "runtime_send_hz": float(send_hz),
         "control_period_s": float(control_period_s),
         "expected_runtime_sample_count": expected_runtime_sample_count,
+        "q_points": q_points,
+        "dq_points": dq_points,
+        "ddq_points": ddq_points,
         "max_joint_delta_rad": (
             None if max_joint_delta_rad is None else float(max_joint_delta_rad)
         ),
@@ -2379,6 +2388,36 @@ def _joint_intent_trajectory_contract(
             "joint targets"
         ),
     }
+
+
+def _smoothstep_intent_contract_points(
+    *,
+    q_start: Sequence[float],
+    q_target: Sequence[float],
+    control_period_s: float,
+    send_hz: float,
+) -> tuple[list[list[float]], list[list[float]], list[list[float]]]:
+    interval_count = max(1, int(round(float(control_period_s) * float(send_hz))))
+    deltas = [
+        float(target) - float(start)
+        for start, target in zip(q_start, q_target, strict=True)
+    ]
+    q_points: list[list[float]] = []
+    dq_points: list[list[float]] = []
+    ddq_points: list[list[float]] = []
+    for index in range(interval_count + 1):
+        alpha = index / interval_count
+        s = (3.0 * alpha * alpha) - (2.0 * alpha * alpha * alpha)
+        ds_dt = (6.0 * alpha * (1.0 - alpha)) / float(control_period_s)
+        d2s_dt2 = (6.0 - (12.0 * alpha)) / (
+            float(control_period_s) * float(control_period_s)
+        )
+        q_points.append(
+            [float(start) + delta * s for start, delta in zip(q_start, deltas)]
+        )
+        dq_points.append([delta * ds_dt for delta in deltas])
+        ddq_points.append([delta * d2s_dt2 for delta in deltas])
+    return q_points, dq_points, ddq_points
 
 
 def _intent_owner_watchdog_contract(command: dict[str, object]) -> dict[str, object]:
