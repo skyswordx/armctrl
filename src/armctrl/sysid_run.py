@@ -14,10 +14,6 @@ from armctrl.motion_runtime import (
     MotionMode,
     MotionRuntime,
 )
-from armctrl.runtime_session import (
-    acquire_owner_from_artifact,
-    release_owner_from_artifact,
-)
 from armctrl.sysid import SysIdPlanRequest, SysIdPlanner, trajectory_rows
 
 SDK_CONFIRMATION = "I UNDERSTAND THIS WILL MOVE THE ARM"
@@ -49,42 +45,11 @@ class FakeSysIdRunner:
         manifest_path = request.output_dir / "manifest.json"
         plan = SysIdPlanner.default().write_plan(request)
         raw_rows = _raw_sample_rows(request)
-        runtime_owner_lease = None
-        runtime_session_after_release = None
-        if request.runtime_session_artifact_path is not None:
-            runtime_owner_lease = acquire_owner_from_artifact(
-                session_artifact_path=request.runtime_session_artifact_path,
-                owner="sysid",
-                mode="trajectory_replay",
-                expected_q_start=request.q_center,
-                max_start_error_rad=0.02,
-                heartbeat_timeout_s=max(1.0, 2.0 / float(request.sample_hz)),
-                max_heartbeat_age_s=5.0,
-            )
-            request.runtime_session_artifact_path.write_text(
-                json.dumps(runtime_owner_lease, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
 
         with raw_samples_path.open("w", newline="", encoding="utf-8") as file:
             writer = csv.DictWriter(file, fieldnames=list(raw_rows[0]))
             writer.writeheader()
             writer.writerows(raw_rows)
-
-        if request.runtime_session_artifact_path is not None:
-            runtime_session_after_release = release_owner_from_artifact(
-                session_artifact_path=request.runtime_session_artifact_path,
-                owner="sysid",
-                max_heartbeat_age_s=5.0,
-            )
-            request.runtime_session_artifact_path.write_text(
-                json.dumps(
-                    runtime_session_after_release,
-                    ensure_ascii=False,
-                    indent=2,
-                ),
-                encoding="utf-8",
-            )
 
         manifest = {
             "schema": "armctrl.sysid_run_manifest.v1",
@@ -108,12 +73,18 @@ class FakeSysIdRunner:
                 "manifest": str(manifest_path),
             },
             "plan_safety": plan.artifact_safety,
+            "runtime_policy": {
+                "formal_real_motion_entrypoint": (
+                    "armctrl sysid compile-runtime + "
+                    "armctrl motion submit joint-trajectory"
+                ),
+                "sysid_run_runtime_session_artifact": "unsupported",
+                "reason": (
+                    "sysid run is offline/fake only and must not acquire a live "
+                    "runtime owner or mutate runtime_session.json"
+                ),
+            },
         }
-        if runtime_owner_lease is not None:
-            manifest["runtime"] = _runtime_owner_manifest(
-                runtime_owner_lease=runtime_owner_lease,
-                runtime_session_after_release=runtime_session_after_release,
-            )
         manifest_path.write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -890,30 +861,6 @@ def _motion_runtime_manifest(result: MotionExecutionResult) -> dict[str, object]
     if result.error is not None:
         manifest["error"] = result.error
     return manifest
-
-
-def _runtime_owner_manifest(
-    *,
-    runtime_owner_lease: dict[str, object],
-    runtime_session_after_release: dict[str, object] | None,
-) -> dict[str, object]:
-    return {
-        "backend": runtime_owner_lease.get("backend"),
-        "owner": runtime_owner_lease.get("owner"),
-        "mode": runtime_owner_lease.get("mode"),
-        "single_owner_runtime_session": True,
-        "runtime_session_id": runtime_owner_lease.get("runtime_session_id"),
-        "owner_lease": runtime_owner_lease.get("owner_lease"),
-        "release": (
-            {
-                "mode": runtime_session_after_release.get("mode"),
-                "owner": runtime_session_after_release.get("owner"),
-                "readiness": runtime_session_after_release.get("readiness"),
-            }
-            if runtime_session_after_release is not None
-            else None
-        ),
-    }
 
 
 def _motion_tracking_summary(samples) -> dict[str, object]:

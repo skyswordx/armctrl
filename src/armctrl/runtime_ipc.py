@@ -1256,6 +1256,8 @@ def _command_result_payload(
     }
     if status_update_payload is not None:
         payload["status_update"] = status_update_payload
+    if command.get("kind") == "joint_trajectory":
+        payload["motion"].update(_joint_trajectory_motion_contract(command))
     if command.get("kind") == "joint_intent":
         payload["motion"].update(_intent_motion_contract(command))
     if command.get("kind") in EEF_COMMAND_KINDS:
@@ -1277,6 +1279,36 @@ def _eef_motion_contract(command: dict[str, object]) -> dict[str, object]:
         "eef_command": command.get("eef_command"),
         "eef_reference_limit": command.get("eef_reference_limit"),
         "mature_backend_policy": command.get("mature_backend_policy"),
+    }
+
+
+def _joint_trajectory_motion_contract(command: dict[str, object]) -> dict[str, object]:
+    artifact_policy = command.get("artifact_policy")
+    return {
+        "command_space": "joint",
+        "joint_trajectory_safety": command.get("joint_trajectory_safety"),
+        "max_joint_segment_delta_rad": _optional_float(
+            command.get("max_joint_segment_delta_rad")
+        ),
+        "max_joint_velocity_rad_s": _optional_float(
+            command.get("max_joint_velocity_rad_s")
+        ),
+        "artifact_policy": artifact_policy if isinstance(artifact_policy, dict) else None,
+        "q_policy": (
+            artifact_policy.get("q_cmd") if isinstance(artifact_policy, dict) else None
+        ),
+        "dq_policy": (
+            artifact_policy.get("dq_cmd") if isinstance(artifact_policy, dict) else None
+        ),
+        "ddq_policy": (
+            artifact_policy.get("ddq_cmd") if isinstance(artifact_policy, dict) else None
+        ),
+        "runtime_interpolator": "cubic_hermite_joint_position_velocity",
+        "runtime_velocity_source": (
+            "preserved_or_compiled_dq_points"
+            if isinstance(command.get("dq_points"), list)
+            else "runtime_finite_difference_dq_points"
+        ),
     }
 
 

@@ -325,6 +325,17 @@ def test_cli_sysid_run_fake_writes_raw_samples_and_manifest(tmp_path: Path) -> N
     assert manifest["request"]["urdf_path"] == str(X5_URDF)
     assert manifest["request"]["dof"] == 6
     assert manifest["handoff"]["dataset_contract"] == "lerobot-compatible"
+    assert manifest["runtime_policy"] == {
+        "formal_real_motion_entrypoint": (
+            "armctrl sysid compile-runtime + "
+            "armctrl motion submit joint-trajectory"
+        ),
+        "sysid_run_runtime_session_artifact": "unsupported",
+        "reason": (
+            "sysid run is offline/fake only and must not acquire a live "
+            "runtime owner or mutate runtime_session.json"
+        ),
+    }
 
     with raw_samples_path.open(newline="", encoding="utf-8") as file:
         rows = list(csv.DictReader(file))
@@ -334,7 +345,7 @@ def test_cli_sysid_run_fake_writes_raw_samples_and_manifest(tmp_path: Path) -> N
     assert len(rows) == 41
 
 
-def test_cli_sysid_run_fake_acquires_runtime_owner_lease(tmp_path: Path) -> None:
+def test_cli_sysid_run_rejects_runtime_session_artifact(tmp_path: Path) -> None:
     output_dir = tmp_path / "ident-run"
     runtime_session_artifact = tmp_path / "runtime-session.json"
     safe_center = [0.0, 0.3, 0.3, 0.0, 0.0, 0.0]
@@ -360,6 +371,8 @@ def test_cli_sysid_run_fake_acquires_runtime_owner_lease(tmp_path: Path) -> None
         ),
         encoding="utf-8",
     )
+
+    before = runtime_session_artifact.read_text(encoding="utf-8")
 
     completed = subprocess.run(
         [
@@ -389,33 +402,18 @@ def test_cli_sysid_run_fake_acquires_runtime_owner_lease(tmp_path: Path) -> None
             str(output_dir),
             "--json",
         ],
-        check=True,
         capture_output=True,
         text=True,
     )
 
-    payload = json.loads(completed.stdout)
-    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
-    released_session = json.loads(runtime_session_artifact.read_text(encoding="utf-8"))
-
-    assert payload["status"] == "ok"
-    assert payload["runtime"]["single_owner_runtime_session"] is True
-    assert payload["runtime"]["owner"] == "sysid"
-    assert payload["runtime"]["mode"] == "trajectory_replay"
-    assert payload["runtime"]["release"]["mode"] == "hold_safe"
-    assert payload["runtime"]["release"]["owner"] is None
-
-    assert manifest["runtime"]["owner_lease"]["owner"] == "sysid"
-    assert manifest["runtime"]["owner_lease"]["mode"] == "trajectory_replay"
-    assert manifest["runtime"]["release"]["readiness"]["agent_sysid_smoke_allowed"] is True
-
-    assert released_session["mode"] == "hold_safe"
-    assert released_session["owner"] is None
-    assert released_session["owner_lease"] is None
-    assert released_session["readiness"]["agent_sysid_smoke_allowed"] is True
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert "unrecognized arguments: --runtime-session-artifact" in completed.stderr
+    assert runtime_session_artifact.read_text(encoding="utf-8") == before
+    assert not (output_dir / "manifest.json").exists()
 
 
-def test_cli_sysid_run_fake_rejects_busy_runtime_owner(tmp_path: Path) -> None:
+def test_cli_sysid_run_fake_ignores_runtime_owner_state(tmp_path: Path) -> None:
     output_dir = tmp_path / "ident-run"
     runtime_session_artifact = tmp_path / "runtime-session.json"
     safe_center = [0.0, 0.3, 0.3, 0.0, 0.0, 0.0]
@@ -441,6 +439,8 @@ def test_cli_sysid_run_fake_rejects_busy_runtime_owner(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
+    before = runtime_session_artifact.read_text(encoding="utf-8")
+
     completed = subprocess.run(
         [
             sys.executable,
@@ -461,23 +461,20 @@ def test_cli_sysid_run_fake_rejects_busy_runtime_owner(tmp_path: Path) -> None:
             "0.1",
             "--q-center",
             *[str(value) for value in safe_center],
-            "--runtime-session-artifact",
-            str(runtime_session_artifact),
             "--output",
             str(output_dir),
             "--json",
         ],
+        check=True,
         capture_output=True,
         text=True,
     )
 
-    assert completed.returncode == 3
     payload = json.loads(completed.stdout)
-    assert payload["status"] == "rejected"
-    assert payload["reason"] == "runtime is owned by agent"
-    assert payload["runtime"]["owner"] == "agent"
-    assert not (output_dir / "raw_samples.csv").exists()
-    assert json.loads(runtime_session_artifact.read_text(encoding="utf-8"))["owner"] == "agent"
+    assert payload["status"] == "ok"
+    assert payload["adapter"] == "fake"
+    assert (output_dir / "raw_samples.csv").exists()
+    assert runtime_session_artifact.read_text(encoding="utf-8") == before
 
 
 def test_cli_sysid_run_sdk_real_motion_entrypoint_is_removed_at_parser_layer(
@@ -661,6 +658,43 @@ def test_cli_sysid_run_sdk_removed_does_not_report_fake_acceptance_or_faults(
     assert "invalid choice: 'sdk'" in captured.err
     assert "--adapter {fake}" in captured.err
     assert not (output_dir / "manifest.json").exists()
+
+
+def test_cli_sysid_run_rejects_legacy_real_motion_options(tmp_path: Path) -> None:
+    legacy_options = [
+        ("--confirm", SDK_CONFIRMATION),
+        ("--readiness-artifact", str(tmp_path / "runtime_status.json")),
+        ("--max-tracking-error-rad", "0.04"),
+        ("--max-tau-abs", "2.0"),
+        ("--max-heartbeat-age-s", "5"),
+    ]
+
+    for option, value in legacy_options:
+        output_dir = tmp_path / option.removeprefix("--")
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "armctrl.cli",
+                "sysid",
+                "run",
+                "gravity_sweep",
+                "--adapter",
+                "fake",
+                "--output",
+                str(output_dir),
+                option,
+                value,
+                "--json",
+            ],
+            capture_output=True,
+            text=True,
+        )
+
+        assert completed.returncode == 2
+        assert completed.stdout == ""
+        assert f"unrecognized arguments: {option}" in completed.stderr
+        assert not (output_dir / "manifest.json").exists()
 
 
 def test_cli_sysid_postprocess_solve_blocks_faulted_sdk_manifest(

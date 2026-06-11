@@ -5034,6 +5034,65 @@ def test_runtime_queue_preserves_trajectory_velocity_commands(tmp_path: Path) ->
     assert result["motion"]["samples"][0]["dq_cmd"] == [0.1, 0.0, 0.0]
 
 
+def test_runtime_queue_records_joint_trajectory_shaping_contract(tmp_path: Path) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    backend = FakeMotionBackend()
+    backend.send_joint_command(
+        tuple(float(value) for value in session["q_meas"]),
+        producer="test_bootstrap",
+        mode=MotionMode.HOLD,
+        monotonic_s=0.0,
+    )
+    runtime = ArmRuntime(
+        backend=backend,
+        safe_center=tuple(float(value) for value in session["safe_center"]),
+        runtime_session_id=str(session["runtime_session_id"]),
+    )
+    runtime.mark_hold_safe(q_hold=tuple(float(value) for value in session["q_hold"]))
+    submit_trajectory_command(
+        session_artifact_path=session_artifact,
+        owner="agent",
+        expected_q_start=(0.0, 0.3, 0.3),
+        q_points=[(0.0, 0.3, 0.3), (0.006, 0.3, 0.3)],
+        dq_points=[(0.06, 0.0, 0.0), (0.06, 0.0, 0.0)],
+        artifact_policy={
+            "schema": "armctrl.joint_trajectory_compiler_policy.v1",
+            "source": "agent",
+            "q_cmd": "generated_smoothstep_joint_target",
+            "dq_cmd": "derived_smoothstep_analytic",
+            "ddq_cmd": "derived_smoothstep_analytic",
+        },
+        send_hz=10.0,
+        max_start_error_rad=0.02,
+        heartbeat_timeout_s=1.0,
+        max_heartbeat_age_s=1.0,
+        max_joint_segment_delta_rad=0.01,
+        max_joint_velocity_rad_s=0.25,
+    )
+
+    result = execute_pending_runtime_commands(
+        session_artifact_path=session_artifact,
+        backend=backend,
+        runtime=runtime,
+        max_heartbeat_age_s=1.0,
+    )
+
+    assert result is not None
+    assert result["status"] == "completed"
+    motion = result["motion"]
+    assert motion["command_space"] == "joint"
+    assert motion["joint_trajectory_safety"]["status"] == "pass"
+    assert motion["max_joint_segment_delta_rad"] == pytest.approx(0.01)
+    assert motion["max_joint_velocity_rad_s"] == pytest.approx(0.25)
+    assert motion["q_policy"] == "generated_smoothstep_joint_target"
+    assert motion["dq_policy"] == "derived_smoothstep_analytic"
+    assert motion["ddq_policy"] == "derived_smoothstep_analytic"
+    assert motion["runtime_interpolator"] == "cubic_hermite_joint_position_velocity"
+    assert motion["runtime_velocity_source"] == "preserved_or_compiled_dq_points"
+
+
 def test_runtime_queue_passes_owner_watchdog_into_motion_loop(
     tmp_path: Path,
     monkeypatch,

@@ -1611,12 +1611,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     sysid_run_parser.add_argument("--safe-config", default="configs/x5.safe.yaml")
     sysid_run_parser.add_argument("--candidate-trajectory")
     sysid_run_parser.add_argument("--output", required=True)
-    sysid_run_parser.add_argument("--confirm")
-    sysid_run_parser.add_argument("--readiness-artifact")
-    sysid_run_parser.add_argument("--runtime-session-artifact")
-    sysid_run_parser.add_argument("--max-heartbeat-age-s", type=float, default=1.0)
-    sysid_run_parser.add_argument("--max-tracking-error-rad", type=float)
-    sysid_run_parser.add_argument("--max-tau-abs", type=float)
     sysid_run_parser.add_argument("--json", action="store_true", dest="as_json")
 
     sysid_compile_runtime_parser = sysid_subparsers.add_parser("compile-runtime")
@@ -4346,11 +4340,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                     urdf_path=_repo_default_path(args.urdf_path),
                     safe_config_path=_repo_default_path(args.safe_config),
                     output_dir=Path(args.output),
-                    runtime_session_artifact_path=(
-                        Path(args.runtime_session_artifact)
-                        if args.runtime_session_artifact
-                        else None
-                    ),
                 )
             )
         except RuntimeSessionError as error:
