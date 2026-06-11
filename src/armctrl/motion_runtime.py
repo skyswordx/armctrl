@@ -44,6 +44,7 @@ class JointIntentFrame:
     q_target: tuple[float, ...]
     control_period_s: float
     max_joint_delta_rad: float | None = None
+    max_joint_velocity_rad_s: float | None = None
 
 
 @dataclass(frozen=True)
@@ -292,9 +293,9 @@ class MotionRuntime:
                     sample,
                     max_tracking_error_rad=max_tracking_error_rad,
                 ):
-                    self._damping()
+                    landing_mode = self._hold()
                     return _motion_execution_result(
-                        status="faulted",
+                        status="aborted",
                         producer=producer,
                         mode=MotionMode.TRAJECTORY_REPLAY,
                         trajectory_sample_hz=float(trajectory_sample_hz),
@@ -302,7 +303,7 @@ class MotionRuntime:
                         expected_period_s=1.0 / float(trajectory_sample_hz),
                         controller_dt_s=getattr(self._backend, "controller_dt_s", None),
                         samples=samples,
-                        landing_mode=MotionMode.DAMPING.value,
+                        landing_mode=landing_mode,
                         error=_tracking_error_limit_error(),
                     )
                 if _tau_limit_exceeded(sample, max_tau_abs=max_tau_abs):
@@ -461,9 +462,9 @@ class MotionRuntime:
                     sample,
                     max_tracking_error_rad=max_tracking_error_rad,
                 ):
-                    self._damping()
+                    landing_mode = self._hold()
                     return _motion_execution_result(
-                        status="faulted",
+                        status="aborted",
                         producer=producer,
                         mode=MotionMode.AGENT_SERVO,
                         trajectory_sample_hz=float(send_hz),
@@ -471,7 +472,7 @@ class MotionRuntime:
                         expected_period_s=1.0 / float(send_hz),
                         controller_dt_s=getattr(self._backend, "controller_dt_s", None),
                         samples=samples,
-                        landing_mode=MotionMode.DAMPING.value,
+                        landing_mode=landing_mode,
                         error=_tracking_error_limit_error(),
                     )
                 if _tau_limit_exceeded(sample, max_tau_abs=max_tau_abs):
@@ -864,6 +865,14 @@ class ArmRuntime:
             )
             self._release_owner_to_hold(owner=owner, q_hold=final_q_cmd)
             return replace(result, landing_mode=MotionMode.HOLD.value)
+        if result.landing_mode == MotionMode.HOLD.value:
+            q_hold = (
+                result.samples[-1].q_meas
+                if result.samples and result.samples[-1].q_meas
+                else self._read_q_meas()
+            )
+            self._release_owner_to_hold(owner=owner, q_hold=q_hold)
+            return replace(result, landing_mode=MotionMode.HOLD.value)
         self._owner = None
         self._owner_mode = None
         self._owner_heartbeat_timeout_s = None
@@ -1067,31 +1076,48 @@ def _intent_frame_points(
     q_target = tuple(float(value) for value in intent.q_target)
     if len(q_start) != len(q_target):
         raise ValueError("q_start and q_target must have the same length")
+    observed_delta_rad = max(
+        (abs(target - start) for start, target in zip(q_start, q_target)),
+        default=0.0,
+    )
     if intent.max_joint_delta_rad is not None:
         max_joint_delta_rad = float(intent.max_joint_delta_rad)
         if max_joint_delta_rad <= 0.0:
             raise ValueError("max_joint_delta_rad must be positive")
-        observed_delta_rad = max(
-            (abs(target - start) for start, target in zip(q_start, q_target)),
-            default=0.0,
-        )
         if observed_delta_rad > max_joint_delta_rad:
             raise ValueError(
                 "max_joint_delta_rad exceeded: "
                 f"{observed_delta_rad:.6g} rad > {max_joint_delta_rad:.6g} rad"
             )
+    if intent.max_joint_velocity_rad_s is not None:
+        max_joint_velocity_rad_s = float(intent.max_joint_velocity_rad_s)
+        if max_joint_velocity_rad_s <= 0.0:
+            raise ValueError("max_joint_velocity_rad_s must be positive")
+        observed_velocity_rad_s = observed_delta_rad / float(intent.control_period_s)
+        if observed_velocity_rad_s > max_joint_velocity_rad_s:
+            raise ValueError(
+                "max_joint_velocity_rad_s exceeded: "
+                f"{observed_velocity_rad_s:.6g} rad/s > "
+                f"{max_joint_velocity_rad_s:.6g} rad/s"
+            )
     interval_count = max(1, int(round(float(intent.control_period_s) * send_hz)))
     points: list[JointTrajectoryPoint] = []
+    deltas = tuple(target - start for start, target in zip(q_start, q_target))
     for index in range(interval_count + 1):
-        ratio = index / interval_count
+        linear_ratio = index / interval_count
+        ratio = linear_ratio * linear_ratio * (3.0 - 2.0 * linear_ratio)
+        ratio_derivative = 6.0 * linear_ratio * (1.0 - linear_ratio)
         q_cmd = tuple(
-            start + (target - start) * ratio
-            for start, target in zip(q_start, q_target)
+            start + delta * ratio for start, delta in zip(q_start, deltas)
         )
         points.append(
             JointTrajectoryPoint(
                 time_s=index / send_hz,
                 q=q_cmd,
+                dq=tuple(
+                    delta * ratio_derivative / float(intent.control_period_s)
+                    for delta in deltas
+                ),
             )
         )
     return points

@@ -19,14 +19,33 @@ def test_lab_agent_runtime_smoke_script_documents_runtime_agent_flow() -> None:
     assert "scripts/lab_agent_runtime_smoke.sh check-eef" in text
     assert "armctrl motion submit joint-intent" in text
     assert "armctrl motion submit joint-trajectory" in text
+    assert "armctrl motion compile joint-trajectory" in text
     assert "armctrl motion submit eef-delta" in text
     assert "armctrl motion result" in text
     assert "armctrl console status" in text
-    assert "current measured EEF pose" in text
+    assert "continuous-owner servo" in text
+    assert "ARMCTRL_ALLOW_DISCONNECTED_EEF_TAKEOVER=1" in text
+    assert "--start-pose-policy live_hold" in text
     assert "motion kind=joint-intent" in text
     assert "owner=agent" in text
-    assert "Agent intent is 10 Hz" in text
-    assert "runtime sends at 50 Hz" in text
+    assert "Visible-large profile v10" in text
+    assert "joint1 +3.00 rad over 45.0 s" in text
+    assert "avoids joint2/joint3 droop-sensitive motion" in text
+    assert "default EEF delta smoke uses +750 mm" in text
+    assert 'SMOKE_PROFILE_VERSION_CURRENT="10"' in text
+    assert 'AGENT_Q_TARGET_DEFAULT="3.00 0.3 0.3 0.0 0.0 0.0"' in text
+    assert 'AGENT_DELTA_POSITION_DEFAULT="0.750 0.000 0.000"' in text
+    assert 'AGENT_EEF_BACKEND_DEFAULT="${ARMCTRL_AGENT_EEF_BACKEND:-moveit_servo}"' in text
+    assert "start_args+=(--eef-adapter moveit_servo)" in text
+    assert "fake rehearsal registers the MoveIt Servo-style adapter" in text
+    assert "--max-linear-step-m" in text
+    assert "stretches it into a 50 Hz" in text
+    assert "trajectory_q_point_args" not in text
+    run_trajectory_section = text.split("  run-trajectory)", maxsplit=1)[1].split(
+        "  run-eef)", maxsplit=1
+    )[0]
+    assert "--compiled-command" in run_trajectory_section
+    assert "--q-point" not in run_trajectory_section
 
 
 def test_lab_agent_runtime_smoke_script_is_bash_parseable() -> None:
@@ -56,8 +75,12 @@ def test_lab_fourier_sysid_script_uses_formal_status_and_result_surface() -> Non
     text = FOURIER_SCRIPT.read_text(encoding="utf-8")
     assert "armctrl console status" in text
     assert "armctrl motion result" in text
-    assert "armctrl sysid run fourier_multisine" in text
-    assert "owns Fourier candidate compilation and SysID evidence" in text
+    assert "armctrl motion submit joint-trajectory" in text
+    assert "--compiled-command" in text
+    assert "armctrl sysid compile-runtime" in text
+    assert "compile-* uses the SysID compiler surface" in text
+    assert "armctrl sysid run --adapter sdk is intentionally not used" in text
+    assert "armctrl sysid run fourier_multisine" not in text
     assert "console_status_${label}.json" in text
 
 

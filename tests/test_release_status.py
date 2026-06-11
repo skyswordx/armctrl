@@ -87,8 +87,11 @@ def test_cli_release_status_reports_simulation_safety_rc_and_hardware_pending() 
         "uv run armctrl sysid plan gravity_sweep --dof 6 --sample-hz 100 --duration 2 --amplitude 0.05 --q-center 0 0.30 0.30 0 0 0 --urdf-path configs/models/X5_camera.urdf --safe-config configs/x5.safe.yaml --output runs/plan-preview-smoke --json",
         "uv sync --extra dev --extra lerobot",
         "uv run armctrl lerobot doctor --model X5 --robot-interface can0 --teleop-interface can1 --json",
-        "uv run armctrl sysid run gravity_sweep --adapter sdk --duration 8 --amplitude 0.5 --q-center 0 0.30 0.30 0 0 0 --output runs/tmp-confirm-check --confirm 'I UNDERSTAND THIS WILL MOVE THE ARM' --json",
+        "uv run armctrl sysid compile-runtime --execution-trajectory runs/plan-preview-smoke/execution_trajectory.csv --output runs/sysid-runtime-compile-smoke --json",
+        "uv run armctrl motion submit joint-trajectory --compiled-command runs/sysid-runtime-compile-smoke/compiled_motion_command.json --session-artifact runs/lab/runtime_session.json --owner sysid --json",
     ]
+    all_local_commands = "\n".join(payload["verification"]["local_commands"])
+    assert "sysid run gravity_sweep --adapter sdk" not in all_local_commands
     assert payload["verification"]["test_count"] == 190
     assert payload["deferred_validation"]["requires_hardware"] == [
         "real_sdk_runner_hardware_validation",
@@ -158,7 +161,7 @@ def test_cli_release_notes_reports_v060_rc_summary() -> None:
         "LeRobot rollout review on the shared simulation gate",
         "LeRobot rollout preview helper for non-hardware EEF-to-rollout closure",
         "LeRobot doctor, native command plans, and dataset metadata bridge",
-        "SDK gravity smoke runner with confirmation, safety gates, and damping landing path",
+        "SysID runtime compiler and runtime-owned joint-trajectory submit path",
         "Safety-space config plus simulation doctor and SysID trajectory preview gate",
     ]
     assert "real_sdk_runner_hardware_validation" in payload["sections"]["deferred"]

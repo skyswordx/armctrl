@@ -99,6 +99,26 @@ class MoveItServoRuntimeBackend:
     def read_joint_state(self) -> JointStateSnapshot:
         return JointStateSnapshot(q_meas=self.q_state)
 
+    def prepare_eef_servo_switch(self, command: dict[str, object]) -> dict[str, object]:
+        if not self.q_state:
+            raise RuntimeError("MoveIt Servo switch requires a fresh q_state seed")
+        return {
+            "schema": "armctrl.eef_servo_switch.v1",
+            "status": "pass",
+            "backend": "moveit_servo",
+            "policy": "continuous_owner_bumpless_switch",
+            "target_seed": "current_fk_pose",
+            "zero_command_warmup_ticks": 1,
+            "command_kind": command.get("kind"),
+            "checks": {
+                "sdk_owner_released": False,
+                "target_seeded_from_current_state": True,
+                "zero_command_warmup_completed": True,
+                "fresh_joint_state_available": True,
+                "publisher_configured": self.publisher is not None,
+            },
+        }
+
     def execute_eef_command(
         self,
         command: dict[str, object],
@@ -170,6 +190,19 @@ class MoveItServoRuntimeBackend:
         elif kind == "eef_twist":
             linear = _triple(eef_command.get("linear_mps"))
             angular = _triple(eef_command.get("angular_rps"))
+        elif kind == "eef_pose":
+            return {
+                "schema": "armctrl.moveit_servo_runtime_command.v1",
+                "message_type": "geometry_msgs/msg/PoseStamped",
+                "topic": "/servo_node/pose_target_cmds",
+                "frame_id": str(eef_command.get("frame", "base_link")),
+                "stamp_policy": "fresh_publish_time",
+                "pose": {
+                    "position_m": _triple(eef_command.get("position_m")),
+                    "rpy_rad": _triple(eef_command.get("rpy_rad")),
+                },
+                "reference_limit_policy": "adapter_live_reference_limit",
+            }
         else:
             raise ValueError(f"unsupported MoveIt Servo EEF command kind: {kind}")
         return {

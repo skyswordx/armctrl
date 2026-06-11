@@ -7,7 +7,7 @@ import math
 import sys
 import time
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable, Mapping, Sequence
 from uuid import uuid4
 
 from armctrl.acceptance import build_real_motion_acceptance
@@ -56,6 +56,9 @@ from armctrl.runtime_session import (
     watchdog_tick_from_artifact,
 )
 from armctrl.runtime_ipc import (
+    DEFAULT_AGENT_MAX_JOINT_VELOCITY_RAD_S,
+    DEFAULT_EEF_MAX_ANGULAR_STEP_RAD,
+    DEFAULT_EEF_MAX_LINEAR_STEP_M,
     execute_pending_runtime_commands,
     submit_eef_command,
     submit_intent_command,
@@ -82,6 +85,7 @@ from armctrl.lerobot_bridge import (
     LeRobotRolloutStager,
 )
 from armctrl.motion_runtime import ArmRuntime, FakeMotionBackend, MotionBackend, MotionMode
+from armctrl.moveit_servo_runtime import MoveItServoRuntimeBackend
 from armctrl.online_id import (
     OnlineAuditRequest,
     OnlineIdentificationAuditor,
@@ -138,7 +142,6 @@ from armctrl.sysid_run import (
     Arx5InterfaceCollectionBackend,
     FakeSysIdRunner,
     SDK_CONFIRMATION,
-    SdkSysIdRunnerGate,
 )
 from armctrl.sysid_review import SysIdOfflineReviewRequest, SysIdOfflineReviewer
 from armctrl.sysid_sdk import (
@@ -174,19 +177,32 @@ MOTION_PROFILES: dict[str, dict[str, object]] = {
         "start_pose_policy": "safe_center",
         "supported_motion_kinds": ["joint-trajectory"],
         "readiness": "live runtime status with safe_center hold",
-        "legacy_entrypoints": ["armctrl sysid run ... --adapter sdk"],
+        "removed_entrypoints": ["armctrl sysid run ... --adapter sdk"],
+        "preferred_entrypoints": [
+            "armctrl sysid compile-runtime",
+            "armctrl motion submit joint-trajectory --compiled-command",
+        ],
     },
     "lab-agent-eef": {
         "profile": "lab-agent-eef",
         "schema": "armctrl.motion_profile.v1",
-        "description": "Lab Agent EEF MVP: current measured Cartesian takeover through sdk_cartesian.",
+        "description": (
+            "Lab Agent EEF contract: EEF delta/twist/pose commands must run through "
+            "the same long-lived runtime owner; disconnected sdk_cartesian takeover "
+            "is diagnostic-only."
+        ),
         "source": "agent",
         "owner": "agent",
-        "runtime_backend": "sdk_cartesian",
-        "start_pose_policy": "current_measured_pose",
-        "supported_motion_kinds": ["eef-delta", "eef-twist"],
-        "readiness": "live runtime status with current measured pose hold",
-        "legacy_entrypoints": ["armctrl runtime submit-eef"],
+        "runtime_backend": "arx5_sdk",
+        "mature_servo_backends": ["moveit_servo", "sdk_cartesian"],
+        "start_pose_policy": "controlled_eef_ready_hold",
+        "supported_motion_kinds": ["eef-delta", "eef-twist", "eef-pose"],
+        "readiness": (
+            "live runtime status with controlled hold at SAFE_CENTER or "
+            "AGENT_EEF_HOME; backend switch must be bumpless inside the runtime"
+        ),
+        "legacy_entrypoints": ["armctrl runtime submit-eef", "scripts/lab_agent_runtime_smoke.sh start-eef"],
+        "diagnostic_only_entrypoints": ["scripts/lab_agent_runtime_smoke.sh start-eef"],
     },
     "lab-agent-joint": {
         "profile": "lab-agent-joint",
@@ -277,11 +293,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
     )
     runtime_start_parser.add_argument(
+        "--allow-diagnostic-sdk-cartesian-takeover",
+        action="store_true",
+        help=(
+            "Allow the old disconnected sdk_cartesian takeover path for lab "
+            "diagnostics. Formal Agent EEF must stay inside a long-lived runtime."
+        ),
+    )
+    runtime_start_parser.add_argument(
         "--max-heartbeat-age-s",
         type=float,
         default=1.0,
     )
     runtime_start_parser.add_argument("--serve", action="store_true")
+    runtime_start_parser.add_argument(
+        "--eef-adapter",
+        action="append",
+        choices=["moveit_servo"],
+        default=[],
+        help=(
+            "Register an in-runtime EEF adapter for runtime-owned EEF commands. "
+            "Currently implemented for fake/offline serve validation only; real "
+            "hardware EEF requires a mature configured servo backend."
+        ),
+    )
     runtime_start_parser.add_argument(
         "--heartbeat-period-s",
         type=float,
@@ -475,6 +510,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     runtime_submit_trajectory_parser.add_argument("--send-hz", type=float, default=50.0)
     runtime_submit_trajectory_parser.add_argument(
+        "--max-joint-segment-delta-rad",
+        type=float,
+    )
+    runtime_submit_trajectory_parser.add_argument(
+        "--max-joint-velocity-rad-s",
+        type=float,
+    )
+    runtime_submit_trajectory_parser.add_argument(
         "--max-tracking-error-rad",
         type=float,
     )
@@ -537,6 +580,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=0.005,
     )
     runtime_submit_intent_parser.add_argument(
+        "--max-joint-velocity-rad-s",
+        type=float,
+        default=0.25,
+    )
+    runtime_submit_intent_parser.add_argument(
         "--max-start-error-rad",
         type=float,
         default=0.02,
@@ -587,6 +635,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     runtime_submit_eef_parser.add_argument("--send-hz", type=float, default=50.0)
     runtime_submit_eef_parser.add_argument(
+        "--max-linear-step-m", type=float, default=DEFAULT_EEF_MAX_LINEAR_STEP_M
+    )
+    runtime_submit_eef_parser.add_argument(
+        "--max-angular-step-rad", type=float, default=DEFAULT_EEF_MAX_ANGULAR_STEP_RAD
+    )
+    runtime_submit_eef_parser.add_argument(
         "--max-start-error-rad",
         type=float,
         default=0.02,
@@ -616,6 +670,63 @@ def main(argv: Sequence[str] | None = None) -> int:
         dest="motion_command",
         required=True,
     )
+    motion_compile_parser = motion_subparsers.add_parser("compile")
+    motion_compile_subparsers = motion_compile_parser.add_subparsers(
+        dest="motion_kind",
+        required=True,
+    )
+    motion_compile_joint_trajectory_parser = motion_compile_subparsers.add_parser(
+        "joint-trajectory"
+    )
+    motion_compile_joint_trajectory_parser.add_argument("--source", default="agent")
+    motion_compile_joint_trajectory_parser.add_argument("--owner", default="agent")
+    motion_compile_joint_trajectory_parser.add_argument(
+        "--expected-q-start",
+        nargs="+",
+        type=float,
+        required=True,
+    )
+    motion_compile_joint_trajectory_parser.add_argument(
+        "--q-target",
+        nargs="+",
+        type=float,
+    )
+    motion_compile_joint_trajectory_parser.add_argument(
+        "--q-point",
+        nargs="+",
+        type=float,
+        action="append",
+    )
+    motion_compile_joint_trajectory_parser.add_argument("--duration-s", type=float)
+    motion_compile_joint_trajectory_parser.add_argument(
+        "--sample-hz",
+        type=float,
+        required=True,
+    )
+    motion_compile_joint_trajectory_parser.add_argument("--send-hz", type=float)
+    motion_compile_joint_trajectory_parser.add_argument(
+        "--max-joint-segment-delta-rad",
+        type=float,
+    )
+    motion_compile_joint_trajectory_parser.add_argument(
+        "--max-joint-velocity-rad-s",
+        type=float,
+    )
+    motion_compile_joint_trajectory_parser.add_argument(
+        "--start-pose-policy",
+        choices=["live_hold", "safe_center", "explicit_q", "current_measured_pose"],
+        default="live_hold",
+    )
+    motion_compile_joint_trajectory_parser.add_argument(
+        "--max-tracking-error-rad",
+        type=float,
+    )
+    motion_compile_joint_trajectory_parser.add_argument("--max-tau-abs", type=float)
+    motion_compile_joint_trajectory_parser.add_argument("--output", required=True)
+    motion_compile_joint_trajectory_parser.add_argument(
+        "--json", action="store_true", dest="as_json"
+    )
+
     motion_submit_parser = motion_subparsers.add_parser("submit")
     motion_submit_subparsers = motion_submit_parser.add_subparsers(
         dest="motion_kind",
@@ -631,18 +742,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--expected-q-start",
         nargs="+",
         type=float,
-        required=True,
     )
     motion_joint_trajectory_parser.add_argument(
         "--q-point",
         nargs="+",
         type=float,
         action="append",
-        required=True,
     )
+    motion_joint_trajectory_parser.add_argument("--compiled-command")
     motion_joint_trajectory_parser.add_argument("--send-hz", type=float, default=50.0)
     motion_joint_trajectory_parser.add_argument(
         "--trajectory-sample-hz",
+        type=float,
+    )
+    motion_joint_trajectory_parser.add_argument(
+        "--max-joint-segment-delta-rad",
+        type=float,
+    )
+    motion_joint_trajectory_parser.add_argument(
+        "--max-joint-velocity-rad-s",
         type=float,
     )
     motion_joint_trajectory_parser.add_argument(
@@ -707,6 +825,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=0.005,
     )
     motion_joint_intent_parser.add_argument(
+        "--max-joint-velocity-rad-s",
+        type=float,
+        default=0.25,
+    )
+    motion_joint_intent_parser.add_argument(
         "--max-tracking-error-rad",
         type=float,
     )
@@ -760,6 +883,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     motion_eef_delta_parser.add_argument("--control-period-s", type=float, default=0.1)
     motion_eef_delta_parser.add_argument("--send-hz", type=float, default=50.0)
+    motion_eef_delta_parser.add_argument(
+        "--max-linear-step-m", type=float, default=DEFAULT_EEF_MAX_LINEAR_STEP_M
+    )
+    motion_eef_delta_parser.add_argument(
+        "--max-angular-step-rad", type=float, default=DEFAULT_EEF_MAX_ANGULAR_STEP_RAD
+    )
     motion_eef_delta_parser.add_argument(
         "--start-pose-policy",
         choices=["live_hold", "safe_center", "explicit_q", "current_measured_pose"],
@@ -815,6 +944,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     motion_eef_twist_parser.add_argument("--control-period-s", type=float, default=0.1)
     motion_eef_twist_parser.add_argument("--send-hz", type=float, default=50.0)
     motion_eef_twist_parser.add_argument(
+        "--max-linear-step-m", type=float, default=DEFAULT_EEF_MAX_LINEAR_STEP_M
+    )
+    motion_eef_twist_parser.add_argument(
+        "--max-angular-step-rad", type=float, default=DEFAULT_EEF_MAX_ANGULAR_STEP_RAD
+    )
+    motion_eef_twist_parser.add_argument(
         "--start-pose-policy",
         choices=["live_hold", "safe_center", "explicit_q", "current_measured_pose"],
         default="live_hold",
@@ -848,8 +983,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         default="moveit_servo",
     )
     motion_eef_pose_parser.add_argument("--frame", default="base_link")
-    motion_eef_pose_parser.add_argument("--position", nargs=3, type=float)
-    motion_eef_pose_parser.add_argument("--rpy", nargs=3, type=float)
+    motion_eef_pose_parser.add_argument("--expected-q-start", nargs="+", type=float, required=True)
+    motion_eef_pose_parser.add_argument("--position", nargs=3, type=float, required=True)
+    motion_eef_pose_parser.add_argument("--rpy", nargs=3, type=float, required=True)
+    motion_eef_pose_parser.add_argument("--control-period-s", type=float, default=0.1)
+    motion_eef_pose_parser.add_argument("--send-hz", type=float, default=50.0)
+    motion_eef_pose_parser.add_argument(
+        "--start-pose-policy",
+        choices=["live_hold", "safe_center", "explicit_q", "current_measured_pose"],
+        default="live_hold",
+    )
+    motion_eef_pose_parser.add_argument(
+        "--max-start-error-rad",
+        type=float,
+        default=0.02,
+    )
+    motion_eef_pose_parser.add_argument(
+        "--heartbeat-timeout-s",
+        type=float,
+        default=0.5,
+    )
+    motion_eef_pose_parser.add_argument(
+        "--max-heartbeat-age-s",
+        type=float,
+        default=1.0,
+    )
     motion_eef_pose_parser.add_argument("--output")
     motion_eef_pose_parser.add_argument(
         "--json", action="store_true", dest="as_json"
@@ -1441,7 +1599,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     sysid_run_parser = sysid_subparsers.add_parser("run")
     sysid_run_parser.add_argument("profile")
-    sysid_run_parser.add_argument("--adapter", default="fake")
+    sysid_run_parser.add_argument("--adapter", choices=["fake"], default="fake")
     sysid_run_parser.add_argument("--model", default="X5")
     sysid_run_parser.add_argument("--interface", default="can0")
     sysid_run_parser.add_argument("--dof", type=int, default=6)
@@ -1460,6 +1618,30 @@ def main(argv: Sequence[str] | None = None) -> int:
     sysid_run_parser.add_argument("--max-tracking-error-rad", type=float)
     sysid_run_parser.add_argument("--max-tau-abs", type=float)
     sysid_run_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    sysid_compile_runtime_parser = sysid_subparsers.add_parser("compile-runtime")
+    sysid_compile_runtime_parser.add_argument("--execution-trajectory", required=True)
+    sysid_compile_runtime_parser.add_argument("--dof", type=int, default=6)
+    sysid_compile_runtime_parser.add_argument("--sample-hz", type=float, default=100.0)
+    sysid_compile_runtime_parser.add_argument(
+        "--expected-q-start",
+        nargs="+",
+        type=float,
+        required=True,
+    )
+    sysid_compile_runtime_parser.add_argument("--owner", default="sysid")
+    sysid_compile_runtime_parser.add_argument(
+        "--start-pose-policy",
+        choices=["live_hold", "safe_center", "explicit_q", "current_measured_pose"],
+        default="live_hold",
+    )
+    sysid_compile_runtime_parser.add_argument("--send-hz", type=float)
+    sysid_compile_runtime_parser.add_argument("--max-tracking-error-rad", type=float)
+    sysid_compile_runtime_parser.add_argument("--max-tau-abs", type=float)
+    sysid_compile_runtime_parser.add_argument("--output", required=True)
+    sysid_compile_runtime_parser.add_argument(
+        "--json", action="store_true", dest="as_json"
+    )
 
     sysid_postprocess_parser = sysid_subparsers.add_parser("postprocess")
     sysid_postprocess_parser.add_argument("--dataset", required=True)
@@ -1923,6 +2105,44 @@ def main(argv: Sequence[str] | None = None) -> int:
             _emit(payload, as_json=args.as_json)
             return 3
         if args.backend == "sdk_cartesian":
+            if not args.allow_diagnostic_sdk_cartesian_takeover:
+                payload = {
+                    "status": "rejected",
+                    "schema": "armctrl.arm_runtime_session.v1",
+                    "backend": "sdk_cartesian",
+                    "model": args.model,
+                    "interface": args.interface,
+                    "requires_confirm": ARX5_RUNTIME_START_CONFIRMATION,
+                    "hardware_motion": True,
+                    "movement_command_sent": False,
+                    "sdk_opened": False,
+                    "diagnostic_only": True,
+                    "formal_runtime_gateway": False,
+                    "reason": (
+                        "runtime start --backend sdk_cartesian is a disconnected "
+                        "diagnostic takeover, not the formal Agent EEF runtime path"
+                    ),
+                    "formal_agent_eef_path": (
+                        "start arx5_sdk runtime once, keep SDK/CAN owner alive, "
+                        "then submit eef-delta/eef-twist/eef-pose commands through "
+                        "the runtime-owned motion surface"
+                    ),
+                    "requires_opt_in_flag": (
+                        "--allow-diagnostic-sdk-cartesian-takeover"
+                    ),
+                    "fault_landing_mode": "damping",
+                    "next_gate": (
+                        "use armctrl runtime start --backend arx5_sdk --serve for "
+                        "formal Agent EEF, or explicitly opt into diagnostic takeover"
+                    ),
+                }
+                payload = _attach_output_artifact(
+                    payload,
+                    args.output,
+                    artifact_key="runtime_session",
+                )
+                _emit(payload, as_json=args.as_json)
+                return 3
             rejected = arx5_runtime_start_preflight(
                 model=args.model,
                 interface=args.interface,
@@ -2112,6 +2332,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 max_heartbeat_age_s=args.max_heartbeat_age_s,
                 backend=backend,
                 runtime=runtime,
+                eef_backends=_runtime_eef_backends_from_args(
+                    args,
+                    q_state=tuple(float(value) for value in payload.get("q_meas") or ()),
+                ),
             )
         return _emit(payload, as_json=args.as_json)
 
@@ -2426,10 +2650,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 output_path=Path(args.output) if args.output else None,
                 max_tracking_error_rad=args.max_tracking_error_rad,
                 max_tau_abs=args.max_tau_abs,
+                max_joint_segment_delta_rad=args.max_joint_segment_delta_rad,
+                max_joint_velocity_rad_s=_agent_default_joint_velocity_limit(
+                    owner=args.owner,
+                    requested_limit=args.max_joint_velocity_rad_s,
+                ),
             )
-        except RuntimeSessionError as error:
+        except (RuntimeSessionError, ValueError) as error:
+            error_payload = error.payload if isinstance(error, RuntimeSessionError) else {}
             payload = {
-                **error.payload,
+                **error_payload,
                 "status": "rejected",
                 "schema": "armctrl.arm_runtime_submit.v1",
                 "reason": str(error),
@@ -2450,6 +2680,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 control_period_s=args.control_period_s,
                 send_hz=args.send_hz,
                 max_joint_delta_rad=args.max_joint_delta_rad,
+                max_joint_velocity_rad_s=args.max_joint_velocity_rad_s,
                 max_start_error_rad=args.max_start_error_rad,
                 heartbeat_timeout_s=args.heartbeat_timeout_s,
                 max_heartbeat_age_s=args.max_heartbeat_age_s,
@@ -2457,9 +2688,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 max_tracking_error_rad=args.max_tracking_error_rad,
                 max_tau_abs=args.max_tau_abs,
             )
-        except RuntimeSessionError as error:
+        except (RuntimeSessionError, ValueError) as error:
+            error_payload = error.payload if isinstance(error, RuntimeSessionError) else {}
             payload = {
-                **error.payload,
+                **error_payload,
                 "status": "rejected",
                 "schema": "armctrl.arm_runtime_submit.v1",
                 "reason": str(error),
@@ -2497,6 +2729,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 angular_rps=(
                     tuple(args.angular) if args.angular is not None else None
                 ),
+                max_linear_step_m=args.max_linear_step_m,
+                max_angular_step_rad=args.max_angular_step_rad,
                 output_path=Path(args.output) if args.output else None,
             )
         except RuntimeSessionError as error:
@@ -2529,6 +2763,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "motion" and args.motion_command == "submit":
         return _handle_motion_submit(args)
+
+    if args.command == "motion" and args.motion_command == "compile":
+        return _handle_motion_compile(args)
 
     if args.command == "profile" and args.profile_command == "list":
         payload = {
@@ -2595,9 +2832,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             },
             "legacy_policy": {
                 "formal_control_surface": "motion/profile/console",
-                "sysid_run_sdk": "operator-facing SysID compiler into motion submit joint-trajectory",
+                "sysid_run_sdk": (
+                    "parser-level removed; sysid run only accepts --adapter {fake}; "
+                    "use sysid compile-runtime plus motion submit joint-trajectory"
+                ),
                 "runtime_submit_legacy": "compatibility/diagnostic surface; prefer armctrl motion submit",
             },
+            "command_classes": _command_surface_classes(),
         }
         payload = _attach_output_artifact(
             payload,
@@ -4059,283 +4300,37 @@ def main(argv: Sequence[str] | None = None) -> int:
         payload = {"status": "ok", **plan.to_json()}
         return _emit(payload, as_json=args.as_json)
 
-    if args.command == "sysid" and args.sysid_command == "run":
-        if args.adapter != "fake":
-            gate = SdkSysIdRunnerGate()
-            if args.confirm != SDK_CONFIRMATION:
-                payload = gate.reject_without_confirmation(
-                    adapter=args.adapter,
-                )
-                payload = _attach_sysid_run_manifest(payload, args.output)
-                _emit(payload, as_json=args.as_json)
-                return 3
-            if args.readiness_artifact is None:
-                payload = gate.reject_without_readiness_artifact(adapter=args.adapter)
-                payload = _attach_sysid_run_manifest(payload, args.output)
-                _emit(payload, as_json=args.as_json)
-                return 3
-            readiness_artifact_path = Path(args.readiness_artifact)
-            readiness_artifact = json.loads(
-                readiness_artifact_path.read_text(encoding="utf-8")
+    if args.command == "sysid" and args.sysid_command == "compile-runtime":
+        try:
+            payload = _compile_sysid_runtime_command(
+                execution_trajectory_path=Path(args.execution_trajectory),
+                dof=args.dof,
+                sample_hz=args.sample_hz,
+                expected_q_start=args.expected_q_start,
+                owner=args.owner,
+                start_pose_policy=args.start_pose_policy,
+                send_hz=args.send_hz,
+                max_tracking_error_rad=args.max_tracking_error_rad,
+                max_tau_abs=args.max_tau_abs,
+                output_dir=Path(args.output),
             )
-            readiness_artifact = _unwrap_runtime_status_artifact(readiness_artifact)
-            if readiness_artifact.get("schema") != "armctrl.arm_runtime_status.v1":
-                payload = {
-                    "status": "rejected",
-                    "schema": "armctrl.sysid_run.v1",
-                    "adapter": args.adapter,
-                    "reason": (
-                        "sdk sysid runner requires live arm runtime status readiness"
-                    ),
-                    "requires_confirm": SDK_CONFIRMATION,
-                    "confirm_received": True,
-                    "movement_allowed": False,
-                    "hardware_motion": False,
-                    "movement_command_sent": False,
-                    "readiness_artifact_path": str(readiness_artifact_path),
-                    "readiness": {
-                        "schema": readiness_artifact.get("schema"),
-                        "agent_sysid_smoke_allowed": readiness_artifact.get(
-                            "agent_sysid_smoke_allowed"
-                        ),
-                    },
-                    "runtime": {
-                        "single_owner_runtime_session": True,
-                        "runtime_session_artifact": (
-                            str(args.runtime_session_artifact)
-                            if args.runtime_session_artifact is not None
-                            else None
-                        ),
-                        "owner": "sysid",
-                        "mode": "trajectory_replay",
-                    },
-                    "fault_landing_mode": "damping",
-                    "recording_starts_after_safe_state": True,
-                    "next_gate": (
-                        "refresh readiness with armctrl runtime status before "
-                        "SysID runtime queue submit"
-                    ),
-                }
-                payload = _attach_sysid_run_manifest(payload, args.output)
-                _emit(payload, as_json=args.as_json)
-                return 3
-            readiness_artifact = _runtime_first_sysid_readiness_artifact(
-                readiness_artifact,
-                runtime_session_artifact_path=(
-                    Path(args.runtime_session_artifact)
-                    if args.runtime_session_artifact is not None
-                    else None
-                ),
-                max_heartbeat_age_s=args.max_heartbeat_age_s,
-            )
-            if not _sysid_run_readiness_allowed(readiness_artifact):
-                payload = gate.reject_failed_readiness(
-                    adapter=args.adapter,
-                    readiness_artifact_path=str(readiness_artifact_path),
-                    readiness_artifact=readiness_artifact,
-                )
-                payload = _attach_sysid_run_manifest(payload, args.output)
-                _emit(payload, as_json=args.as_json)
-                return 3
-            q_center = tuple(args.q_center or [0.0] * args.dof)
-            if len(q_center) != args.dof:
-                parser.error("--q-center length must match --dof")
-            if args.runtime_session_artifact is None:
-                payload = {
-                    "status": "rejected",
-                    "schema": "armctrl.sysid_run.v1",
-                    "adapter": args.adapter,
-                    "reason": (
-                        "sdk sysid runner requires --runtime-session-artifact "
-                        "from armctrl runtime start --serve"
-                    ),
-                    "movement_allowed": False,
-                    "hardware_motion": False,
-                    "movement_command_sent": False,
-                    "runtime": {
-                        "single_owner_runtime_session": True,
-                        "runtime_session_artifact": None,
-                        "owner": None,
-                    },
-                    "fault_landing_mode": "damping",
-                    "recording_starts_after_safe_state": True,
-                    "next_gate": (
-                        "start live arm runtime, recover/hold SAFE_CENTER, then "
-                        "attach SysID owner lease"
-                    ),
-                }
-                payload = _attach_sysid_run_manifest(payload, args.output)
-                _emit(payload, as_json=args.as_json)
-                return 3
-            try:
-                requested_q_center = q_center
-                start_pose = _runtime_live_hold_start_pose(
-                    readiness_artifact,
-                    dof=args.dof,
-                    max_start_error_rad=0.02,
-                )
-                q_center = tuple(start_pose["q_start"])
-                plan = SysIdPlanner.default().write_plan(
-                    SysIdPlanRequest(
-                        profile_name=args.profile,
-                        dof=args.dof,
-                        sample_hz=args.sample_hz,
-                        duration_s=args.duration,
-                        amplitude_rad=args.amplitude,
-                        q_center=q_center,
-                        urdf_path=_repo_default_path(args.urdf_path),
-                        safe_config_path=_repo_default_path(args.safe_config),
-                        output_dir=Path(args.output),
-                        candidate_trajectory_path=(
-                            Path(args.candidate_trajectory)
-                            if args.candidate_trajectory is not None
-                            else None
-                        ),
-                    )
-                )
-                if not plan.safety.allowed:
-                    payload = {
-                        "status": "rejected",
-                        "schema": "armctrl.sysid_run.v1",
-                        "adapter": args.adapter,
-                        "reason": plan.safety.reason,
-                        "movement_allowed": False,
-                        "hardware_motion": False,
-                        "movement_command_sent": False,
-                        "safety": plan.safety.to_json(),
-                        "runtime": {
-                            "single_owner_runtime_session": True,
-                            "runtime_session_artifact": str(
-                                args.runtime_session_artifact
-                            ),
-                            "owner": "sysid",
-                            "mode": "trajectory_replay",
-                        },
-                        "runtime_start_pose": start_pose,
-                        "requested_q_center": list(requested_q_center),
-                        "effective_q_center": list(q_center),
-                        "fault_landing_mode": "damping",
-                        "recording_starts_after_safe_state": True,
-                    }
-                    payload = _attach_sysid_run_manifest(payload, args.output)
-                    _emit(payload, as_json=args.as_json)
-                    return 3
-                q_points = _read_sysid_execution_q_points(
-                    Path(plan.artifacts["execution_trajectory"]),
-                    dof=args.dof,
-                )
-                dq_points = _read_sysid_execution_dq_points(
-                    Path(plan.artifacts["execution_trajectory"]),
-                    dof=args.dof,
-                )
-                dq_policy = "preserved"
-                if dq_points is None:
-                    dq_points = _derive_sysid_execution_dq_points(
-                        q_points,
-                        sample_hz=float(args.sample_hz),
-                    )
-                    dq_policy = "derived_finite_difference"
-                ddq_points = _read_sysid_execution_ddq_points(
-                    Path(plan.artifacts["execution_trajectory"]),
-                    dof=args.dof,
-                )
-                ddq_policy = "preserved" if ddq_points is not None else "missing"
-                artifact_policy = {
-                    "schema": "armctrl.sysid_runtime_compiler_policy.v1",
-                    "trajectory_artifact": plan.artifacts["execution_trajectory"],
-                    "q_cmd": "preserved",
-                    "dq_cmd": dq_policy,
-                    "ddq_cmd": ddq_policy,
-                    "sample_hz": float(args.sample_hz),
-                }
-                queued = submit_trajectory_command(
-                    session_artifact_path=Path(args.runtime_session_artifact),
-                    owner="sysid",
-                    expected_q_start=q_center,
-                    q_points=q_points,
-                    dq_points=dq_points,
-                    ddq_points=ddq_points,
-                    artifact_policy=artifact_policy,
-                    send_hz=args.sample_hz,
-                    max_start_error_rad=0.02,
-                    heartbeat_timeout_s=max(0.5, float(args.duration) + 1.0),
-                    max_heartbeat_age_s=args.max_heartbeat_age_s,
-                    start_pose_policy="live_hold",
-                    max_tracking_error_rad=args.max_tracking_error_rad,
-                    max_tau_abs=args.max_tau_abs,
-                )
-                queued = _annotate_motion_submit_payload(
-                    queued,
-                    motion_kind="joint-trajectory",
-                    legacy_equivalent="armctrl sysid run ... --adapter sdk",
-                )
-            except (RuntimeSessionError, RuntimeError, ValueError) as error:
-                payload = {
-                    "status": "rejected",
-                    "schema": "armctrl.sysid_run.v1",
-                    "adapter": args.adapter,
-                    "reason": str(error),
-                    "movement_allowed": False,
-                    "hardware_motion": False,
-                    "movement_command_sent": False,
-                    "runtime": {
-                        "single_owner_runtime_session": True,
-                        "runtime_session_artifact": str(args.runtime_session_artifact),
-                        "owner": "sysid",
-                        "mode": "trajectory_replay",
-                    },
-                    "fault_landing_mode": "damping",
-                    "recording_starts_after_safe_state": True,
-                    "next_gate": (
-                        "complete readiness and live runtime hold_safe before SysID "
-                        "runtime queue submit"
-                    ),
-                }
-                payload = _attach_sysid_run_manifest(payload, args.output)
-                _emit(payload, as_json=args.as_json)
-                return 3
+        except (OSError, ValueError) as error:
             payload = {
-                "status": "queued",
-                "schema": "armctrl.sysid_run.v1",
-                "adapter": args.adapter,
-                "profile": args.profile,
-                "movement_allowed": True,
-                "hardware_motion": True,
+                "status": "rejected",
+                "schema": "armctrl.sysid_runtime_compile.v1",
+                "command_surface": MOTION_COMMAND_SURFACE,
+                "motion_kind": "joint-trajectory",
+                "reason": str(error),
                 "movement_command_sent": False,
-                "safety": plan.safety.to_json(),
-                "runtime": {
-                    "single_owner_runtime_session": True,
-                    "runtime_session_artifact": str(args.runtime_session_artifact),
-                    "owner": "sysid",
-                    "mode": "trajectory_replay",
-                    "queue": queued["runtime"]["queue"],
-                },
-                "runtime_start_pose": start_pose,
-                "start_pose_policy": "live_hold",
-                "start_pose_guard": queued.get("start_pose_guard"),
-                "requested_q_center": list(requested_q_center),
-                "effective_q_center": list(q_center),
-                "runtime_command": {
-                    "command_id": queued["command_id"],
-                    "status": "queued",
-                    "command_surface": queued.get("command_surface"),
-                    "motion_kind": queued.get("motion_kind"),
-                    "artifacts": queued["artifacts"],
-                    "sample_count": len(q_points),
-                    "send_hz": args.sample_hz,
-                    "artifact_policy": artifact_policy,
-                },
-                "command_surface": queued.get("command_surface"),
-                "motion_kind": queued.get("motion_kind"),
-                "legacy_equivalent": queued.get("legacy_equivalent"),
-                "artifacts": plan.artifacts,
-                "fault_landing_mode": "damping",
-                "recording_starts_after_safe_state": True,
-                "next_gate": "wait for live runtime command result artifact",
+                "hardware_motion": False,
+                "next_gate": "inspect SysID execution trajectory before runtime compile",
             }
-            payload = _attach_sysid_run_manifest(payload, args.output)
             _emit(payload, as_json=args.as_json)
-            return 0
+            return 3
+        _emit(payload, as_json=args.as_json)
+        return 0
+
+    if args.command == "sysid" and args.sysid_command == "run":
         q_center = tuple(args.q_center or [0.0] * args.dof)
         if len(q_center) != args.dof:
             parser.error("--q-center length must match --dof")
@@ -4970,6 +4965,8 @@ def _motion_profile_catalog(*, include_description: bool) -> list[dict[str, obje
             item["description"] = str(profile.get("description"))
             item["readiness"] = profile.get("readiness")
             item["legacy_entrypoints"] = profile.get("legacy_entrypoints", [])
+            item["removed_entrypoints"] = profile.get("removed_entrypoints", [])
+            item["preferred_entrypoints"] = profile.get("preferred_entrypoints", [])
         profiles.append(item)
     return profiles
 
@@ -4985,13 +4982,42 @@ def _motion_surface_catalog() -> dict[str, object]:
             "eef-pose",
             "joint-jog",
         ],
-        "hardware_not_implemented_yet": ["eef-pose", "joint-jog"],
+        "hardware_not_implemented_yet": ["joint-jog"],
         "reserved_contract_kinds": {
-            "eef-pose": "absolute EEF pose command contract; rejected until a mature pose backend is configured",
+            "eef-pose": "absolute EEF pose runtime command; requires a mature pose adapter with live reference limiting",
             "joint-jog": "teleop/manual jog command contract; rejected until deadman and jog backend are configured",
         },
+        "eef_control_policy": {
+            "agent_input_space": ["eef-delta", "eef-twist", "eef-pose"],
+            "runtime_execution_policy": "continuous_owner_servo_or_reviewed_planned_path",
+            "servo_path": (
+                "EEF delta/twist/pose frames are consumed by a mature backend "
+                "inside the long-lived runtime; every tick is limited from live "
+                "state and fallback stays in hold or damping."
+            ),
+            "planned_path": (
+                "absolute or multi-waypoint EEF goals may be reviewed into "
+                "joint-trajectory commands, but that is a planned path rather "
+                "than the realtime EEF servo path."
+            ),
+            "disconnected_takeover_allowed": False,
+            "bumpless_switch_required": True,
+            "warmup_policy": (
+                "start EEF backend with target=current FK pose, run zero-command "
+                "warmup, then switch owner only after q_meas/fault/jitter checks pass"
+            ),
+            "reference_limit_policy": {
+                "policy": "reject_oversized_eef_reference_step",
+                "default_max_linear_step_m": DEFAULT_EEF_MAX_LINEAR_STEP_M,
+                "default_max_angular_step_rad": DEFAULT_EEF_MAX_ANGULAR_STEP_RAD,
+                "clamping": False,
+                "enforced_at": ["submit", "execute"],
+            },
+        },
         "formal_cli": [
+            "armctrl motion compile joint-trajectory",
             "armctrl motion submit joint-trajectory",
+            "armctrl motion submit joint-trajectory --compiled-command",
             "armctrl motion submit joint-intent",
             "armctrl motion submit eef-delta",
             "armctrl motion submit eef-twist",
@@ -5001,9 +5027,111 @@ def _motion_surface_catalog() -> dict[str, object]:
     }
 
 
+def _command_surface_classes() -> dict[str, object]:
+    return {
+        "formal": [
+            "console",
+            "profile",
+            "runtime",
+            "motion",
+        ],
+        "compiler": [
+            "armctrl motion compile joint-trajectory",
+            "armctrl sysid compile-runtime",
+        ],
+        "removed": [
+            "armctrl sysid run ... --adapter sdk",
+        ],
+        "read_only_diagnostic": [
+            "armctrl sysid sdk-preflight",
+            "armctrl sysid sdk-doctor",
+            "armctrl sysid sdk-hold-damping-check",
+            "armctrl sysid sdk-arm-session",
+            "armctrl sysid sdk-tiny-motion-plan",
+            "armctrl sysid sdk-tiny-motion-execute-fake",
+            "armctrl sysid sdk-agent-sysid-smoke-readiness",
+            "armctrl sysid sdk-handshake-plan",
+        ],
+        "hardware_diagnostic_only": [
+            "armctrl sysid sdk-jog-real",
+            "armctrl sysid sdk-recover-startup-real",
+            "armctrl sysid sdk-tiny-motion-execute-real",
+        ],
+        "diagnostic": [
+            "see read_only_diagnostic and hardware_diagnostic_only",
+        ],
+        "legacy_alias": [
+            "armctrl runtime submit-trajectory",
+            "armctrl runtime submit-intent",
+            "armctrl runtime submit-eef",
+            "armctrl runtime result-check",
+        ],
+        "experimental_review_export": [
+            "armctrl agent-flow",
+            "armctrl eef",
+            "armctrl lerobot",
+        ],
+    }
+
+
+def _handle_motion_compile(args: argparse.Namespace) -> int:
+    try:
+        if args.motion_kind != "joint-trajectory":
+            raise ValueError(f"unsupported motion compile kind: {args.motion_kind}")
+        payload = _compile_joint_trajectory_command(
+            source=args.source,
+            owner=args.owner,
+            expected_q_start=args.expected_q_start,
+            q_target=args.q_target,
+            q_points=args.q_point,
+            duration_s=args.duration_s,
+            sample_hz=args.sample_hz,
+            send_hz=args.send_hz,
+            start_pose_policy=args.start_pose_policy,
+            max_joint_segment_delta_rad=args.max_joint_segment_delta_rad,
+            max_joint_velocity_rad_s=_agent_default_joint_velocity_limit(
+                owner=args.owner,
+                requested_limit=args.max_joint_velocity_rad_s,
+            ),
+            max_tracking_error_rad=args.max_tracking_error_rad,
+            max_tau_abs=args.max_tau_abs,
+            output_dir=Path(args.output),
+        )
+        _emit(payload, as_json=args.as_json)
+        return 0
+    except ValueError as error:
+        payload = {
+            "status": "rejected",
+            "schema": "armctrl.motion_runtime_compile.v1",
+            "command_surface": MOTION_COMMAND_SURFACE,
+            "motion_kind": getattr(args, "motion_kind", None),
+            "source": getattr(args, "source", None),
+            "owner": getattr(args, "owner", None),
+            "reason": str(error),
+            "movement_command_sent": False,
+            "hardware_motion": False,
+        }
+        _emit(payload, as_json=args.as_json)
+        return 3
+
+
 def _handle_motion_submit(args: argparse.Namespace) -> int:
     try:
         if args.motion_kind == "joint-trajectory":
+            if args.compiled_command is not None:
+                payload = _submit_compiled_joint_trajectory_command(args)
+                payload = _attach_output_artifact(
+                    payload,
+                    args.output,
+                    artifact_key="motion_submit",
+                )
+                _emit(payload, as_json=args.as_json)
+                return 0
+            if args.expected_q_start is None or args.q_point is None:
+                raise ValueError(
+                    "joint-trajectory requires either --compiled-command or both "
+                    "--expected-q-start and at least one --q-point"
+                )
             payload = submit_trajectory_command(
                 session_artifact_path=Path(args.session_artifact),
                 owner=args.owner,
@@ -5018,6 +5146,11 @@ def _handle_motion_submit(args: argparse.Namespace) -> int:
                 output_path=None,
                 max_tracking_error_rad=args.max_tracking_error_rad,
                 max_tau_abs=args.max_tau_abs,
+                max_joint_segment_delta_rad=args.max_joint_segment_delta_rad,
+                max_joint_velocity_rad_s=_agent_default_joint_velocity_limit(
+                    owner=args.owner,
+                    requested_limit=args.max_joint_velocity_rad_s,
+                ),
             )
             payload = _annotate_motion_submit_payload(
                 payload,
@@ -5042,6 +5175,7 @@ def _handle_motion_submit(args: argparse.Namespace) -> int:
                 send_hz=args.send_hz,
                 start_pose_policy=args.start_pose_policy,
                 max_joint_delta_rad=args.max_joint_delta_rad,
+                max_joint_velocity_rad_s=args.max_joint_velocity_rad_s,
                 max_start_error_rad=args.max_start_error_rad,
                 heartbeat_timeout_s=args.heartbeat_timeout_s,
                 max_heartbeat_age_s=args.max_heartbeat_age_s,
@@ -5078,6 +5212,8 @@ def _handle_motion_submit(args: argparse.Namespace) -> int:
                 max_heartbeat_age_s=args.max_heartbeat_age_s,
                 delta_position_m=tuple(args.delta_position),
                 delta_rpy_rad=tuple(args.delta_rpy),
+                max_linear_step_m=args.max_linear_step_m,
+                max_angular_step_rad=args.max_angular_step_rad,
                 output_path=None,
             )
             payload = _annotate_motion_submit_payload(
@@ -5109,6 +5245,8 @@ def _handle_motion_submit(args: argparse.Namespace) -> int:
                 max_heartbeat_age_s=args.max_heartbeat_age_s,
                 linear_mps=tuple(args.linear),
                 angular_rps=tuple(args.angular),
+                max_linear_step_m=args.max_linear_step_m,
+                max_angular_step_rad=args.max_angular_step_rad,
                 output_path=None,
             )
             payload = _annotate_motion_submit_payload(
@@ -5124,7 +5262,38 @@ def _handle_motion_submit(args: argparse.Namespace) -> int:
             _emit(payload, as_json=args.as_json)
             return 0
 
-        if args.motion_kind in {"eef-pose", "joint-jog"}:
+        if args.motion_kind == "eef-pose":
+            payload = submit_eef_command(
+                session_artifact_path=Path(args.session_artifact),
+                owner=args.owner,
+                backend=args.backend,
+                kind="eef_pose",
+                frame=args.frame,
+                expected_q_start=tuple(args.expected_q_start),
+                control_period_s=args.control_period_s,
+                send_hz=args.send_hz,
+                start_pose_policy=args.start_pose_policy,
+                max_start_error_rad=args.max_start_error_rad,
+                heartbeat_timeout_s=args.heartbeat_timeout_s,
+                max_heartbeat_age_s=args.max_heartbeat_age_s,
+                position_m=tuple(args.position),
+                rpy_rad=tuple(args.rpy),
+                output_path=None,
+            )
+            payload = _annotate_motion_submit_payload(
+                payload,
+                motion_kind="eef-pose",
+                legacy_equivalent="armctrl runtime submit-eef --kind eef_pose",
+            )
+            payload = _attach_output_artifact(
+                payload,
+                args.output,
+                artifact_key="motion_submit",
+            )
+            _emit(payload, as_json=args.as_json)
+            return 0
+
+        if args.motion_kind == "joint-jog":
             payload = _unsupported_motion_submit_payload(args)
             payload = _attach_output_artifact(
                 payload,
@@ -5217,7 +5386,9 @@ def _unsupported_motion_submit_payload(args: argparse.Namespace) -> dict[str, ob
     if args.motion_kind == "eef-pose":
         reason = (
             "eef-pose is a formal command kind, but absolute EEF hardware execution "
-            "requires a mature pose backend; heuristic joint fallback is forbidden"
+            "requires a mature continuous-owner EEF servo backend or an explicit "
+            "reviewed planned path; heuristic joint fallback and disconnected "
+            "sdk_cartesian takeover are forbidden"
         )
         backend = args.backend
         owner = args.owner
@@ -5271,8 +5442,458 @@ def _unsupported_motion_submit_payload(args: argparse.Namespace) -> dict[str, ob
             "single_motion_owner": True,
             "session_artifact": str(args.session_artifact),
         },
-        "next_gate": "configure mature runtime backend adapter before hardware execution",
+        "mature_backend_policy": {
+            "no_heuristic_joint_fallback": True,
+            "disconnected_takeover_allowed": False,
+            "servo_path": (
+                "run eef pose/twist/delta inside the long-lived runtime with "
+                "target=current FK warmup and per-tick limiting"
+            ),
+            "planned_path": (
+                "review eef waypoints into checked joint_trajectory when realtime "
+                "servo is not the intended behavior"
+            ),
+        },
+        "next_gate": "configure mature continuous-owner runtime backend before hardware execution",
     }
+
+
+def _submit_compiled_joint_trajectory_command(
+    args: argparse.Namespace,
+) -> dict[str, object]:
+    compiled_path = Path(args.compiled_command)
+    compiled = _read_compiled_joint_trajectory_command(compiled_path)
+    payload = submit_trajectory_command(
+        session_artifact_path=Path(args.session_artifact),
+        owner=str(compiled["owner"]),
+        expected_q_start=compiled["expected_q_start"],
+        q_points=compiled["q_points"],
+        dq_points=compiled.get("dq_points"),
+        ddq_points=compiled.get("ddq_points"),
+        artifact_policy=compiled.get("artifact_policy"),
+        send_hz=float(compiled["send_hz"]),
+        trajectory_sample_hz=(
+            float(compiled["trajectory_sample_hz"])
+            if compiled.get("trajectory_sample_hz") is not None
+            else None
+        ),
+        start_pose_policy=str(compiled.get("start_pose_policy", "live_hold")),
+        max_start_error_rad=args.max_start_error_rad,
+        heartbeat_timeout_s=args.heartbeat_timeout_s,
+        max_heartbeat_age_s=args.max_heartbeat_age_s,
+        max_tracking_error_rad=(
+            args.max_tracking_error_rad
+            if args.max_tracking_error_rad is not None
+            else _optional_float(compiled.get("max_tracking_error_rad"))
+        ),
+        max_tau_abs=(
+            args.max_tau_abs
+            if args.max_tau_abs is not None
+            else _optional_float(compiled.get("max_tau_abs"))
+        ),
+        max_joint_segment_delta_rad=_optional_float(
+            compiled.get("max_joint_segment_delta_rad")
+        ),
+        max_joint_velocity_rad_s=_optional_float(
+            compiled.get("max_joint_velocity_rad_s")
+        ),
+    )
+    payload = _annotate_motion_submit_payload(
+        payload,
+        motion_kind="joint-trajectory",
+        legacy_equivalent="armctrl motion submit joint-trajectory --compiled-command",
+    )
+    payload["compiled_command_artifact"] = str(compiled_path)
+    _annotate_compiled_source_artifact(payload, compiled_command_artifact=str(compiled_path))
+    return payload
+
+
+def _agent_default_joint_velocity_limit(
+    *,
+    owner: str,
+    requested_limit: float | None,
+) -> float | None:
+    if requested_limit is not None:
+        return float(requested_limit)
+    if str(owner) == "agent":
+        return DEFAULT_AGENT_MAX_JOINT_VELOCITY_RAD_S
+    return None
+
+
+def _compile_joint_trajectory_command(
+    *,
+    source: str,
+    owner: str,
+    expected_q_start: Sequence[float],
+    q_target: Sequence[float] | None,
+    q_points: Sequence[Sequence[float]] | None,
+    duration_s: float | None,
+    sample_hz: float,
+    send_hz: float | None,
+    start_pose_policy: str,
+    max_joint_segment_delta_rad: float | None,
+    max_joint_velocity_rad_s: float | None,
+    max_tracking_error_rad: float | None,
+    max_tau_abs: float | None,
+    output_dir: Path,
+) -> dict[str, object]:
+    q_start = _numeric_list(expected_q_start, name="expected_q_start")
+    if sample_hz <= 0.0:
+        raise ValueError("--sample-hz must be positive")
+    effective_send_hz = float(send_hz) if send_hz is not None else float(sample_hz)
+    if effective_send_hz <= 0.0:
+        raise ValueError("--send-hz must be positive")
+    has_target = q_target is not None
+    has_waypoints = q_points is not None and len(q_points) > 0
+    if has_target == has_waypoints:
+        raise ValueError("provide exactly one of --q-target or one or more --q-point")
+    if has_target:
+        if duration_s is None or duration_s <= 0.0:
+            raise ValueError("--duration-s must be positive when using --q-target")
+        target = _numeric_list(q_target, name="q_target")
+        if len(target) != len(q_start):
+            raise ValueError("--q-target length must match --expected-q-start length")
+        compiled_q, compiled_dq, compiled_ddq = _smoothstep_joint_target_points(
+            q_start=q_start,
+            q_target=target,
+            duration_s=float(duration_s),
+            sample_hz=float(sample_hz),
+        )
+        q_policy = "generated_smoothstep_joint_target"
+        dq_policy = "derived_smoothstep_analytic"
+        ddq_policy = "derived_smoothstep_analytic"
+        interpolation_policy = "smoothstep_joint_target"
+        source_mode = "joint_target"
+    else:
+        compiled_q = _numeric_matrix(q_points, name="q_point")
+        if not compiled_q:
+            raise ValueError("--q-point must not be empty")
+        for point in compiled_q:
+            if len(point) != len(q_start):
+                raise ValueError("all --q-point values must match --expected-q-start length")
+        compiled_dq = _finite_difference_points(
+            compiled_q,
+            sample_hz=float(sample_hz),
+        )
+        compiled_ddq = _finite_difference_points(
+            compiled_dq,
+            sample_hz=float(sample_hz),
+        )
+        q_policy = "preserved_waypoints"
+        dq_policy = "derived_finite_difference"
+        ddq_policy = "derived_finite_difference"
+        interpolation_policy = "waypoint_finite_difference"
+        source_mode = "joint_waypoints"
+
+    joint_trajectory_safety = _compiled_joint_trajectory_safety(
+        owner=owner,
+        q_points=compiled_q,
+        trajectory_sample_hz=float(sample_hz),
+        max_joint_segment_delta_rad=max_joint_segment_delta_rad,
+        max_joint_velocity_rad_s=max_joint_velocity_rad_s,
+    )
+    if joint_trajectory_safety["status"] != "pass":
+        raise ValueError(
+            "joint trajectory safety failed: "
+            + ", ".join(str(item) for item in joint_trajectory_safety["failed_checks"])
+        )
+    artifact_policy = {
+        "schema": "armctrl.joint_trajectory_compiler_policy.v1",
+        "source": str(source),
+        "source_mode": source_mode,
+        "q_cmd": q_policy,
+        "dq_cmd": dq_policy,
+        "ddq_cmd": ddq_policy,
+        "sample_hz": float(sample_hz),
+        "send_hz": effective_send_hz,
+    }
+    output_dir.mkdir(parents=True, exist_ok=True)
+    command_path = output_dir / "compiled_motion_command.json"
+    manifest_path = output_dir / "compile_motion_manifest.json"
+    command: dict[str, object] = {
+        "schema": "armctrl.compiled_motion_command.v1",
+        "command_surface": MOTION_COMMAND_SURFACE,
+        "motion_kind": "joint-trajectory",
+        "source": str(source),
+        "owner": str(owner),
+        "expected_q_start": q_start,
+        "q_points": [list(point) for point in compiled_q],
+        "dq_points": [list(point) for point in compiled_dq],
+        "ddq_points": [list(point) for point in compiled_ddq],
+        "send_hz": effective_send_hz,
+        "trajectory_sample_hz": float(sample_hz),
+        "start_pose_policy": str(start_pose_policy),
+        "artifact_policy": artifact_policy,
+        "joint_trajectory_safety": joint_trajectory_safety,
+        "interpolation_policy": interpolation_policy,
+        "resampling_policy": "compiled_joint_trajectory_to_runtime_send_hz",
+    }
+    if max_joint_segment_delta_rad is not None:
+        command["max_joint_segment_delta_rad"] = float(max_joint_segment_delta_rad)
+    if max_joint_velocity_rad_s is not None:
+        command["max_joint_velocity_rad_s"] = float(max_joint_velocity_rad_s)
+    if duration_s is not None:
+        command["duration_s"] = float(duration_s)
+    if max_tracking_error_rad is not None:
+        command["max_tracking_error_rad"] = float(max_tracking_error_rad)
+    if max_tau_abs is not None:
+        command["max_tau_abs"] = float(max_tau_abs)
+    _write_json_atomic(command_path, command)
+    payload = {
+        "status": "ok",
+        "schema": "armctrl.motion_runtime_compile.v1",
+        "command_surface": MOTION_COMMAND_SURFACE,
+        "motion_kind": "joint-trajectory",
+        "source": str(source),
+        "owner": str(owner),
+        "movement_command_sent": False,
+        "hardware_motion": False,
+        "sample_count": len(compiled_q),
+        "sample_hz": float(sample_hz),
+        "send_hz": effective_send_hz,
+        "artifact_policy": artifact_policy,
+        "joint_trajectory_safety": joint_trajectory_safety,
+        "artifacts": {
+            "compiled_command": str(command_path),
+            "compile_motion_manifest": str(manifest_path),
+        },
+        "next_gate": "submit compiled command with armctrl motion submit joint-trajectory",
+    }
+    _write_json_atomic(manifest_path, payload)
+    return payload
+
+
+def _smoothstep_joint_target_points(
+    *,
+    q_start: Sequence[float],
+    q_target: Sequence[float],
+    duration_s: float,
+    sample_hz: float,
+) -> tuple[list[list[float]], list[list[float]], list[list[float]]]:
+    sample_count = max(2, int(round(float(duration_s) * float(sample_hz))) + 1)
+    q_points: list[list[float]] = []
+    dq_points: list[list[float]] = []
+    ddq_points: list[list[float]] = []
+    delta = [float(target) - float(start) for start, target in zip(q_start, q_target)]
+    for index in range(sample_count):
+        alpha = index / (sample_count - 1)
+        s = (3.0 * alpha * alpha) - (2.0 * alpha * alpha * alpha)
+        ds_dt = (6.0 * alpha * (1.0 - alpha)) / float(duration_s)
+        d2s_dt2 = (6.0 - (12.0 * alpha)) / (float(duration_s) * float(duration_s))
+        q_points.append(
+            [float(start) + step * s for start, step in zip(q_start, delta)]
+        )
+        dq_points.append([step * ds_dt for step in delta])
+        ddq_points.append([step * d2s_dt2 for step in delta])
+    return q_points, dq_points, ddq_points
+
+
+def _finite_difference_points(
+    points: Sequence[Sequence[float]],
+    *,
+    sample_hz: float,
+) -> list[list[float]]:
+    if not points:
+        return []
+    if len(points) == 1:
+        return [[0.0 for _ in points[0]]]
+    result: list[list[float]] = []
+    for index, point in enumerate(points):
+        if index == 0:
+            next_point = points[1]
+            result.append(
+                [
+                    (float(next_value) - float(value)) * float(sample_hz)
+                    for value, next_value in zip(point, next_point)
+                ]
+            )
+        elif index == len(points) - 1:
+            previous = points[index - 1]
+            result.append(
+                [
+                    (float(value) - float(previous_value)) * float(sample_hz)
+                    for previous_value, value in zip(previous, point)
+                ]
+            )
+        else:
+            previous = points[index - 1]
+            next_point = points[index + 1]
+            result.append(
+                [
+                    (float(next_value) - float(previous_value)) * float(sample_hz) / 2.0
+                    for previous_value, next_value in zip(previous, next_point)
+                ]
+            )
+    return result
+
+
+def _compiled_joint_trajectory_safety(
+    *,
+    owner: str,
+    q_points: Sequence[Sequence[float]],
+    trajectory_sample_hz: float,
+    max_joint_segment_delta_rad: float | None,
+    max_joint_velocity_rad_s: float | None,
+) -> dict[str, object]:
+    if trajectory_sample_hz <= 0.0:
+        raise ValueError("trajectory_sample_hz must be positive")
+    max_segment_delta = (
+        None
+        if max_joint_segment_delta_rad is None
+        else float(max_joint_segment_delta_rad)
+    )
+    if max_segment_delta is not None and max_segment_delta <= 0.0:
+        raise ValueError("max_joint_segment_delta_rad must be positive")
+    max_velocity = (
+        None if max_joint_velocity_rad_s is None else float(max_joint_velocity_rad_s)
+    )
+    if max_velocity is not None and max_velocity <= 0.0:
+        raise ValueError("max_joint_velocity_rad_s must be positive")
+
+    segment_deltas: list[list[float]] = []
+    segment_abs_deltas: list[list[float]] = []
+    segment_abs_velocities: list[list[float]] = []
+    for previous, current in zip(q_points, q_points[1:]):
+        deltas = [
+            float(current_value) - float(previous_value)
+            for previous_value, current_value in zip(previous, current)
+        ]
+        abs_deltas = [abs(value) for value in deltas]
+        segment_deltas.append(deltas)
+        segment_abs_deltas.append(abs_deltas)
+        segment_abs_velocities.append(
+            [value * float(trajectory_sample_hz) for value in abs_deltas]
+        )
+    max_abs_delta = max(
+        (value for segment in segment_abs_deltas for value in segment),
+        default=0.0,
+    )
+    max_abs_velocity = max(
+        (value for segment in segment_abs_velocities for value in segment),
+        default=0.0,
+    )
+    failed_checks: list[str] = []
+    if max_segment_delta is not None and max_abs_delta > max_segment_delta:
+        failed_checks.append("joint_segment_delta_within_limit")
+    if max_velocity is not None and max_abs_velocity > max_velocity:
+        failed_checks.append("joint_velocity_within_limit")
+    policy = (
+        "reject_oversized_or_too_fast_agent_joint_trajectory"
+        if str(owner) == "agent"
+        else "record_only_for_non_agent_joint_trajectory"
+    )
+    return {
+        "schema": "armctrl.joint_trajectory_safety.v1",
+        "status": "pass" if not failed_checks else "fail",
+        "policy": policy,
+        "owner": str(owner),
+        "trajectory_sample_hz": float(trajectory_sample_hz),
+        "max_joint_segment_delta_rad": max_segment_delta,
+        "max_joint_velocity_rad_s": max_velocity,
+        "segment_delta_rad": segment_deltas,
+        "segment_abs_delta_rad": segment_abs_deltas,
+        "segment_abs_velocity_rad_s": segment_abs_velocities,
+        "max_segment_abs_delta_rad": max_abs_delta,
+        "max_segment_abs_velocity_rad_s": max_abs_velocity,
+        "failed_checks": failed_checks,
+    }
+
+
+def _read_compiled_joint_trajectory_command(path: Path) -> dict[str, object]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("compiled command artifact must contain a JSON object")
+    if payload.get("schema") != "armctrl.compiled_motion_command.v1":
+        raise ValueError("compiled command must use schema armctrl.compiled_motion_command.v1")
+    if payload.get("command_surface") != MOTION_COMMAND_SURFACE:
+        raise ValueError(f"compiled command must target {MOTION_COMMAND_SURFACE}")
+    if payload.get("motion_kind") != "joint-trajectory":
+        raise ValueError("compiled command must use motion_kind=joint-trajectory")
+    owner = str(payload.get("owner") or payload.get("source") or "sysid")
+    expected_q_start = _numeric_list(
+        payload.get("expected_q_start"),
+        name="expected_q_start",
+    )
+    q_points = _numeric_matrix(payload.get("q_points"), name="q_points")
+    if not q_points:
+        raise ValueError("compiled command q_points must not be empty")
+    dof = len(expected_q_start)
+    for point in q_points:
+        if len(point) != dof:
+            raise ValueError("compiled command q_points must match expected_q_start length")
+    dq_points = (
+        None
+        if payload.get("dq_points") is None
+        else _numeric_matrix(payload.get("dq_points"), name="dq_points")
+    )
+    if dq_points is not None and len(dq_points) != len(q_points):
+        raise ValueError("compiled command dq_points length must match q_points length")
+    ddq_points = (
+        None
+        if payload.get("ddq_points") is None
+        else _numeric_matrix(payload.get("ddq_points"), name="ddq_points")
+    )
+    if ddq_points is not None and len(ddq_points) != len(q_points):
+        raise ValueError("compiled command ddq_points length must match q_points length")
+    send_hz = _positive_float(payload.get("send_hz"), name="send_hz")
+    compiled = dict(payload)
+    compiled["owner"] = owner
+    compiled["expected_q_start"] = expected_q_start
+    compiled["q_points"] = q_points
+    compiled["dq_points"] = dq_points
+    compiled["ddq_points"] = ddq_points
+    compiled["send_hz"] = send_hz
+    return compiled
+
+
+def _annotate_compiled_source_artifact(
+    payload: dict[str, object],
+    *,
+    compiled_command_artifact: str,
+) -> None:
+    artifacts = payload.get("artifacts")
+    if not isinstance(artifacts, dict):
+        return
+    command_path_value = artifacts.get("command")
+    if not isinstance(command_path_value, str):
+        return
+    command_path = Path(command_path_value)
+    try:
+        command = json.loads(command_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(command, dict):
+        return
+    command["compiled_command_artifact"] = compiled_command_artifact
+    _write_json_atomic(command_path, command)
+
+
+def _optional_float(value: object) -> float | None:
+    if value is None:
+        return None
+    return float(value)
+
+
+def _numeric_list(values: object, *, name: str) -> list[float]:
+    if not isinstance(values, (list, tuple)):
+        raise ValueError(f"{name} must be a numeric list")
+    result = [float(value) for value in values]
+    if not result:
+        raise ValueError(f"{name} must not be empty")
+    return result
+
+
+def _numeric_matrix(values: object, *, name: str) -> list[list[float]]:
+    if not isinstance(values, (list, tuple)):
+        raise ValueError(f"{name} must be a list of numeric lists")
+    return [_numeric_list(row, name=name) for row in values]
+
+
+def _positive_float(value: object, *, name: str) -> float:
+    result = float(value)
+    if result <= 0.0:
+        raise ValueError(f"{name} must be positive")
+    return result
 
 
 def _emit(payload: dict[str, object], *, as_json: bool) -> int:
@@ -5309,6 +5930,7 @@ def _serve_runtime_session_until_stopped(
     max_heartbeat_age_s: float,
     backend: MotionBackend | None = None,
     runtime: ArmRuntime | None = None,
+    eef_backends: Mapping[str, MotionBackend] | None = None,
     hold_tick: Callable[[dict[str, object]], None] | None = None,
 ) -> dict[str, object]:
     if heartbeat_period_s <= 0.0:
@@ -5342,6 +5964,7 @@ def _serve_runtime_session_until_stopped(
                         session_artifact_path=session_artifact_path,
                         backend=backend,
                         runtime=runtime,
+                        eef_backends=eef_backends,
                         max_heartbeat_age_s=max_heartbeat_age_s,
                     )
                     payload = _read_json_retry(session_artifact_path)
@@ -5436,6 +6059,27 @@ def _interrupt_runtime_session(
     return interrupted
 
 
+def _runtime_eef_backends_from_args(
+    args: argparse.Namespace,
+    *,
+    q_state: tuple[float, ...],
+) -> dict[str, MotionBackend] | None:
+    adapters = list(getattr(args, "eef_adapter", []) or [])
+    if not adapters:
+        return None
+    result: dict[str, MotionBackend] = {}
+    for adapter in adapters:
+        if adapter == "moveit_servo":
+            published_commands: list[dict[str, object]] = []
+            result[adapter] = MoveItServoRuntimeBackend(
+                q_state=q_state,
+                publisher=published_commands.append,
+            )
+        else:  # pragma: no cover - argparse choices keep this unreachable.
+            raise ValueError(f"unsupported EEF adapter: {adapter}")
+    return result
+
+
 def _runtime_stop_request_path(session_artifact_path: Path) -> Path:
     return session_artifact_path.with_name(f"{session_artifact_path.name}.stop")
 
@@ -5517,6 +6161,99 @@ def _read_agent_flow_contract_for_runtime(path: Path) -> dict[str, object]:
     if not isinstance(safety, dict) or safety.get("allowed") is not True:
         raise RuntimeError("agent flow contract review is not complete")
     return contract
+
+
+def _compile_sysid_runtime_command(
+    *,
+    execution_trajectory_path: Path,
+    dof: int,
+    sample_hz: float,
+    expected_q_start: Sequence[float],
+    owner: str,
+    start_pose_policy: str,
+    send_hz: float | None,
+    max_tracking_error_rad: float | None,
+    max_tau_abs: float | None,
+    output_dir: Path,
+) -> dict[str, object]:
+    if dof <= 0:
+        raise ValueError("--dof must be positive")
+    q_start = [float(value) for value in expected_q_start]
+    if len(q_start) != dof:
+        raise ValueError("--expected-q-start length must match --dof")
+    if sample_hz <= 0.0:
+        raise ValueError("--sample-hz must be positive")
+    effective_send_hz = float(send_hz) if send_hz is not None else float(sample_hz)
+    if effective_send_hz <= 0.0:
+        raise ValueError("--send-hz must be positive")
+    q_points = _read_sysid_execution_q_points(execution_trajectory_path, dof=dof)
+    dq_points = _read_sysid_execution_dq_points(execution_trajectory_path, dof=dof)
+    dq_policy = "preserved"
+    if dq_points is None:
+        dq_points = _derive_sysid_execution_dq_points(
+            q_points,
+            sample_hz=float(sample_hz),
+        )
+        dq_policy = "derived_finite_difference"
+    ddq_points = _read_sysid_execution_ddq_points(execution_trajectory_path, dof=dof)
+    ddq_policy = "preserved" if ddq_points is not None else "missing"
+    artifact_policy = {
+        "schema": "armctrl.sysid_runtime_compiler_policy.v1",
+        "trajectory_artifact": str(execution_trajectory_path),
+        "q_cmd": "preserved",
+        "dq_cmd": dq_policy,
+        "ddq_cmd": ddq_policy,
+        "sample_hz": float(sample_hz),
+    }
+    output_dir.mkdir(parents=True, exist_ok=True)
+    command_path = output_dir / "compiled_motion_command.json"
+    manifest_path = output_dir / "compile_runtime_manifest.json"
+    command: dict[str, object] = {
+        "schema": "armctrl.compiled_motion_command.v1",
+        "command_surface": MOTION_COMMAND_SURFACE,
+        "motion_kind": "joint-trajectory",
+        "source": "sysid",
+        "owner": str(owner),
+        "expected_q_start": q_start,
+        "q_points": [list(point) for point in q_points],
+        "dq_points": [list(point) for point in dq_points],
+        "send_hz": effective_send_hz,
+        "trajectory_sample_hz": float(sample_hz),
+        "start_pose_policy": str(start_pose_policy),
+        "artifact_policy": artifact_policy,
+        "source_artifacts": {
+            "execution_trajectory": str(execution_trajectory_path),
+        },
+    }
+    if ddq_points is not None:
+        command["ddq_points"] = [list(point) for point in ddq_points]
+    if max_tracking_error_rad is not None:
+        command["max_tracking_error_rad"] = float(max_tracking_error_rad)
+    if max_tau_abs is not None:
+        command["max_tau_abs"] = float(max_tau_abs)
+    _write_json_atomic(command_path, command)
+    payload = {
+        "status": "ok",
+        "schema": "armctrl.sysid_runtime_compile.v1",
+        "command_surface": MOTION_COMMAND_SURFACE,
+        "motion_kind": "joint-trajectory",
+        "source": "sysid",
+        "owner": str(owner),
+        "movement_command_sent": False,
+        "hardware_motion": False,
+        "sample_count": len(q_points),
+        "sample_hz": float(sample_hz),
+        "send_hz": effective_send_hz,
+        "artifact_policy": artifact_policy,
+        "artifacts": {
+            "compiled_command": str(command_path),
+            "compile_runtime_manifest": str(manifest_path),
+            "execution_trajectory": str(execution_trajectory_path),
+        },
+        "next_gate": "submit compiled command with armctrl motion submit joint-trajectory",
+    }
+    _write_json_atomic(manifest_path, payload)
+    return payload
 
 
 def _read_agent_sysid_readiness(path: Path) -> dict[str, object]:

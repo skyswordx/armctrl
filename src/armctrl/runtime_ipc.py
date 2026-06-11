@@ -6,7 +6,7 @@ from pathlib import Path
 import json
 import time
 from uuid import uuid4
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from armctrl.motion_runtime import (
     ArmRuntime,
@@ -28,8 +28,11 @@ from armctrl.runtime_session import (
 RUNTIME_COMMAND_SCHEMA = "armctrl.arm_runtime_command.v1"
 RUNTIME_COMMAND_RESULT_SCHEMA = "armctrl.arm_runtime_command_result.v1"
 START_POSE_POLICIES = {"live_hold", "safe_center", "explicit_q", "current_measured_pose"}
-EEF_COMMAND_KINDS = {"eef_pose_delta", "eef_twist"}
+EEF_COMMAND_KINDS = {"eef_pose_delta", "eef_twist", "eef_pose"}
 EEF_BACKENDS = {"moveit_servo", "sdk_cartesian"}
+DEFAULT_EEF_MAX_LINEAR_STEP_M = 0.005
+DEFAULT_EEF_MAX_ANGULAR_STEP_RAD = 0.05
+DEFAULT_AGENT_MAX_JOINT_VELOCITY_RAD_S = 0.25
 
 
 def submit_trajectory_command(
@@ -50,6 +53,8 @@ def submit_trajectory_command(
     start_pose_policy: str = "live_hold",
     max_tracking_error_rad: float | None = None,
     max_tau_abs: float | None = None,
+    max_joint_segment_delta_rad: float | None = None,
+    max_joint_velocity_rad_s: float | None = None,
 ) -> dict[str, object]:
     if not q_points:
         raise ValueError("at least one --q-point is required")
@@ -86,6 +91,20 @@ def submit_trajectory_command(
         trajectory_sample_hz = float(send_hz)
     if trajectory_sample_hz <= 0.0:
         raise ValueError("trajectory_sample_hz must be positive")
+    joint_trajectory_safety = _joint_trajectory_safety_guard(
+        owner=owner,
+        q_points=points,
+        trajectory_sample_hz=float(trajectory_sample_hz),
+        max_joint_segment_delta_rad=max_joint_segment_delta_rad,
+        max_joint_velocity_rad_s=max_joint_velocity_rad_s,
+    )
+    if joint_trajectory_safety["status"] != "pass":
+        raise ValueError(
+            "joint trajectory safety failed: "
+            + ", ".join(
+                str(item) for item in joint_trajectory_safety["failed_checks"]
+            )
+        )
 
     session = _read_json_object(session_artifact_path)
     start_pose_guard = _ensure_can_queue_command(
@@ -117,6 +136,7 @@ def submit_trajectory_command(
         "send_hz": float(send_hz),
         "trajectory_sample_hz": float(trajectory_sample_hz),
         "q_points": points,
+        "joint_trajectory_safety": joint_trajectory_safety,
         "submitted_wall_time_s": time.time(),
         "session_artifact": str(session_artifact_path),
         "result_artifact": str(result_path),
@@ -144,6 +164,7 @@ def submit_trajectory_command(
         "movement_command_sent": False,
         "start_pose_policy": str(start_pose_policy),
         "start_pose_guard": start_pose_guard,
+        "joint_trajectory_safety": joint_trajectory_safety,
         "runtime": {
             "single_motion_owner": True,
             "queue": str(queue_dir),
@@ -175,6 +196,7 @@ def submit_intent_command(
     start_pose_policy: str = "live_hold",
     max_tracking_error_rad: float | None = None,
     max_tau_abs: float | None = None,
+    max_joint_velocity_rad_s: float | None = DEFAULT_AGENT_MAX_JOINT_VELOCITY_RAD_S,
 ) -> dict[str, object]:
     q_start = _float_list(expected_q_start, name="expected_q_start")
     target = _float_list(q_target, name="q_target")
@@ -184,6 +206,21 @@ def submit_intent_command(
         raise ValueError("control_period_s must be positive")
     if send_hz <= 0.0:
         raise ValueError("send_hz must be positive")
+    joint_intent_safety = _joint_intent_safety_guard(
+        q_start=q_start,
+        q_target=target,
+        control_period_s=float(control_period_s),
+        max_joint_delta_rad=max_joint_delta_rad,
+        max_joint_velocity_rad_s=max_joint_velocity_rad_s,
+    )
+    if joint_intent_safety["status"] != "pass":
+        raise ValueError(
+            "joint intent safety failed: "
+            + ", ".join(str(item) for item in joint_intent_safety["failed_checks"])
+        )
+    expected_runtime_sample_count = (
+        max(1, int(round(float(control_period_s) * float(send_hz)))) + 1
+    )
     session = _read_json_object(session_artifact_path)
     start_pose_guard = _ensure_can_queue_command(
         session,
@@ -213,6 +250,15 @@ def submit_intent_command(
         "max_joint_delta_rad": (
             None if max_joint_delta_rad is None else float(max_joint_delta_rad)
         ),
+        "max_joint_velocity_rad_s": (
+            None
+            if max_joint_velocity_rad_s is None
+            else float(max_joint_velocity_rad_s)
+        ),
+        "joint_intent_safety": joint_intent_safety,
+        "resampling_policy": "intent_frame_to_runtime_send_hz",
+        "interpolation_policy": "smoothstep_intent_frame",
+        "expected_runtime_sample_count": expected_runtime_sample_count,
         "max_start_error_rad": float(max_start_error_rad),
         "heartbeat_timeout_s": float(heartbeat_timeout_s),
         "max_heartbeat_age_s": float(max_heartbeat_age_s),
@@ -238,6 +284,10 @@ def submit_intent_command(
         "movement_command_sent": False,
         "start_pose_policy": str(start_pose_policy),
         "start_pose_guard": start_pose_guard,
+        "joint_intent_safety": joint_intent_safety,
+        "resampling_policy": "intent_frame_to_runtime_send_hz",
+        "interpolation_policy": "smoothstep_intent_frame",
+        "expected_runtime_sample_count": expected_runtime_sample_count,
         "runtime": {
             "single_motion_owner": True,
             "queue": str(queue_dir),
@@ -268,6 +318,10 @@ def submit_eef_command(
     delta_rpy_rad: Sequence[float] | None = None,
     linear_mps: Sequence[float] | None = None,
     angular_rps: Sequence[float] | None = None,
+    position_m: Sequence[float] | None = None,
+    rpy_rad: Sequence[float] | None = None,
+    max_linear_step_m: float = DEFAULT_EEF_MAX_LINEAR_STEP_M,
+    max_angular_step_rad: float = DEFAULT_EEF_MAX_ANGULAR_STEP_RAD,
     output_path: Path | None = None,
     start_pose_policy: str = "live_hold",
 ) -> dict[str, object]:
@@ -301,7 +355,7 @@ def submit_eef_command(
             ),
             "control_period_s": float(control_period_s),
         }
-    else:
+    elif kind == "eef_twist":
         if linear_mps is None or angular_rps is None:
             raise ValueError("eef_twist requires linear_mps and angular_rps")
         eef_command = {
@@ -310,6 +364,27 @@ def submit_eef_command(
             "angular_rps": _fixed_float_list(angular_rps, name="angular_rps", length=3),
             "control_period_s": float(control_period_s),
         }
+    else:
+        if position_m is None or rpy_rad is None:
+            raise ValueError("eef_pose requires position_m and rpy_rad")
+        eef_command = {
+            "frame": str(frame),
+            "position_m": _fixed_float_list(position_m, name="position_m", length=3),
+            "rpy_rad": _fixed_float_list(rpy_rad, name="rpy_rad", length=3),
+            "control_period_s": float(control_period_s),
+            "pose_reference_limiter": "adapter_live_reference_limit",
+        }
+    eef_reference_limit = _eef_reference_limit_guard(
+        kind=str(kind),
+        eef_command=eef_command,
+        max_linear_step_m=max_linear_step_m,
+        max_angular_step_rad=max_angular_step_rad,
+    )
+    if eef_reference_limit["status"] != "pass":
+        raise ValueError(
+            "EEF reference limit failed: "
+            + ", ".join(str(item) for item in eef_reference_limit["failed_checks"])
+        )
 
     session = _read_json_object(session_artifact_path)
     start_pose_guard = _ensure_can_queue_command(
@@ -338,6 +413,7 @@ def submit_eef_command(
         "expected_q_start": q_start,
         "start_pose_guard": start_pose_guard,
         "eef_command": eef_command,
+        "eef_reference_limit": eef_reference_limit,
         "max_start_error_rad": float(max_start_error_rad),
         "heartbeat_timeout_s": float(heartbeat_timeout_s),
         "max_heartbeat_age_s": float(max_heartbeat_age_s),
@@ -349,6 +425,22 @@ def submit_eef_command(
         "mature_backend_policy": {
             "selected": str(backend),
             "no_heuristic_joint_fallback": True,
+            "execution_model": "continuous_owner_eef_servo",
+            "disconnected_takeover_allowed": False,
+            "bumpless_switch_required": True,
+            "warmup_policy": (
+                "seed the EEF target from current FK, run zero-command warmup, "
+                "and only then accept live EEF owner commands"
+            ),
+            "reference_limit_policy": (
+                "reject EEF commands whose per-tick linear/angular reference "
+                "step exceeds configured limits; do not silently clamp"
+            ),
+            "fallback_policy": "stay_in_hold_or_damping; never release SDK/CAN between modes",
+            "planned_path_alternative": (
+                "reviewed EEF pose goals may compile to joint_trajectory, but "
+                "that is not the realtime EEF servo path"
+            ),
         },
     }
     pending_path.parent.mkdir(parents=True, exist_ok=True)
@@ -366,6 +458,7 @@ def submit_eef_command(
         "movement_command_sent": False,
         "start_pose_policy": str(start_pose_policy),
         "start_pose_guard": start_pose_guard,
+        "eef_reference_limit": eef_reference_limit,
         "runtime": {
             "single_motion_owner": True,
             "queue": str(queue_dir),
@@ -375,7 +468,11 @@ def submit_eef_command(
             "command": str(pending_path),
             "result": str(result_path),
         },
-        "next_gate": "serve with a configured mature EEF backend adapter",
+        "mature_backend_policy": command["mature_backend_policy"],
+        "next_gate": (
+            "serve with a configured mature EEF backend adapter inside the same "
+            "long-lived runtime; disconnected sdk_cartesian takeover is diagnostic-only"
+        ),
     }
     return _write_optional_output(payload, output_path)
 
@@ -389,6 +486,7 @@ def execute_pending_runtime_commands(
     session_artifact_path: Path,
     backend: MotionBackend,
     runtime: ArmRuntime | None = None,
+    eef_backends: Mapping[str, MotionBackend] | None = None,
     max_heartbeat_age_s: float,
 ) -> dict[str, object] | None:
     queue_dir = runtime_command_queue_dir(session_artifact_path)
@@ -410,6 +508,7 @@ def execute_pending_runtime_commands(
         session_artifact_path=session_artifact_path,
         backend=backend,
         runtime=runtime,
+        eef_backends=eef_backends,
         max_heartbeat_age_s=max_heartbeat_age_s,
     )
     result_path = Path(str(command.get("result_artifact") or ""))
@@ -429,6 +528,7 @@ def execute_runtime_command(
     session_artifact_path: Path,
     backend: MotionBackend,
     runtime: ArmRuntime | None = None,
+    eef_backends: Mapping[str, MotionBackend] | None = None,
     max_heartbeat_age_s: float,
 ) -> dict[str, object]:
     if command.get("schema") != RUNTIME_COMMAND_SCHEMA:
@@ -447,7 +547,13 @@ def execute_runtime_command(
             heartbeat_timeout_s=float(command.get("heartbeat_timeout_s", 0.5)),
             max_heartbeat_age_s=float(max_heartbeat_age_s),
         )
-        _ensure_command_has_executable_backend(command, backend=backend)
+        command_backend = _resolve_command_execution_backend(
+            command,
+            session=session,
+            primary_backend=backend,
+            eef_backends=eef_backends,
+        )
+        _ensure_command_has_executable_backend(command, backend=command_backend)
         live_runtime = runtime
         if live_runtime is None:
             live_runtime = ArmRuntime(
@@ -513,10 +619,16 @@ def execute_runtime_command(
                 first_send_wall_time_s = time.time()
             progress(sample)
 
+        eef_switch: dict[str, object] | None = None
+        if command.get("kind") in EEF_COMMAND_KINDS:
+            eef_switch = _prepare_eef_servo_switch(
+                command=command,
+                backend=command_backend,
+            )
         motion = _execute_motion_command(
             command,
             runtime=live_runtime,
-            backend=backend,
+            backend=command_backend,
             watchdog=lambda: _owner_timeout_watchdog(
                 session_artifact_path=session_artifact_path,
                 owner=owner,
@@ -550,6 +662,7 @@ def execute_runtime_command(
                 owner_acquired_wall_time_s=owner_acquired_wall_time_s,
                 first_send_wall_time_s=first_send_wall_time_s,
                 status_update=status_update,
+                eef_switch=eef_switch,
             )
         if motion.status == "completed":
             progress.publish()
@@ -571,11 +684,28 @@ def execute_runtime_command(
                 )
         else:
             progress.publish()
-            session["status"] = "faulted"
-            session["mode"] = motion.landing_mode
-            session["owner"] = None
-            session["owner_lease"] = None
-            session["readiness"] = runtime_readiness(session)
+            if motion.landing_mode == MotionMode.HOLD.value:
+                session = _session_from_runtime_status(
+                    session,
+                    status=live_runtime.status(),
+                    max_heartbeat_age_s=max_heartbeat_age_s,
+                )
+                if session.get("mode") == "hold_safe":
+                    session["hold_fresh"] = True
+                    session["last_hold_wall_time_s"] = time.time()
+                    session["hold_age_s"] = 0.0
+                    session["readiness"] = runtime_readiness(session)
+                    session["status"] = (
+                        "ok"
+                        if session["readiness"]["agent_sysid_smoke_allowed"] is True
+                        else "blocked"
+                    )
+            else:
+                session["status"] = "faulted"
+                session["mode"] = motion.landing_mode
+                session["owner"] = None
+                session["owner_lease"] = None
+                session["readiness"] = runtime_readiness(session)
         _write_json_atomic(session_artifact_path, session)
         return _command_result_payload(
             command=command,
@@ -589,6 +719,7 @@ def execute_runtime_command(
             owner_acquired_wall_time_s=owner_acquired_wall_time_s,
             first_send_wall_time_s=first_send_wall_time_s,
             status_update=status_update,
+            eef_switch=eef_switch,
         )
     except (ArmRuntimeError, RuntimeSessionError, ValueError) as error:
         rejected_wall_time_s = time.time()
@@ -609,6 +740,11 @@ def execute_runtime_command(
             "landing_mode": None,
             "eef_command": (
                 _eef_motion_contract(command)
+                if command.get("kind") in EEF_COMMAND_KINDS
+                else None
+            ),
+            "eef_switch": (
+                _eef_switch_rejected_contract(command)
                 if command.get("kind") in EEF_COMMAND_KINDS
                 else None
             ),
@@ -669,6 +805,7 @@ def _execute_motion_command(
             raise ValueError("trajectory command requires q_points")
         trajectory_sample_hz = float(command.get("trajectory_sample_hz", send_hz))
         raw_points = [tuple(_object_float_list(q_point)) for q_point in q_points]
+        _ensure_joint_trajectory_safety(command, q_points=raw_points)
         dq_points = command.get("dq_points")
         raw_velocities = (
             None
@@ -693,6 +830,7 @@ def _execute_motion_command(
             max_tau_abs=_optional_float(command.get("max_tau_abs")),
         )
     if kind == "joint_intent":
+        _ensure_joint_intent_safety(command)
         return runtime.execute_owner_intent_frame(
             JointIntentFrame(
                 q_start=tuple(_object_float_list(command.get("expected_q_start"))),
@@ -702,6 +840,11 @@ def _execute_motion_command(
                     None
                     if command.get("max_joint_delta_rad") is None
                     else float(command.get("max_joint_delta_rad"))
+                ),
+                max_joint_velocity_rad_s=(
+                    None
+                    if command.get("max_joint_velocity_rad_s") is None
+                    else float(command.get("max_joint_velocity_rad_s"))
                 ),
             ),
             owner=str(command.get("owner")),
@@ -714,6 +857,7 @@ def _execute_motion_command(
             max_tau_abs=_optional_float(command.get("max_tau_abs")),
         )
     if kind in EEF_COMMAND_KINDS:
+        _ensure_eef_reference_limit(command)
         runtime._raise_if_not_owned(owner=str(command.get("owner")), mode=MotionMode.AGENT_SERVO)
         executor = getattr(backend, "execute_eef_command", None)
         if not callable(executor):
@@ -729,6 +873,93 @@ def _execute_motion_command(
         )
         return runtime._finish_owner_motion(owner=str(command.get("owner")), result=result)
     raise ValueError(f"unsupported runtime command kind: {kind}")
+
+
+def _resolve_command_execution_backend(
+    command: dict[str, object],
+    *,
+    session: dict[str, object],
+    primary_backend: MotionBackend,
+    eef_backends: Mapping[str, MotionBackend] | None,
+) -> MotionBackend:
+    command["_resolved_runtime_backend"] = str(session.get("backend") or "unknown")
+    if command.get("kind") not in EEF_COMMAND_KINDS:
+        return primary_backend
+    adapter_name = str(command.get("backend") or "")
+    if eef_backends is not None and adapter_name in eef_backends:
+        command["_resolved_eef_adapter"] = adapter_name
+        command["_eef_adapter_resolution"] = "configured_adapter_registry"
+        return eef_backends[adapter_name]
+    command["_resolved_eef_adapter"] = (
+        adapter_name
+        if callable(getattr(primary_backend, "execute_eef_command", None))
+        else None
+    )
+    command["_eef_adapter_resolution"] = "primary_backend"
+    return primary_backend
+
+
+def _prepare_eef_servo_switch(
+    *,
+    command: dict[str, object],
+    backend: MotionBackend,
+) -> dict[str, object]:
+    """Prepare an EEF backend without releasing the live runtime owner."""
+
+    q_before = tuple(float(value) for value in backend.read_joint_state().q_meas)
+    prepare = getattr(backend, "prepare_eef_servo_switch", None)
+    if callable(prepare):
+        payload = prepare(command)
+        if not isinstance(payload, dict):
+            raise ValueError("prepare_eef_servo_switch must return a JSON object")
+        payload = dict(payload)
+    else:
+        payload = {
+            "schema": "armctrl.eef_servo_switch.v1",
+            "status": "pass",
+            "policy": "default_live_state_zero_command_warmup",
+            "backend": command.get("backend"),
+            "target_seed": "current_live_state",
+            "zero_command_warmup_ticks": 1,
+            "checks": {
+                "sdk_owner_released": False,
+                "target_seeded_from_current_state": True,
+                "zero_command_warmup_completed": True,
+            },
+        }
+    checks = payload.get("checks")
+    if not isinstance(checks, dict):
+        checks = {}
+    checks = dict(checks)
+    checks.setdefault("sdk_owner_released", False)
+    checks.setdefault("target_seeded_from_current_state", True)
+    checks.setdefault("zero_command_warmup_completed", True)
+    checks["live_q_read_before_switch"] = bool(q_before)
+    q_after = tuple(float(value) for value in backend.read_joint_state().q_meas)
+    checks["live_q_read_after_switch"] = bool(q_after)
+    payload["checks"] = checks
+    payload.setdefault("schema", "armctrl.eef_servo_switch.v1")
+    payload.setdefault("status", "pass")
+    payload.setdefault("backend", command.get("backend"))
+    payload.setdefault("policy", "continuous_owner_bumpless_switch")
+    payload["disconnected_takeover_allowed"] = False
+    payload["sdk_owner_released"] = bool(checks.get("sdk_owner_released"))
+    payload["q_before"] = list(q_before)
+    payload["q_after"] = list(q_after)
+    failed_checks = [
+        name
+        for name, passed in checks.items()
+        if name != "sdk_owner_released" and isinstance(passed, bool) and not passed
+    ]
+    if checks.get("sdk_owner_released") is True:
+        failed_checks.append("sdk_owner_released")
+    payload["failed_checks"] = failed_checks
+    if failed_checks or payload["sdk_owner_released"]:
+        payload["status"] = "fail"
+        raise ValueError(
+            "EEF servo switch warmup failed: " + ", ".join(failed_checks or ["sdk_owner_released"])
+        )
+    return payload
 
 
 def _owner_expected_q_start(
@@ -933,6 +1164,7 @@ def _command_result_payload(
     first_send_wall_time_s: float | None,
     watchdog: dict[str, object] | None = None,
     status_update: dict[str, object] | None = None,
+    eef_switch: dict[str, object] | None = None,
 ) -> dict[str, object]:
     completed_wall_time_s = time.time()
     timing = _command_timing_summary(
@@ -998,6 +1230,10 @@ def _command_result_payload(
         "command_id": command.get("command_id"),
         "owner": command.get("owner"),
         "mode": command.get("mode"),
+        "kind": command.get("kind"),
+        "command_space": (
+            "eef" if command.get("kind") in EEF_COMMAND_KINDS else "joint"
+        ),
         "runtime_session_id": runtime_session_id,
         "movement_command_sent": bool(motion.samples),
         "start_pose_policy": str(command.get("start_pose_policy", "live_hold")),
@@ -1024,6 +1260,7 @@ def _command_result_payload(
         payload["motion"].update(_intent_motion_contract(command))
     if command.get("kind") in EEF_COMMAND_KINDS:
         payload["motion"]["eef_command"] = _eef_motion_contract(command)
+        payload["eef_switch"] = eef_switch or _eef_switch_rejected_contract(command)
     if watchdog is not None:
         payload["watchdog"] = watchdog
     return payload
@@ -1033,9 +1270,25 @@ def _eef_motion_contract(command: dict[str, object]) -> dict[str, object]:
     return {
         "kind": command.get("kind"),
         "backend": command.get("backend"),
+        "runtime_backend": command.get("_resolved_runtime_backend"),
+        "eef_adapter": command.get("_resolved_eef_adapter"),
+        "adapter_resolution": command.get("_eef_adapter_resolution"),
         "command_space": "eef",
         "eef_command": command.get("eef_command"),
+        "eef_reference_limit": command.get("eef_reference_limit"),
         "mature_backend_policy": command.get("mature_backend_policy"),
+    }
+
+
+def _eef_switch_rejected_contract(command: dict[str, object]) -> dict[str, object]:
+    return {
+        "schema": "armctrl.eef_servo_switch.v1",
+        "status": "not_run",
+        "backend": command.get("backend"),
+        "policy": "continuous_owner_bumpless_switch",
+        "disconnected_takeover_allowed": False,
+        "sdk_owner_released": False,
+        "reason": "command rejected before EEF servo switch warmup",
     }
 
 
@@ -1647,7 +1900,7 @@ def _trajectory_resampling_policy(
 
 def _trajectory_interpolation_policy(*, resampling_policy: str, kind: str) -> str:
     if kind != "joint_trajectory":
-        return "linear_intent_frame"
+        return "smoothstep_intent_frame"
     if resampling_policy == "cubic_hermite_time_resample":
         return "bounded_cubic_hermite_joint_position_velocity"
     return "pre_sampled_joint_positions"
@@ -1659,6 +1912,12 @@ def _intent_motion_contract(command: dict[str, object]) -> dict[str, object]:
         "agent_intent_hz": (
             None if control_period_s is None else 1.0 / control_period_s
         ),
+        "interpolation_policy": "smoothstep_intent_frame",
+        "max_joint_delta_rad": _optional_float(command.get("max_joint_delta_rad")),
+        "max_joint_velocity_rad_s": _optional_float(
+            command.get("max_joint_velocity_rad_s")
+        ),
+        "joint_intent_safety": command.get("joint_intent_safety"),
         "missed_intent_policy": "hold_then_damping",
         "missed_intent_timeout_s": 0.3,
         "fault_timeout_s": _optional_float(command.get("heartbeat_timeout_s")),
@@ -1673,6 +1932,340 @@ def _intent_owner_watchdog_contract(command: dict[str, object]) -> dict[str, obj
         "missed_intent_timeout_s": 0.3,
         "fault_timeout_s": _optional_float(command.get("heartbeat_timeout_s")),
         "missed_intent_held": False,
+    }
+
+
+def _ensure_eef_reference_limit(command: dict[str, object]) -> None:
+    eef_command = command.get("eef_command")
+    if not isinstance(eef_command, dict):
+        raise ValueError("EEF command requires eef_command payload")
+    existing = command.get("eef_reference_limit")
+    existing_max_linear = (
+        _optional_float(existing.get("max_linear_step_m"))
+        if isinstance(existing, dict)
+        else None
+    )
+    existing_max_angular = (
+        _optional_float(existing.get("max_angular_step_rad"))
+        if isinstance(existing, dict)
+        else None
+    )
+    guard = _eef_reference_limit_guard(
+        kind=str(command.get("kind")),
+        eef_command=eef_command,
+        max_linear_step_m=(
+            DEFAULT_EEF_MAX_LINEAR_STEP_M
+            if existing_max_linear is None
+            else existing_max_linear
+        ),
+        max_angular_step_rad=(
+            DEFAULT_EEF_MAX_ANGULAR_STEP_RAD
+            if existing_max_angular is None
+            else existing_max_angular
+        ),
+    )
+    command["eef_reference_limit"] = guard
+    if guard["status"] != "pass":
+        raise ValueError(
+            "EEF reference limit failed: "
+            + ", ".join(str(item) for item in guard["failed_checks"])
+        )
+
+
+def _ensure_joint_trajectory_safety(
+    command: dict[str, object],
+    *,
+    q_points: Sequence[Sequence[float]],
+) -> None:
+    existing = command.get("joint_trajectory_safety")
+    existing_max_segment_delta = (
+        _optional_float(existing.get("max_joint_segment_delta_rad"))
+        if isinstance(existing, dict)
+        else None
+    )
+    existing_max_velocity = (
+        _optional_float(existing.get("max_joint_velocity_rad_s"))
+        if isinstance(existing, dict)
+        else None
+    )
+    owner = str(command.get("owner"))
+    max_velocity = existing_max_velocity
+    if max_velocity is None and owner == "agent":
+        max_velocity = DEFAULT_AGENT_MAX_JOINT_VELOCITY_RAD_S
+    guard = _joint_trajectory_safety_guard(
+        owner=owner,
+        q_points=q_points,
+        trajectory_sample_hz=float(
+            command.get("trajectory_sample_hz", command.get("send_hz", 50.0))
+        ),
+        max_joint_segment_delta_rad=existing_max_segment_delta,
+        max_joint_velocity_rad_s=max_velocity,
+    )
+    command["joint_trajectory_safety"] = guard
+    if guard["status"] != "pass":
+        raise ValueError(
+            "joint trajectory safety failed: "
+            + ", ".join(str(item) for item in guard["failed_checks"])
+        )
+
+
+def _ensure_joint_intent_safety(command: dict[str, object]) -> None:
+    existing = command.get("joint_intent_safety")
+    existing_max_delta = (
+        _optional_float(existing.get("max_joint_delta_rad"))
+        if isinstance(existing, dict)
+        else None
+    )
+    existing_max_velocity = (
+        _optional_float(existing.get("max_joint_velocity_rad_s"))
+        if isinstance(existing, dict)
+        else None
+    )
+    command_max_delta = _optional_float(command.get("max_joint_delta_rad"))
+    command_max_velocity = _optional_float(command.get("max_joint_velocity_rad_s"))
+    max_delta = existing_max_delta if existing_max_delta is not None else command_max_delta
+    max_velocity = (
+        existing_max_velocity
+        if existing_max_velocity is not None
+        else command_max_velocity
+    )
+    if max_velocity is None and str(command.get("owner")) == "agent":
+        max_velocity = DEFAULT_AGENT_MAX_JOINT_VELOCITY_RAD_S
+    guard = _joint_intent_safety_guard(
+        q_start=_object_float_list(command.get("expected_q_start")),
+        q_target=_object_float_list(command.get("q_target")),
+        control_period_s=float(command.get("control_period_s")),
+        max_joint_delta_rad=max_delta,
+        max_joint_velocity_rad_s=max_velocity,
+    )
+    command["joint_intent_safety"] = guard
+    if guard["status"] != "pass":
+        raise ValueError(
+            "joint intent safety failed: "
+            + ", ".join(str(item) for item in guard["failed_checks"])
+        )
+
+
+def _eef_reference_limit_guard(
+    *,
+    kind: str,
+    eef_command: dict[str, object],
+    max_linear_step_m: float,
+    max_angular_step_rad: float,
+) -> dict[str, object]:
+    max_linear = float(max_linear_step_m)
+    max_angular = float(max_angular_step_rad)
+    if max_linear <= 0.0:
+        raise ValueError("max_linear_step_m must be positive")
+    if max_angular <= 0.0:
+        raise ValueError("max_angular_step_rad must be positive")
+    if kind == "eef_pose_delta":
+        linear_step = _fixed_float_list(
+            eef_command.get("delta_position_m"), name="delta_position_m", length=3
+        )
+        angular_step = _fixed_float_list(
+            eef_command.get("delta_rpy_rad"), name="delta_rpy_rad", length=3
+        )
+    elif kind == "eef_twist":
+        control_period_s = float(eef_command.get("control_period_s"))
+        if control_period_s <= 0.0:
+            raise ValueError("control_period_s must be positive")
+        linear_step = [
+            value * control_period_s
+            for value in _fixed_float_list(
+                eef_command.get("linear_mps"), name="linear_mps", length=3
+            )
+        ]
+        angular_step = [
+            value * control_period_s
+            for value in _fixed_float_list(
+                eef_command.get("angular_rps"), name="angular_rps", length=3
+            )
+        ]
+    elif kind == "eef_pose":
+        target_position = _fixed_float_list(
+            eef_command.get("position_m"), name="position_m", length=3
+        )
+        target_rpy = _fixed_float_list(
+            eef_command.get("rpy_rad"), name="rpy_rad", length=3
+        )
+        pose_limiter = eef_command.get("pose_reference_limiter")
+        if pose_limiter != "adapter_live_reference_limit":
+            return {
+                "schema": "armctrl.eef_reference_limit.v1",
+                "status": "fail",
+                "policy": "require_adapter_live_reference_limit_for_absolute_pose",
+                "max_linear_step_m": max_linear,
+                "max_angular_step_rad": max_angular,
+                "target_position_m": target_position,
+                "target_rpy_rad": target_rpy,
+                "linear_step_max_abs_m": max(
+                    (abs(value) for value in target_position),
+                    default=0.0,
+                ),
+                "angular_step_max_abs_rad": max(
+                    (abs(value) for value in target_rpy),
+                    default=0.0,
+                ),
+                "failed_checks": ["pose_reference_limiter_configured"],
+            }
+        return {
+            "schema": "armctrl.eef_reference_limit.v1",
+            "status": "pass",
+            "policy": "adapter_live_reference_limit_for_absolute_pose",
+            "max_linear_step_m": max_linear,
+            "max_angular_step_rad": max_angular,
+            "target_position_m": target_position,
+            "target_rpy_rad": target_rpy,
+            "pose_reference_limiter": pose_limiter,
+            "failed_checks": [],
+        }
+    else:
+        raise ValueError(f"unsupported EEF runtime command kind: {kind}")
+    linear_max_abs = max((abs(value) for value in linear_step), default=0.0)
+    angular_max_abs = max((abs(value) for value in angular_step), default=0.0)
+    failed_checks: list[str] = []
+    if linear_max_abs > max_linear:
+        failed_checks.append("linear_step_within_limit")
+    if angular_max_abs > max_angular:
+        failed_checks.append("angular_step_within_limit")
+    return {
+        "schema": "armctrl.eef_reference_limit.v1",
+        "status": "pass" if not failed_checks else "fail",
+        "policy": "reject_oversized_eef_reference_step",
+        "max_linear_step_m": max_linear,
+        "max_angular_step_rad": max_angular,
+        "linear_step_m": linear_step,
+        "angular_step_rad": angular_step,
+        "linear_step_max_abs_m": linear_max_abs,
+        "angular_step_max_abs_rad": angular_max_abs,
+        "failed_checks": failed_checks,
+    }
+
+
+def _joint_intent_safety_guard(
+    *,
+    q_start: Sequence[float],
+    q_target: Sequence[float],
+    control_period_s: float,
+    max_joint_delta_rad: float | None,
+    max_joint_velocity_rad_s: float | None,
+) -> dict[str, object]:
+    if control_period_s <= 0.0:
+        raise ValueError("control_period_s must be positive")
+    if len(q_start) != len(q_target):
+        raise ValueError("q_start and q_target must have the same length")
+    deltas = [float(target) - float(start) for start, target in zip(q_start, q_target)]
+    per_joint_abs_delta = [abs(value) for value in deltas]
+    per_joint_abs_velocity = [
+        abs(value) / float(control_period_s) for value in deltas
+    ]
+    max_abs_delta = max(per_joint_abs_delta, default=0.0)
+    max_abs_velocity = max(per_joint_abs_velocity, default=0.0)
+    failed_checks: list[str] = []
+    max_delta = None if max_joint_delta_rad is None else float(max_joint_delta_rad)
+    if max_delta is not None:
+        if max_delta <= 0.0:
+            raise ValueError("max_joint_delta_rad must be positive")
+        if max_abs_delta > max_delta:
+            failed_checks.append("joint_delta_within_limit")
+    max_velocity = (
+        None
+        if max_joint_velocity_rad_s is None
+        else float(max_joint_velocity_rad_s)
+    )
+    if max_velocity is not None:
+        if max_velocity <= 0.0:
+            raise ValueError("max_joint_velocity_rad_s must be positive")
+        if max_abs_velocity > max_velocity:
+            failed_checks.append("joint_velocity_within_limit")
+    return {
+        "schema": "armctrl.joint_intent_safety.v1",
+        "status": "pass" if not failed_checks else "fail",
+        "policy": "reject_oversized_or_too_fast_joint_intent",
+        "control_period_s": float(control_period_s),
+        "max_joint_delta_rad": max_delta,
+        "max_joint_velocity_rad_s": max_velocity,
+        "per_joint_delta_rad": deltas,
+        "per_joint_abs_delta_rad": per_joint_abs_delta,
+        "per_joint_abs_velocity_rad_s": per_joint_abs_velocity,
+        "max_abs_delta_rad": max_abs_delta,
+        "max_abs_velocity_rad_s": max_abs_velocity,
+        "failed_checks": failed_checks,
+    }
+
+
+def _joint_trajectory_safety_guard(
+    *,
+    owner: str,
+    q_points: Sequence[Sequence[float]],
+    trajectory_sample_hz: float,
+    max_joint_segment_delta_rad: float | None,
+    max_joint_velocity_rad_s: float | None,
+) -> dict[str, object]:
+    if trajectory_sample_hz <= 0.0:
+        raise ValueError("trajectory_sample_hz must be positive")
+    max_segment_delta = (
+        None
+        if max_joint_segment_delta_rad is None
+        else float(max_joint_segment_delta_rad)
+    )
+    if max_segment_delta is not None and max_segment_delta <= 0.0:
+        raise ValueError("max_joint_segment_delta_rad must be positive")
+    max_velocity = (
+        None
+        if max_joint_velocity_rad_s is None
+        else float(max_joint_velocity_rad_s)
+    )
+    if max_velocity is not None and max_velocity <= 0.0:
+        raise ValueError("max_joint_velocity_rad_s must be positive")
+
+    segment_deltas: list[list[float]] = []
+    segment_abs_deltas: list[list[float]] = []
+    segment_abs_velocities: list[list[float]] = []
+    for previous, current in zip(q_points, q_points[1:]):
+        deltas = [
+            float(current_value) - float(previous_value)
+            for previous_value, current_value in zip(previous, current)
+        ]
+        abs_deltas = [abs(value) for value in deltas]
+        segment_deltas.append(deltas)
+        segment_abs_deltas.append(abs_deltas)
+        segment_abs_velocities.append(
+            [value * float(trajectory_sample_hz) for value in abs_deltas]
+        )
+    max_abs_delta = max(
+        (value for segment in segment_abs_deltas for value in segment),
+        default=0.0,
+    )
+    max_abs_velocity = max(
+        (value for segment in segment_abs_velocities for value in segment),
+        default=0.0,
+    )
+    failed_checks: list[str] = []
+    if max_segment_delta is not None and max_abs_delta > max_segment_delta:
+        failed_checks.append("joint_segment_delta_within_limit")
+    if max_velocity is not None and max_abs_velocity > max_velocity:
+        failed_checks.append("joint_velocity_within_limit")
+    policy = (
+        "reject_oversized_or_too_fast_agent_joint_trajectory"
+        if str(owner) == "agent"
+        else "record_only_for_non_agent_joint_trajectory"
+    )
+    return {
+        "schema": "armctrl.joint_trajectory_safety.v1",
+        "status": "pass" if not failed_checks else "fail",
+        "policy": policy,
+        "owner": str(owner),
+        "trajectory_sample_hz": float(trajectory_sample_hz),
+        "max_joint_segment_delta_rad": max_segment_delta,
+        "max_joint_velocity_rad_s": max_velocity,
+        "segment_delta_rad": segment_deltas,
+        "segment_abs_delta_rad": segment_abs_deltas,
+        "segment_abs_velocity_rad_s": segment_abs_velocities,
+        "max_segment_abs_delta_rad": max_abs_delta,
+        "max_segment_abs_velocity_rad_s": max_abs_velocity,
+        "failed_checks": failed_checks,
     }
 
 

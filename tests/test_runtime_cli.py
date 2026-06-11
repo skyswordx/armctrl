@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import subprocess
 import sys
@@ -181,6 +182,113 @@ def test_cli_motion_submit_joint_intent_queues_runtime_command(tmp_path: Path) -
     assert command["kind"] == "joint_intent"
     assert command["command_surface"] == "armctrl.motion.submit.v1"
     assert command["motion_kind"] == "joint-intent"
+    assert command["max_joint_velocity_rad_s"] == pytest.approx(0.25)
+    assert command["joint_intent_safety"]["status"] == "pass"
+
+
+def test_cli_motion_submit_joint_intent_rejects_overfast_visible_step(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "motion",
+            "submit",
+            "joint-intent",
+            "--session-artifact",
+            str(session_artifact),
+            "--owner",
+            "agent",
+            "--expected-q-start",
+            "0.0",
+            "0.3",
+            "0.3",
+            "--q-target",
+            "0.0",
+            "0.5",
+            "0.3",
+            "--control-period-s",
+            "0.1",
+            "--send-hz",
+            "50",
+            "--max-joint-delta-rad",
+            "0.20",
+            "--max-joint-velocity-rad-s",
+            "0.25",
+            "--max-heartbeat-age-s",
+            "5",
+            "--json",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(completed.stdout)
+
+    assert completed.returncode == 3
+    assert payload["status"] == "rejected"
+    assert payload["motion_kind"] == "joint-intent"
+    assert "joint_velocity_within_limit" in payload["reason"]
+
+
+def test_cli_motion_submit_joint_intent_allows_visible_slow_sweep_with_shape_policy(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "motion",
+            "submit",
+            "joint-intent",
+            "--session-artifact",
+            str(session_artifact),
+            "--owner",
+            "agent",
+            "--expected-q-start",
+            "0.0",
+            "0.3",
+            "0.3",
+            "--q-target",
+            "0.8",
+            "0.3",
+            "0.3",
+            "--control-period-s",
+            "12.0",
+            "--send-hz",
+            "50",
+            "--max-joint-delta-rad",
+            "0.85",
+            "--max-joint-velocity-rad-s",
+            "0.08",
+            "--max-heartbeat-age-s",
+            "5",
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(completed.stdout)
+    command = json.loads(Path(payload["artifacts"]["command"]).read_text(encoding="utf-8"))
+
+    assert payload["status"] == "queued"
+    assert command["kind"] == "joint_intent"
+    assert command["joint_intent_safety"]["status"] == "pass"
+    assert command["max_joint_velocity_rad_s"] == pytest.approx(0.08)
+    assert command["interpolation_policy"] == "smoothstep_intent_frame"
+    assert command["resampling_policy"] == "intent_frame_to_runtime_send_hz"
+    assert command["expected_runtime_sample_count"] == 601
+    assert payload["expected_runtime_sample_count"] == 601
 
 
 def test_cli_motion_submit_joint_trajectory_queues_runtime_command(
@@ -235,6 +343,521 @@ def test_cli_motion_submit_joint_trajectory_queues_runtime_command(
     assert command["kind"] == "joint_trajectory"
     assert command["command_surface"] == "armctrl.motion.submit.v1"
     assert command["motion_kind"] == "joint-trajectory"
+
+
+def test_cli_motion_submit_agent_joint_trajectory_rejects_overfast_waypoints(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "motion",
+            "submit",
+            "joint-trajectory",
+            "--session-artifact",
+            str(session_artifact),
+            "--owner",
+            "agent",
+            "--expected-q-start",
+            "0.0",
+            "0.3",
+            "0.3",
+            "--q-point",
+            "0.0",
+            "0.3",
+            "0.3",
+            "--q-point",
+            "0.50",
+            "0.3",
+            "0.3",
+            "--send-hz",
+            "50",
+            "--trajectory-sample-hz",
+            "50",
+            "--max-joint-velocity-rad-s",
+            "0.25",
+            "--max-heartbeat-age-s",
+            "5",
+            "--json",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(completed.stdout)
+
+    assert completed.returncode == 3
+    assert payload["status"] == "rejected"
+    assert payload["motion_kind"] == "joint-trajectory"
+    assert "joint_velocity_within_limit" in payload["reason"]
+
+
+def test_cli_motion_submit_agent_joint_trajectory_records_safety_summary(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "motion",
+            "submit",
+            "joint-trajectory",
+            "--session-artifact",
+            str(session_artifact),
+            "--owner",
+            "agent",
+            "--expected-q-start",
+            "0.0",
+            "0.3",
+            "0.3",
+            "--q-point",
+            "0.0",
+            "0.3",
+            "0.3",
+            "--q-point",
+            "0.60",
+            "0.3",
+            "0.3",
+            "--send-hz",
+            "50",
+            "--trajectory-sample-hz",
+            "1",
+            "--max-joint-segment-delta-rad",
+            "0.65",
+            "--max-joint-velocity-rad-s",
+            "0.75",
+            "--max-heartbeat-age-s",
+            "5",
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(completed.stdout)
+    command = json.loads(Path(payload["artifacts"]["command"]).read_text(encoding="utf-8"))
+
+    assert payload["status"] == "queued"
+    assert payload["joint_trajectory_safety"]["status"] == "pass"
+    assert command["joint_trajectory_safety"]["schema"] == (
+        "armctrl.joint_trajectory_safety.v1"
+    )
+    assert command["joint_trajectory_safety"]["max_joint_velocity_rad_s"] == (
+        pytest.approx(0.75)
+    )
+    assert command["joint_trajectory_safety"]["max_segment_abs_velocity_rad_s"] == (
+        pytest.approx(0.6)
+    )
+    assert command["joint_trajectory_safety"]["max_segment_abs_delta_rad"] == (
+        pytest.approx(0.6)
+    )
+
+
+def test_cli_motion_compile_agent_joint_target_writes_shared_joint_trajectory_contract(
+    tmp_path: Path,
+) -> None:
+    output_dir = tmp_path / "compiled-agent-target"
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "motion",
+            "compile",
+            "joint-trajectory",
+            "--source",
+            "agent",
+            "--owner",
+            "agent",
+            "--expected-q-start",
+            "0.0",
+            "0.3",
+            "0.3",
+            "--q-target",
+            "0.45",
+            "0.3",
+            "0.3",
+            "--duration-s",
+            "6.0",
+            "--sample-hz",
+            "50",
+            "--send-hz",
+            "100",
+            "--max-joint-segment-delta-rad",
+            "0.02",
+            "--max-joint-velocity-rad-s",
+            "0.25",
+            "--output",
+            str(output_dir),
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(completed.stdout)
+    command = json.loads(
+        Path(payload["artifacts"]["compiled_command"]).read_text(encoding="utf-8")
+    )
+
+    assert payload["status"] == "ok"
+    assert payload["schema"] == "armctrl.motion_runtime_compile.v1"
+    assert payload["command_surface"] == "armctrl.motion.submit.v1"
+    assert payload["motion_kind"] == "joint-trajectory"
+    assert payload["source"] == "agent"
+    assert payload["owner"] == "agent"
+    assert payload["sample_count"] == 301
+    assert command["schema"] == "armctrl.compiled_motion_command.v1"
+    assert command["source"] == "agent"
+    assert command["owner"] == "agent"
+    assert command["expected_q_start"] == [0.0, 0.3, 0.3]
+    assert command["q_points"][0] == [0.0, 0.3, 0.3]
+    assert command["q_points"][-1] == [0.45, 0.3, 0.3]
+    assert len(command["q_points"]) == 301
+    assert len(command["dq_points"]) == 301
+    assert len(command["ddq_points"]) == 301
+    assert command["dq_points"][0] == pytest.approx([0.0, 0.0, 0.0])
+    assert command["dq_points"][-1] == pytest.approx([0.0, 0.0, 0.0])
+    assert command["artifact_policy"]["schema"] == "armctrl.joint_trajectory_compiler_policy.v1"
+    assert command["artifact_policy"]["q_cmd"] == "generated_smoothstep_joint_target"
+    assert command["artifact_policy"]["dq_cmd"] == "derived_smoothstep_analytic"
+    assert command["artifact_policy"]["ddq_cmd"] == "derived_smoothstep_analytic"
+    assert command["interpolation_policy"] == "smoothstep_joint_target"
+    assert command["resampling_policy"] == "compiled_joint_trajectory_to_runtime_send_hz"
+    assert command["joint_trajectory_safety"]["status"] == "pass"
+
+
+def test_cli_motion_compile_agent_waypoints_derives_missing_dq_ddq_with_policy(
+    tmp_path: Path,
+) -> None:
+    output_dir = tmp_path / "compiled-agent-waypoints"
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "motion",
+            "compile",
+            "joint-trajectory",
+            "--source",
+            "agent",
+            "--owner",
+            "agent",
+            "--expected-q-start",
+            "0.0",
+            "0.3",
+            "0.3",
+            "--q-point",
+            "0.0",
+            "0.3",
+            "0.3",
+            "--q-point",
+            "0.02",
+            "0.3",
+            "0.3",
+            "--q-point",
+            "0.04",
+            "0.3",
+            "0.3",
+            "--sample-hz",
+            "10",
+            "--send-hz",
+            "50",
+            "--max-joint-velocity-rad-s",
+            "0.25",
+            "--output",
+            str(output_dir),
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(completed.stdout)
+    command = json.loads(
+        Path(payload["artifacts"]["compiled_command"]).read_text(encoding="utf-8")
+    )
+
+    assert payload["status"] == "ok"
+    assert command["q_points"] == [
+        [0.0, 0.3, 0.3],
+        [0.02, 0.3, 0.3],
+        [0.04, 0.3, 0.3],
+    ]
+    assert command["dq_points"][0] == pytest.approx([0.2, 0.0, 0.0])
+    assert command["dq_points"][1] == pytest.approx([0.2, 0.0, 0.0])
+    assert command["ddq_points"][1] == pytest.approx([0.0, 0.0, 0.0])
+    assert command["artifact_policy"]["q_cmd"] == "preserved_waypoints"
+    assert command["artifact_policy"]["dq_cmd"] == "derived_finite_difference"
+    assert command["artifact_policy"]["ddq_cmd"] == "derived_finite_difference"
+
+
+def test_runtime_revalidates_agent_joint_trajectory_safety_before_execute(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    submitted = submit_trajectory_command(
+        session_artifact_path=session_artifact,
+        owner="agent",
+        expected_q_start=(0.0, 0.3, 0.3),
+        q_points=[(0.0, 0.3, 0.3), (0.004, 0.3, 0.3)],
+        send_hz=50.0,
+        trajectory_sample_hz=50.0,
+        max_start_error_rad=0.02,
+        heartbeat_timeout_s=0.5,
+        max_heartbeat_age_s=5.0,
+        max_joint_segment_delta_rad=0.02,
+        max_joint_velocity_rad_s=0.25,
+    )
+    command_path = Path(submitted["artifacts"]["command"])
+    command = json.loads(command_path.read_text(encoding="utf-8"))
+    command["q_points"] = [[0.0, 0.3, 0.3], [0.80, 0.3, 0.3]]
+    command.pop("joint_trajectory_safety", None)
+    command_path.write_text(json.dumps(command), encoding="utf-8")
+
+    session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    backend = FakeMotionBackend()
+    backend.send_joint_command(
+        tuple(float(value) for value in session["q_meas"]),
+        producer="test_bootstrap",
+        mode=MotionMode.HOLD,
+        monotonic_s=0.0,
+    )
+    runtime = ArmRuntime(
+        backend=backend,
+        safe_center=tuple(float(value) for value in session["safe_center"]),
+        runtime_session_id=str(session["runtime_session_id"]),
+    )
+    runtime.mark_hold_safe(q_hold=tuple(float(value) for value in session["q_hold"]))
+
+    result = execute_pending_runtime_commands(
+        session_artifact_path=session_artifact,
+        backend=backend,
+        runtime=runtime,
+        max_heartbeat_age_s=5.0,
+    )
+
+    assert result is not None
+    assert result["status"] == "rejected"
+    assert "joint trajectory safety failed" in result["reason"]
+    assert "joint_velocity_within_limit" in result["reason"]
+    assert result["movement_command_sent"] is False
+    assert not any(
+        command.producer == "agent"
+        and command.mode == MotionMode.TRAJECTORY_REPLAY.value
+        for command in backend.joint_commands
+    )
+
+
+def test_runtime_revalidates_agent_joint_intent_safety_before_execute(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    submitted = submit_intent_command(
+        session_artifact_path=session_artifact,
+        owner="agent",
+        expected_q_start=(0.0, 0.3, 0.3),
+        q_target=(0.004, 0.3, 0.3),
+        control_period_s=0.1,
+        send_hz=50.0,
+        max_joint_delta_rad=0.02,
+        max_start_error_rad=0.02,
+        heartbeat_timeout_s=0.5,
+        max_heartbeat_age_s=5.0,
+        max_joint_velocity_rad_s=0.25,
+    )
+    command_path = Path(submitted["artifacts"]["command"])
+    command = json.loads(command_path.read_text(encoding="utf-8"))
+    command["q_target"] = [0.80, 0.3, 0.3]
+    command.pop("joint_intent_safety", None)
+    command_path.write_text(json.dumps(command), encoding="utf-8")
+
+    session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    backend = FakeMotionBackend()
+    backend.send_joint_command(
+        tuple(float(value) for value in session["q_meas"]),
+        producer="test_bootstrap",
+        mode=MotionMode.HOLD,
+        monotonic_s=0.0,
+    )
+    runtime = ArmRuntime(
+        backend=backend,
+        safe_center=tuple(float(value) for value in session["safe_center"]),
+        runtime_session_id=str(session["runtime_session_id"]),
+    )
+    runtime.mark_hold_safe(q_hold=tuple(float(value) for value in session["q_hold"]))
+
+    result = execute_pending_runtime_commands(
+        session_artifact_path=session_artifact,
+        backend=backend,
+        runtime=runtime,
+        max_heartbeat_age_s=5.0,
+    )
+
+    assert result is not None
+    assert result["status"] == "rejected"
+    assert "joint intent safety failed" in result["reason"]
+    assert "joint_velocity_within_limit" in result["reason"]
+    assert result["movement_command_sent"] is False
+    assert not any(
+        command.producer == "agent"
+        and command.mode == MotionMode.AGENT_SERVO.value
+        for command in backend.joint_commands
+    )
+
+
+def test_cli_motion_submit_joint_trajectory_accepts_compiled_sysid_command(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    compiled_command = tmp_path / "compiled-sysid-command.json"
+    compiled_command.write_text(
+        json.dumps(
+            {
+                "schema": "armctrl.compiled_motion_command.v1",
+                "command_surface": "armctrl.motion.submit.v1",
+                "motion_kind": "joint-trajectory",
+                "source": "sysid",
+                "owner": "sysid",
+                "expected_q_start": [0.0, 0.3, 0.3],
+                "q_points": [
+                    [0.0, 0.3, 0.3],
+                    [0.002, 0.3, 0.3],
+                    [0.004, 0.3, 0.3],
+                ],
+                "dq_points": [
+                    [0.0, 0.0, 0.0],
+                    [0.1, 0.0, 0.0],
+                    [0.1, 0.0, 0.0],
+                ],
+                "send_hz": 100.0,
+                "trajectory_sample_hz": 100.0,
+                "start_pose_policy": "safe_center",
+                "artifact_policy": {
+                    "schema": "armctrl.sysid_runtime_compiler_policy.v1",
+                    "q_cmd": "preserved",
+                    "dq_cmd": "preserved",
+                    "ddq_cmd": "missing",
+                    "sample_hz": 100.0,
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "motion",
+            "submit",
+            "joint-trajectory",
+            "--session-artifact",
+            str(session_artifact),
+            "--compiled-command",
+            str(compiled_command),
+            "--max-heartbeat-age-s",
+            "5",
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(completed.stdout)
+    command = json.loads(Path(payload["artifacts"]["command"]).read_text(encoding="utf-8"))
+
+    assert payload["status"] == "queued"
+    assert payload["owner"] == "sysid"
+    assert payload["command_surface"] == "armctrl.motion.submit.v1"
+    assert payload["motion_kind"] == "joint-trajectory"
+    assert payload["compiled_command_artifact"] == str(compiled_command)
+    assert command["owner"] == "sysid"
+    assert command["source"] == "sysid"
+    assert command["q_points"] == [
+        [0.0, 0.3, 0.3],
+        [0.002, 0.3, 0.3],
+        [0.004, 0.3, 0.3],
+    ]
+    assert command["dq_points"] == [
+        [0.0, 0.0, 0.0],
+        [0.1, 0.0, 0.0],
+        [0.1, 0.0, 0.0],
+    ]
+    assert command["artifact_policy"]["dq_cmd"] == "preserved"
+
+    session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    clock = ManualClock()
+    backend = FakeMotionBackend()
+    backend.send_joint_command(
+        tuple(float(value) for value in session["q_meas"]),
+        producer="test_bootstrap",
+        mode=MotionMode.HOLD,
+        monotonic_s=clock.monotonic(),
+    )
+    runtime = ArmRuntime(
+        backend=backend,
+        safe_center=tuple(float(value) for value in session["safe_center"]),
+        runtime_session_id=str(session["runtime_session_id"]),
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+    runtime.mark_hold_safe(q_hold=tuple(float(value) for value in session["q_hold"]))
+
+    result = execute_pending_runtime_commands(
+        session_artifact_path=session_artifact,
+        backend=backend,
+        runtime=runtime,
+        max_heartbeat_age_s=5.0,
+    )
+    assert result is not None
+    assert result["status"] == "completed"
+    assert result["owner"] == "sysid"
+    assert result["mode"] == "trajectory_replay"
+    result_check = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "motion",
+            "result",
+            "--result-artifact",
+            payload["artifacts"]["result"],
+            "--expect-owner",
+            "sysid",
+            "--expect-mode",
+            "trajectory_replay",
+            "--expect-sample-count",
+            "3",
+            "--max-jitter-p99-ms",
+            "6",
+            "--max-tracking-error-rad",
+            "0.05",
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    checked = json.loads(result_check.stdout)
+    assert checked["status"] == "pass"
 
 
 def test_cli_motion_submit_eef_delta_queues_sdk_cartesian_command(tmp_path: Path) -> None:
@@ -341,7 +964,7 @@ def test_cli_motion_submit_eef_twist_queues_moveit_servo_command(
     assert command["motion_kind"] == "eef-twist"
 
 
-def test_cli_motion_submit_eef_pose_rejects_without_mature_pose_backend(
+def test_cli_motion_submit_eef_pose_queues_runtime_command(
     tmp_path: Path,
 ) -> None:
     session_artifact = tmp_path / "runtime_session.json"
@@ -359,6 +982,10 @@ def test_cli_motion_submit_eef_pose_rejects_without_mature_pose_backend(
             str(session_artifact),
             "--owner",
             "agent",
+            "--expected-q-start",
+            "0.0",
+            "0.3",
+            "0.3",
             "--frame",
             "base_link",
             "--position",
@@ -369,25 +996,31 @@ def test_cli_motion_submit_eef_pose_rejects_without_mature_pose_backend(
             "0.0",
             "0.0",
             "0.0",
+            "--max-heartbeat-age-s",
+            "5",
             "--json",
         ],
         capture_output=True,
         text=True,
     )
     payload = json.loads(completed.stdout)
+    command = json.loads(Path(payload["artifacts"]["command"]).read_text(encoding="utf-8"))
 
-    assert completed.returncode == 3
-    assert payload["status"] == "rejected"
+    assert completed.returncode == 0
+    assert payload["status"] == "queued"
     assert payload["command_surface"] == "armctrl.motion.submit.v1"
     assert payload["motion_kind"] == "eef-pose"
-    assert payload["requested_command"] == {
-        "kind": "eef_pose",
-        "frame": "base_link",
-        "position_m": [0.3, 0.0, 0.2],
-        "rpy_rad": [0.0, 0.0, 0.0],
-    }
+    assert payload["command_space"] == "eef"
     assert payload["movement_command_sent"] is False
-    assert "heuristic joint fallback is forbidden" in payload["reason"]
+    assert command["kind"] == "eef_pose"
+    assert command["eef_command"]["frame"] == "base_link"
+    assert command["eef_command"]["position_m"] == [0.3, 0.0, 0.2]
+    assert command["eef_command"]["rpy_rad"] == [0.0, 0.0, 0.0]
+    assert command["eef_command"]["pose_reference_limiter"] == (
+        "adapter_live_reference_limit"
+    )
+    assert payload["mature_backend_policy"]["disconnected_takeover_allowed"] is False
+    assert command["mature_backend_policy"]["no_heuristic_joint_fallback"] is True
 
 
 def test_cli_motion_submit_joint_jog_rejects_until_deadman_backend_exists(
@@ -476,9 +1109,10 @@ def test_cli_profile_list_and_show_builtin_profiles() -> None:
 
     assert show_payload["status"] == "ok"
     assert show_payload["profile"] == "lab-agent-eef"
-    assert show_payload["runtime_backend"] == "sdk_cartesian"
-    assert show_payload["start_pose_policy"] == "current_measured_pose"
+    assert show_payload["runtime_backend"] == "arx5_sdk"
+    assert show_payload["start_pose_policy"] == "controlled_eef_ready_hold"
     assert "eef-delta" in show_payload["supported_motion_kinds"]
+    assert "eef-pose" in show_payload["supported_motion_kinds"]
 
 
 def test_cli_console_status_exposes_runtime_profiles_and_motion_surface(
@@ -513,7 +1147,11 @@ def test_cli_console_status_exposes_runtime_profiles_and_motion_surface(
     assert {"lab-sysid", "lab-agent-eef", "recipe", "teleop"} <= profile_names
     assert payload["motion_surface"]["submit_schema"] == "armctrl.motion.submit.v1"
     assert "joint-trajectory" in payload["motion_surface"]["supported_submit_kinds"]
-    assert "eef-pose" in payload["motion_surface"]["hardware_not_implemented_yet"]
+    assert "eef-pose" not in payload["motion_surface"]["hardware_not_implemented_yet"]
+    assert payload["motion_surface"]["reserved_contract_kinds"]["eef-pose"] == (
+        "absolute EEF pose runtime command; requires a mature pose adapter "
+        "with live reference limiting"
+    )
 
 
 def test_cli_console_catalog_exposes_profiles_without_runtime() -> None:
@@ -538,8 +1176,45 @@ def test_cli_console_catalog_exposes_profiles_without_runtime() -> None:
     assert {"lab-sysid", "lab-agent-eef", "lab-agent-joint", "recipe", "teleop"} <= profile_names
     assert payload["motion_surface"]["submit_schema"] == "armctrl.motion.submit.v1"
     assert "armctrl motion submit joint-intent" in payload["motion_surface"]["formal_cli"]
+    assert payload["motion_surface"]["eef_control_policy"]["disconnected_takeover_allowed"] is False
+    assert payload["motion_surface"]["eef_control_policy"]["bumpless_switch_required"] is True
+    assert payload["motion_surface"]["eef_control_policy"]["reference_limit_policy"] == {
+        "policy": "reject_oversized_eef_reference_step",
+        "default_max_linear_step_m": 0.005,
+        "default_max_angular_step_rad": 0.05,
+        "clamping": False,
+        "enforced_at": ["submit", "execute"],
+    }
     assert payload["operator_surfaces"]["submit_motion"] == "armctrl motion submit <kind> ..."
     assert payload["legacy_policy"]["formal_control_surface"] == "motion/profile/console"
+    assert payload["legacy_policy"]["sysid_run_sdk"] == (
+        "parser-level removed; sysid run only accepts --adapter {fake}; "
+        "use sysid compile-runtime plus motion submit joint-trajectory"
+    )
+    assert payload["command_classes"]["formal"] == [
+        "console",
+        "profile",
+        "runtime",
+        "motion",
+    ]
+    assert "armctrl sysid compile-runtime" in payload["command_classes"]["compiler"]
+    assert "armctrl sysid run ... --adapter sdk" not in payload["command_classes"]["compiler"]
+    assert "armctrl sysid run ... --adapter sdk" in payload["command_classes"]["removed"]
+    assert "armctrl sysid sdk-doctor" in payload["command_classes"]["read_only_diagnostic"]
+    assert "armctrl sysid sdk-jog-real" in payload["command_classes"]["hardware_diagnostic_only"]
+    assert (
+        "armctrl sysid sdk-tiny-motion-execute-real"
+        in payload["command_classes"]["hardware_diagnostic_only"]
+    )
+    assert "armctrl sysid sdk-jog-real" not in payload["command_classes"]["formal"]
+    assert "armctrl runtime submit-trajectory" in payload["command_classes"]["legacy_alias"]
+    assert (
+        "armctrl sysid sdk-agent-sysid-smoke-readiness"
+        in payload["command_classes"]["read_only_diagnostic"]
+    )
+    assert payload["command_classes"]["diagnostic"] == [
+        "see read_only_diagnostic and hardware_diagnostic_only"
+    ]
 
 
 def test_cli_runtime_submit_eef_accepts_sdk_cartesian_backend(tmp_path: Path) -> None:
@@ -569,6 +1244,33 @@ def test_cli_runtime_submit_eef_accepts_sdk_cartesian_backend(tmp_path: Path) ->
     assert command["backend"] == "sdk_cartesian"
     assert command["mature_backend_policy"]["selected"] == "sdk_cartesian"
     assert command["mature_backend_policy"]["no_heuristic_joint_fallback"] is True
+    assert command["mature_backend_policy"]["execution_model"] == "continuous_owner_eef_servo"
+    assert command["mature_backend_policy"]["disconnected_takeover_allowed"] is False
+    assert payload["mature_backend_policy"]["bumpless_switch_required"] is True
+    assert command["eef_reference_limit"]["status"] == "pass"
+    assert command["eef_reference_limit"]["max_linear_step_m"] == 0.005
+
+
+def test_cli_runtime_submit_eef_rejects_oversized_reference_step(tmp_path: Path) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+
+    with pytest.raises(ValueError, match="EEF reference limit"):
+        submit_eef_command(
+            session_artifact_path=session_artifact,
+            owner="agent",
+            backend="sdk_cartesian",
+            kind="eef_pose_delta",
+            frame="eef_link",
+            expected_q_start=(0.0, 0.3, 0.3),
+            control_period_s=0.1,
+            send_hz=50.0,
+            delta_position_m=(0.02, 0.0, 0.0),
+            delta_rpy_rad=(0.0, 0.0, 0.0),
+            max_start_error_rad=0.02,
+            heartbeat_timeout_s=0.5,
+            max_heartbeat_age_s=5.0,
+        )
 
 
 def test_cli_runtime_submit_eef_current_measured_pose_allows_cartesian_q_drift(
@@ -657,6 +1359,9 @@ def test_runtime_eef_current_measured_pose_executes_despite_cartesian_q_drift(
     assert result["movement_command_sent"] is True
     assert result["start_pose_policy"] == "current_measured_pose"
     assert result["motion"]["eef_command"]["command_space"] == "eef"
+    assert result["eef_switch"]["status"] == "pass"
+    assert result["eef_switch"]["disconnected_takeover_allowed"] is False
+    assert result["eef_switch"]["sdk_owner_released"] is False
     updated_session = json.loads(session_artifact.read_text(encoding="utf-8"))
     assert updated_session["mode"] == "hold_safe"
     assert updated_session["owner"] is None
@@ -703,7 +1408,44 @@ class FakeCartesianEefBackend(FakeMotionBackend):
         )
 
 
-def test_cli_runtime_start_sdk_cartesian_requires_real_confirm(tmp_path: Path) -> None:
+class OwnerReleasingEefBackend(FakeCartesianEefBackend):
+    def __init__(self, *, q_state: tuple[float, ...]) -> None:
+        super().__init__(q_state=q_state)
+        self.executed = False
+
+    def prepare_eef_servo_switch(self, command: dict[str, object]) -> dict[str, object]:
+        return {
+            "schema": "armctrl.eef_servo_switch.v1",
+            "status": "fail",
+            "backend": command.get("backend"),
+            "policy": "continuous_owner_bumpless_switch",
+            "checks": {
+                "sdk_owner_released": True,
+                "target_seeded_from_current_state": False,
+                "zero_command_warmup_completed": False,
+            },
+        }
+
+    def execute_eef_command(
+        self,
+        command: dict[str, object],
+        *,
+        owner: str,
+        watchdog=None,
+        on_sample=None,
+    ) -> MotionExecutionResult:
+        self.executed = True
+        return super().execute_eef_command(
+            command,
+            owner=owner,
+            watchdog=watchdog,
+            on_sample=on_sample,
+        )
+
+
+def test_cli_runtime_start_sdk_cartesian_is_diagnostic_only_without_explicit_opt_in(
+    tmp_path: Path,
+) -> None:
     output_artifact = tmp_path / "runtime_session.json"
 
     completed = subprocess.run(
@@ -734,6 +1476,12 @@ def test_cli_runtime_start_sdk_cartesian_requires_real_confirm(tmp_path: Path) -
     assert completed.returncode == 3
     assert payload["status"] == "rejected"
     assert payload["backend"] == "sdk_cartesian"
+    assert payload["diagnostic_only"] is True
+    assert payload["formal_runtime_gateway"] is False
+    assert payload["reason"] == (
+        "runtime start --backend sdk_cartesian is a disconnected diagnostic "
+        "takeover, not the formal Agent EEF runtime path"
+    )
     assert payload["movement_command_sent"] is False
     assert payload["artifacts"]["runtime_session"] == str(output_artifact)
 
@@ -779,7 +1527,152 @@ def test_runtime_eef_command_rejects_without_mature_backend_executor(
     assert result["mode"] == "agent_servo"
     assert result["movement_command_sent"] is False
     assert "EEF runtime command requires a configured mature backend adapter" in result["reason"]
+    assert result["eef_switch"]["status"] == "not_run"
     assert len(backend.joint_commands) == 1
+
+
+def test_runtime_eef_command_revalidates_reference_limit_before_execute(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    backend = FakeCartesianEefBackend(q_state=tuple(float(value) for value in session["q_hold"]))
+    runtime = ArmRuntime(
+        backend=backend,
+        safe_center=tuple(float(value) for value in session["safe_center"]),
+        runtime_session_id=str(session["runtime_session_id"]),
+    )
+    runtime.mark_hold_safe(q_hold=tuple(float(value) for value in session["q_hold"]))
+    payload = submit_eef_command(
+        session_artifact_path=session_artifact,
+        owner="agent",
+        backend="moveit_servo",
+        kind="eef_pose_delta",
+        frame="eef_link",
+        expected_q_start=tuple(session["q_hold"]),
+        control_period_s=0.1,
+        send_hz=50.0,
+        delta_position_m=(0.002, 0.0, 0.0),
+        delta_rpy_rad=(0.0, 0.0, 0.0),
+        max_start_error_rad=0.02,
+        heartbeat_timeout_s=0.5,
+        max_heartbeat_age_s=5.0,
+    )
+    command_path = Path(payload["artifacts"]["command"])
+    command = json.loads(command_path.read_text(encoding="utf-8"))
+    command["eef_command"]["delta_position_m"] = [0.02, 0.0, 0.0]
+    command_path.write_text(json.dumps(command), encoding="utf-8")
+
+    result = execute_pending_runtime_commands(
+        session_artifact_path=session_artifact,
+        backend=backend,
+        runtime=runtime,
+        max_heartbeat_age_s=5.0,
+    )
+
+    assert result is not None
+    assert result["status"] == "rejected"
+    assert result["movement_command_sent"] is False
+    assert "EEF reference limit failed" in result["reason"]
+    assert "linear_step_within_limit" in result["reason"]
+
+
+def test_runtime_eef_pose_requires_adapter_reference_limiter_before_execute(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    published: list[dict[str, object]] = []
+    backend = MoveItServoRuntimeBackend(
+        q_state=tuple(float(value) for value in session["q_hold"]),
+        publisher=lambda message: published.append(message),
+        monotonic=lambda: 10.0,
+        sleep=lambda _duration_s: None,
+    )
+    runtime = ArmRuntime(
+        backend=backend,
+        safe_center=tuple(float(value) for value in session["safe_center"]),
+        runtime_session_id=str(session["runtime_session_id"]),
+    )
+    runtime.mark_hold_safe(q_hold=tuple(float(value) for value in session["q_hold"]))
+    payload = submit_eef_command(
+        session_artifact_path=session_artifact,
+        owner="agent",
+        backend="moveit_servo",
+        kind="eef_pose",
+        frame="base_link",
+        expected_q_start=tuple(session["q_hold"]),
+        control_period_s=0.1,
+        send_hz=50.0,
+        position_m=(0.30, 0.0, 0.20),
+        rpy_rad=(0.0, 0.0, 0.0),
+        max_start_error_rad=0.02,
+        heartbeat_timeout_s=0.5,
+        max_heartbeat_age_s=5.0,
+    )
+    command_path = Path(payload["artifacts"]["command"])
+    command = json.loads(command_path.read_text(encoding="utf-8"))
+    command["eef_command"].pop("pose_reference_limiter", None)
+    command_path.write_text(json.dumps(command), encoding="utf-8")
+
+    result = execute_pending_runtime_commands(
+        session_artifact_path=session_artifact,
+        backend=backend,
+        runtime=runtime,
+        max_heartbeat_age_s=5.0,
+    )
+
+    assert result is not None
+    assert result["status"] == "rejected"
+    assert result["movement_command_sent"] is False
+    assert "EEF reference limit failed" in result["reason"]
+    assert "pose_reference_limiter_configured" in result["reason"]
+    assert published == []
+
+
+def test_runtime_eef_command_rejects_backend_that_releases_owner_during_switch(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    backend = OwnerReleasingEefBackend(q_state=tuple(float(value) for value in session["q_hold"]))
+    runtime = ArmRuntime(
+        backend=backend,
+        safe_center=tuple(float(value) for value in session["safe_center"]),
+        runtime_session_id=str(session["runtime_session_id"]),
+    )
+    runtime.mark_hold_safe(q_hold=tuple(float(value) for value in session["q_hold"]))
+    submit_eef_command(
+        session_artifact_path=session_artifact,
+        owner="agent",
+        backend="moveit_servo",
+        kind="eef_pose_delta",
+        frame="eef_link",
+        expected_q_start=tuple(session["q_hold"]),
+        control_period_s=0.1,
+        send_hz=50.0,
+        delta_position_m=(0.002, 0.0, 0.0),
+        delta_rpy_rad=(0.0, 0.0, 0.0),
+        max_start_error_rad=0.02,
+        heartbeat_timeout_s=0.5,
+        max_heartbeat_age_s=5.0,
+    )
+
+    result = execute_pending_runtime_commands(
+        session_artifact_path=session_artifact,
+        backend=backend,
+        runtime=runtime,
+        max_heartbeat_age_s=5.0,
+    )
+
+    assert result is not None
+    assert result["status"] == "rejected"
+    assert result["movement_command_sent"] is False
+    assert "EEF servo switch warmup failed" in result["reason"]
+    assert backend.executed is False
 
 
 def test_moveit_servo_runtime_backend_builds_twist_from_pose_delta() -> None:
@@ -812,6 +1705,39 @@ def test_moveit_servo_runtime_backend_builds_twist_from_pose_delta() -> None:
     assert published[0]["frame_id"] == "eef_link"
     assert published[0]["twist"]["linear"] == [0.02, 0.0, 0.0]
     assert published[0]["twist"]["angular"] == [0.0, 0.0, 1.0]
+
+
+def test_moveit_servo_runtime_backend_builds_pose_reference() -> None:
+    published: list[dict[str, object]] = []
+    backend = MoveItServoRuntimeBackend(
+        publisher=lambda message: published.append(message),
+        monotonic=lambda: 10.0,
+        sleep=lambda _duration_s: None,
+    )
+
+    result = backend.execute_eef_command(
+        {
+            "kind": "eef_pose",
+            "send_hz": 50.0,
+            "eef_command": {
+                "frame": "base_link",
+                "position_m": [0.30, 0.0, 0.20],
+                "rpy_rad": [0.0, 0.0, 0.0],
+                "pose_reference_limiter": "adapter_live_reference_limit",
+                "control_period_s": 0.1,
+            },
+        },
+        owner="agent",
+    )
+
+    assert result.status == "completed"
+    assert len(published) == 1
+    assert published[0]["message_type"] == "geometry_msgs/msg/PoseStamped"
+    assert published[0]["topic"] == "/servo_node/pose_target_cmds"
+    assert published[0]["frame_id"] == "base_link"
+    assert published[0]["pose"]["position_m"] == [0.3, 0.0, 0.2]
+    assert published[0]["pose"]["rpy_rad"] == [0.0, 0.0, 0.0]
+    assert published[0]["reference_limit_policy"] == "adapter_live_reference_limit"
 
 
 def test_runtime_eef_command_executes_with_configured_moveit_backend(
@@ -865,9 +1791,140 @@ def test_runtime_eef_command_executes_with_configured_moveit_backend(
     assert result["motion"]["eef_command"]["kind"] == "eef_pose_delta"
     assert result["motion"]["eef_command"]["backend"] == "moveit_servo"
     assert result["motion"]["eef_command"]["command_space"] == "eef"
+    assert result["eef_switch"]["status"] == "pass"
+    assert result["eef_switch"]["policy"] == "continuous_owner_bumpless_switch"
+    assert result["eef_switch"]["disconnected_takeover_allowed"] is False
+    assert result["eef_switch"]["sdk_owner_released"] is False
+    assert result["eef_switch"]["checks"]["publisher_configured"] is True
     updated_session = json.loads(session_artifact.read_text(encoding="utf-8"))
     assert updated_session["mode"] == "hold_safe"
     assert updated_session["owner"] is None
+
+
+def test_runtime_eef_command_executes_with_primary_runtime_and_adapter_registry(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    primary_backend = FakeMotionBackend()
+    primary_backend.send_joint_command(
+        tuple(float(value) for value in session["q_hold"]),
+        producer="test_bootstrap",
+        mode=MotionMode.HOLD,
+        monotonic_s=0.0,
+    )
+    runtime = ArmRuntime(
+        backend=primary_backend,
+        safe_center=tuple(float(value) for value in session["safe_center"]),
+        runtime_session_id=str(session["runtime_session_id"]),
+    )
+    runtime.mark_hold_safe(q_hold=tuple(float(value) for value in session["q_hold"]))
+    published: list[dict[str, object]] = []
+    moveit_adapter = MoveItServoRuntimeBackend(
+        q_state=tuple(float(value) for value in session["q_hold"]),
+        publisher=lambda message: published.append(message),
+        monotonic=lambda: 10.0,
+        sleep=lambda _duration_s: None,
+    )
+    submit_eef_command(
+        session_artifact_path=session_artifact,
+        owner="agent",
+        backend="moveit_servo",
+        kind="eef_pose_delta",
+        frame="eef_link",
+        expected_q_start=tuple(session["q_hold"]),
+        control_period_s=0.1,
+        send_hz=50.0,
+        delta_position_m=(0.002, 0.0, 0.0),
+        delta_rpy_rad=(0.0, 0.0, 0.0),
+        max_start_error_rad=0.02,
+        heartbeat_timeout_s=0.5,
+        max_heartbeat_age_s=5.0,
+    )
+
+    result = execute_pending_runtime_commands(
+        session_artifact_path=session_artifact,
+        backend=primary_backend,
+        runtime=runtime,
+        eef_backends={"moveit_servo": moveit_adapter},
+        max_heartbeat_age_s=5.0,
+    )
+
+    assert result is not None
+    assert result["status"] == "completed"
+    assert result["movement_command_sent"] is True
+    assert len(published) == 1
+    assert result["motion"]["eef_command"]["backend"] == "moveit_servo"
+    assert result["motion"]["eef_command"]["runtime_backend"] == "fake"
+    assert result["motion"]["eef_command"]["eef_adapter"] == "moveit_servo"
+    assert result["eef_switch"]["backend"] == "moveit_servo"
+    assert result["eef_switch"]["sdk_owner_released"] is False
+    assert result["eef_switch"]["disconnected_takeover_allowed"] is False
+    updated_session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    assert updated_session["mode"] == "hold_safe"
+    assert updated_session["owner"] is None
+
+
+def test_runtime_eef_pose_executes_with_configured_adapter_registry(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    primary_backend = FakeMotionBackend()
+    primary_backend.send_joint_command(
+        tuple(float(value) for value in session["q_hold"]),
+        producer="test_bootstrap",
+        mode=MotionMode.HOLD,
+        monotonic_s=0.0,
+    )
+    runtime = ArmRuntime(
+        backend=primary_backend,
+        safe_center=tuple(float(value) for value in session["safe_center"]),
+        runtime_session_id=str(session["runtime_session_id"]),
+    )
+    runtime.mark_hold_safe(q_hold=tuple(float(value) for value in session["q_hold"]))
+    published: list[dict[str, object]] = []
+    moveit_adapter = MoveItServoRuntimeBackend(
+        q_state=tuple(float(value) for value in session["q_hold"]),
+        publisher=lambda message: published.append(message),
+        monotonic=lambda: 10.0,
+        sleep=lambda _duration_s: None,
+    )
+    submit_eef_command(
+        session_artifact_path=session_artifact,
+        owner="agent",
+        backend="moveit_servo",
+        kind="eef_pose",
+        frame="base_link",
+        expected_q_start=tuple(session["q_hold"]),
+        control_period_s=0.1,
+        send_hz=50.0,
+        position_m=(0.30, 0.0, 0.20),
+        rpy_rad=(0.0, 0.0, 0.0),
+        max_start_error_rad=0.02,
+        heartbeat_timeout_s=0.5,
+        max_heartbeat_age_s=5.0,
+    )
+
+    result = execute_pending_runtime_commands(
+        session_artifact_path=session_artifact,
+        backend=primary_backend,
+        runtime=runtime,
+        eef_backends={"moveit_servo": moveit_adapter},
+        max_heartbeat_age_s=5.0,
+    )
+
+    assert result is not None
+    assert result["status"] == "completed"
+    assert result["command_space"] == "eef"
+    assert result["motion"]["eef_command"]["kind"] == "eef_pose"
+    assert result["motion"]["eef_command"]["eef_adapter"] == "moveit_servo"
+    assert result["eef_switch"]["status"] == "pass"
+    assert len(published) == 1
+    assert published[0]["message_type"] == "geometry_msgs/msg/PoseStamped"
+    assert published[0]["reference_limit_policy"] == "adapter_live_reference_limit"
 
 
 class FakeArx5RuntimeBackend(FakeMotionBackend):
@@ -1131,6 +2188,10 @@ def test_cli_runtime_start_arx5_sdk_requires_runtime_confirmation(
 def test_cli_runtime_start_arx5_sdk_rejects_missing_sdk_after_confirmation(
     tmp_path: Path,
 ) -> None:
+    if importlib.util.find_spec("arx5_interface") is not None:
+        pytest.skip(
+            "arx5_interface is installed; missing-SDK rejection is not applicable"
+        )
     session_artifact = tmp_path / "runtime_session.json"
 
     completed = subprocess.run(
@@ -2719,7 +3780,7 @@ def test_runtime_command_result_records_tracking_error_summary(
     assert result_artifact["motion"]["tracking_error"] == tracking
 
 
-def test_runtime_command_tracking_error_limit_lands_damping(
+def test_runtime_command_tracking_error_limit_aborts_to_controlled_hold(
     tmp_path: Path,
 ) -> None:
     session_artifact = tmp_path / "runtime_session.json"
@@ -2766,16 +3827,20 @@ def test_runtime_command_tracking_error_limit_lands_damping(
     updated_session = json.loads(session_artifact.read_text(encoding="utf-8"))
 
     assert result is not None
-    assert result["status"] == "faulted"
-    assert result["landing_mode"] == "damping"
+    assert result["status"] == "aborted"
+    assert result["landing_mode"] == "hold"
     assert result["motion"]["error"] == {
         "type": "tracking_error",
         "message": "max tracking error exceeded",
     }
     assert result["motion"]["tracking_error"]["max_abs_rad"] == pytest.approx(0.01)
-    assert result_artifact["status"] == "faulted"
-    assert updated_session["mode"] == "damping"
-    assert backend.damping_count >= 1
+    assert result_artifact["status"] == "aborted"
+    assert updated_session["status"] == "ok"
+    assert updated_session["mode"] == "hold_safe"
+    assert updated_session["owner"] is None
+    assert updated_session["owner_lease"] is None
+    assert backend.hold_count >= 1
+    assert backend.damping_count == 0
 
 
 def test_runtime_command_result_records_tau_summary(
@@ -4094,7 +5159,9 @@ def test_runtime_queue_agent_intent_records_frequency_and_missed_intent_policy(
     assert result["motion"]["mode"] == "agent_servo"
     assert result["motion"]["agent_intent_hz"] == pytest.approx(10.0)
     assert result["motion"]["runtime_send_hz"] == 50.0
-    assert result["motion"]["interpolation_policy"] == "linear_intent_frame"
+    assert result["motion"]["interpolation_policy"] == "smoothstep_intent_frame"
+    assert result["motion"]["max_joint_velocity_rad_s"] == pytest.approx(0.25)
+    assert result["motion"]["joint_intent_safety"]["status"] == "pass"
     assert result["motion"]["resampling_policy"] == "intent_frame_to_runtime_send_hz"
     assert result["motion"]["missed_intent_policy"] == "hold_then_damping"
     assert result["motion"]["missed_intent_timeout_s"] == pytest.approx(0.3)
@@ -4224,6 +5291,115 @@ def test_cli_runtime_serve_executes_queued_trajectory_and_returns_to_hold(
             capture_output=True,
             text=True,
         )
+        _wait_for_runtime_stopped(session_artifact)
+        stdout, stderr = server.communicate(timeout=8.0)
+        assert server.returncode == 0
+        assert stderr == ""
+        assert json.loads(stdout)["status"] == "stopped"
+    finally:
+        if server.poll() is None:
+            server.terminate()
+            server.communicate(timeout=3.0)
+
+
+def test_cli_runtime_start_fake_serve_executes_eef_with_configured_adapter(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+
+    server = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "runtime",
+            "start",
+            "--backend",
+            "fake",
+            "--q-current",
+            "0.0",
+            "0.3",
+            "0.3",
+            "--safe-center",
+            "0.0",
+            "0.3",
+            "0.3",
+            "--serve",
+            "--eef-adapter",
+            "moveit_servo",
+            "--heartbeat-period-s",
+            "0.02",
+            "--max-heartbeat-age-s",
+            "1.0",
+            "--output",
+            str(session_artifact),
+            "--json",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        served = _wait_for_session_artifact(session_artifact)
+        assert served["mode"] == "hold_safe"
+
+        submit_completed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "armctrl.cli",
+                "motion",
+                "submit",
+                "eef-delta",
+                "--session-artifact",
+                str(session_artifact),
+                "--owner",
+                "agent",
+                "--backend",
+                "moveit_servo",
+                "--expected-q-start",
+                "0.0",
+                "0.3",
+                "0.3",
+                "--delta-position",
+                "0.001",
+                "0.0",
+                "0.0",
+                "--delta-rpy",
+                "0.0",
+                "0.0",
+                "0.0",
+                "--control-period-s",
+                "0.1",
+                "--send-hz",
+                "50",
+                "--output",
+                str(tmp_path / "eef_submit.json"),
+                "--json",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        submit_payload = json.loads(submit_completed.stdout)
+        result_path = Path(submit_payload["artifacts"]["result"])
+        result = _wait_for_runtime_command_result(result_path)
+
+        assert result["status"] == "completed"
+        assert result["owner"] == "agent"
+        assert result["mode"] == "agent_servo"
+        assert result["command_space"] == "eef"
+        assert result["motion"]["eef_command"]["backend"] == "moveit_servo"
+        assert result["motion"]["eef_command"]["runtime_backend"] == "fake"
+        assert result["motion"]["eef_command"]["eef_adapter"] == "moveit_servo"
+        assert (
+            result["motion"]["eef_command"]["adapter_resolution"]
+            == "configured_adapter_registry"
+        )
+        assert result["motion"]["sample_count"] > 0
+
+        stop_completed = _run_runtime_stop_with_retry(session_artifact)
+        assert stop_completed.returncode == 3
         _wait_for_runtime_stopped(session_artifact)
         stdout, stderr = server.communicate(timeout=8.0)
         assert server.returncode == 0
@@ -4536,7 +5712,7 @@ def _start_fake_hold_session(path: Path) -> None:
 
 
 def _wait_for_session_artifact(path: Path) -> dict[str, object]:
-    deadline = time.time() + 3.0
+    deadline = time.time() + 10.0
     while time.time() < deadline:
         if path.exists():
             payload = _read_json_with_retry(path)

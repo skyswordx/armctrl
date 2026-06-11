@@ -58,6 +58,15 @@ class _FakeEEFState:
         return self._pose
 
 
+class _RecordedEEFCommand(_FakeEEFState):
+    def __init__(self, command) -> None:
+        self._pose = list(command.pose_6d())
+        self.gripper_pos = float(command.gripper_pos)
+        self.gripper_vel = float(command.gripper_vel)
+        self.gripper_torque = float(command.gripper_torque)
+        self.timestamp = float(command.timestamp)
+
+
 class _FakeJointState:
     gripper_pos = 0.0
     gripper_vel = 0.0
@@ -90,7 +99,8 @@ class _FakeCartesianController:
             default_gripper_kd=0.2,
         )
         self.gain = _FakeGain(6)
-        self.commands: list[_FakeEEFState] = []
+        self.commands: list[_RecordedEEFCommand] = []
+        self.eef_state = _FakeEEFState()
         self.gain_calls = 0
         self.damping_calls = 0
         self.joint_state = joint_state or _FakeJointState()
@@ -109,10 +119,12 @@ class _FakeCartesianController:
         self.gain = gain
 
     def set_eef_cmd(self, command):
-        self.commands.append(command)
+        recorded = _RecordedEEFCommand(command)
+        self.commands.append(recorded)
+        self.eef_state = recorded
 
     def get_eef_state(self):
-        return _FakeEEFState()
+        return self.eef_state
 
     def get_joint_state(self):
         return self.joint_state
@@ -126,35 +138,59 @@ class _FakeSDK:
     Gain = _FakeGain
 
 
+class _ManualClock:
+    def __init__(self, value: float = 123.0) -> None:
+        self.value = float(value)
+        self.sleep_calls: list[float] = []
+
+    def monotonic(self) -> float:
+        return self.value
+
+    def sleep(self, duration_s: float) -> None:
+        self.sleep_calls.append(float(duration_s))
+        self.value += float(duration_s)
+
+
 def test_sdk_cartesian_pose_delta_syncs_current_eef_before_motion_command() -> None:
     controller = _FakeCartesianController()
+    clock = _ManualClock()
     backend = Arx5SdkCartesianRuntimeBackend(
         arx5_module=_FakeSDK,
         controller=controller,
-        sleep=lambda _duration_s: None,
-        monotonic=lambda: 123.0,
+        sleep=clock.sleep,
+        monotonic=clock.monotonic,
         resume_gain_duration_s=0.002,
     )
 
-    result = backend.execute_eef_command(
-        {
-            "kind": "eef_pose_delta",
-            "send_hz": 50.0,
-            "eef_command": {
-                "frame": "eef_link",
-                "delta_position_m": [0.002, 0.0, -0.001],
-                "delta_rpy_rad": [0.0, 0.0, 0.01],
-                "control_period_s": 0.1,
-            },
+    command = {
+        "kind": "eef_pose_delta",
+        "send_hz": 50.0,
+        "eef_command": {
+            "frame": "eef_link",
+            "delta_position_m": [0.002, 0.0, -0.001],
+            "delta_rpy_rad": [0.0, 0.0, 0.01],
+            "control_period_s": 0.1,
         },
+    }
+
+    switch = backend.prepare_eef_servo_switch(command)
+    result = backend.execute_eef_command(
+        command,
         owner="agent",
     )
 
+    assert switch["status"] == "pass"
+    assert switch["checks"]["sdk_owner_released"] is False
     assert result.status == "completed"
-    assert len(controller.commands) == 2
+    assert len(controller.commands) == 7
+    assert len(result.samples) == 6
+    assert result.trajectory_sample_hz == pytest.approx(50.0)
+    assert result.actual_send_hz == pytest.approx(50.0)
     assert controller.commands[0].pose_6d() == pytest.approx([0.4, 0.0, 0.2, 0.0, 0.0, 0.0])
+    assert controller.commands[1].pose_6d() == pytest.approx([0.4, 0.0, 0.2, 0.0, 0.0, 0.0])
+    assert controller.commands[3].pose_6d() == pytest.approx([0.400704, 0.0, 0.199648, 0.0, 0.0, 0.00352])
     assert controller.commands[-1].pose_6d() == pytest.approx([0.402, 0.0, 0.199, 0.0, 0.0, 0.01])
-    assert controller.commands[-1].timestamp == pytest.approx(10.04)
+    assert controller.commands[-1].timestamp == pytest.approx(10.14)
     assert controller.gain_calls == 1
     assert result.samples[0].q_meas == pytest.approx((0.0, 0.3, 0.3, 0.0, 0.0, 0.0))
 
@@ -244,6 +280,11 @@ def test_runtime_queue_executes_sdk_cartesian_eef_command(tmp_path) -> None:
     assert result["status"] == "completed"
     assert result["movement_command_sent"] is True
     assert result["motion"]["eef_command"]["backend"] == "sdk_cartesian"
+    assert result["eef_switch"]["status"] == "pass"
+    assert result["eef_switch"]["sdk_owner_released"] is False
+    assert result["eef_switch"]["checks"]["target_seeded_from_current_state"] is True
+    assert result["eef_switch"]["checks"]["zero_command_warmup_completed"] is True
+    assert len(controller.commands) >= 2
     assert controller.commands[-1].pose_6d() == pytest.approx([0.401, 0.0, 0.2, 0.0, 0.0, 0.0])
 
 

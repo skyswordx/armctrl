@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import importlib
+import math
 from pathlib import Path
 import time
 from typing import Callable
@@ -87,6 +88,30 @@ class Arx5SdkCartesianRuntimeBackend:
             fault_flags=_fault_flags_from_sources(joint_state, controller),
         )
 
+    def prepare_eef_servo_switch(self, command: dict[str, object]) -> dict[str, object]:
+        controller = self._ensure_controller()
+        before = self.read_joint_state()
+        self._sync_eef_target_to_current_state(controller)
+        self._ensure_motion_gain(controller)
+        after = self.read_joint_state()
+        return {
+            "schema": "armctrl.eef_servo_switch.v1",
+            "status": "pass",
+            "backend": "sdk_cartesian",
+            "policy": "continuous_owner_bumpless_switch",
+            "target_seed": "current_sdk_eef_state",
+            "zero_command_warmup_ticks": 1,
+            "command_kind": command.get("kind"),
+            "controller_dt_s": self.controller_dt_s,
+            "checks": {
+                "sdk_owner_released": False,
+                "target_seeded_from_current_state": True,
+                "zero_command_warmup_completed": True,
+                "fresh_joint_state_available": bool(before.q_meas and after.q_meas),
+                "fault_free_after_warmup": not bool(after.fault_flags),
+            },
+        }
+
     def execute_eef_command(
         self,
         command: dict[str, object],
@@ -103,53 +128,110 @@ class Arx5SdkCartesianRuntimeBackend:
                 status="faulted",
                 owner=owner,
                 sent_times=[],
-                sample=None,
+                samples=[],
                 controller_dt_s=self.controller_dt_s,
                 landing_mode=MotionMode.DAMPING.value,
                 error={"type": "Watchdog", "message": str(watchdog_event)},
             )
         before_state = self.read_joint_state()
-        target_pose = self._target_pose_from_command(command, controller=controller)
-        self._prepare_cartesian_takeover(controller)
-        sent_s = float(self.monotonic())
-        cmd = self._new_eef_state()
-        cmd.pose_6d()[:] = target_pose
-        cmd.gripper_pos = self._current_eef_state(controller)["gripper_pos"]
-        cmd.gripper_vel = 0.0
-        cmd.gripper_torque = 0.0
-        cmd.timestamp = self._sdk_timestamp(controller) + self._effective_preview_s(controller)
-        controller.set_eef_cmd(cmd)
-        after_state = self.read_joint_state()
-        sample = MotionAuditSample(
-            sent_monotonic_s=sent_s,
-            q_cmd=before_state.q_meas,
-            dq_cmd=tuple(0.0 for _ in before_state.q_meas),
-            q_meas=after_state.q_meas,
-            dq_meas=after_state.dq_meas,
-            tau_meas=after_state.tau_meas,
-            fault_flags=after_state.fault_flags,
-            producer=owner,
-            mode=MotionMode.AGENT_SERVO.value,
+        eef_command = command.get("eef_command")
+        if not isinstance(eef_command, dict):
+            raise ValueError("EEF command requires eef_command payload")
+        control_period_s = float(eef_command.get("control_period_s"))
+        send_hz = float(command.get("send_hz", 50.0))
+        if control_period_s <= 0.0:
+            raise ValueError("control_period_s must be positive")
+        if send_hz <= 0.0:
+            raise ValueError("send_hz must be positive")
+        send_dt_s = 1.0 / send_hz
+        interval_count = max(1, int(round(control_period_s * send_hz)))
+        start_eef = self._current_eef_state(controller)
+        start_pose = list(start_eef["pose_6d"])
+        target_pose = self._target_pose_from_command(
+            command,
+            controller=controller,
+            start_pose=start_pose,
         )
-        if on_sample is not None:
-            on_sample(sample)
-        if after_state.fault_flags:
+        gripper_pos = float(start_eef["gripper_pos"])
+        sent_times: list[float] = []
+        samples: list[MotionAuditSample] = []
+        faulted_sample: MotionAuditSample | None = None
+        start_monotonic_s = float(self.monotonic())
+        for index in range(interval_count + 1):
+            if index > 0:
+                target_monotonic_s = start_monotonic_s + index * send_dt_s
+                sleep_s = target_monotonic_s - float(self.monotonic())
+                if sleep_s > 0.0:
+                    self.sleep(sleep_s)
+            watchdog_event = watchdog() if watchdog is not None else None
+            if watchdog_event is not None:
+                self.damping()
+                return _eef_result(
+                    status="faulted",
+                    owner=owner,
+                    sent_times=sent_times,
+                    samples=samples,
+                    controller_dt_s=self.controller_dt_s,
+                    landing_mode=MotionMode.DAMPING.value,
+                    trajectory_sample_hz=send_hz,
+                    error={"type": "Watchdog", "message": str(watchdog_event)},
+                )
+            alpha = index / interval_count
+            shaped_alpha = _smoothstep(alpha)
+            pose = [
+                start + (target - start) * shaped_alpha
+                for start, target in zip(start_pose, target_pose, strict=True)
+            ]
+            sent_s = float(self.monotonic())
+            cmd = self._new_eef_state()
+            cmd.pose_6d()[:] = pose
+            cmd.gripper_pos = gripper_pos
+            cmd.gripper_vel = 0.0
+            cmd.gripper_torque = 0.0
+            cmd.timestamp = (
+                self._sdk_timestamp(controller)
+                + self._effective_preview_s(controller)
+                + index * send_dt_s
+            )
+            controller.set_eef_cmd(cmd)
+            after_state = self.read_joint_state()
+            sample = MotionAuditSample(
+                sent_monotonic_s=sent_s,
+                q_cmd=before_state.q_meas,
+                dq_cmd=tuple(0.0 for _ in before_state.q_meas),
+                q_meas=after_state.q_meas,
+                dq_meas=after_state.dq_meas,
+                tau_meas=after_state.tau_meas,
+                fault_flags=after_state.fault_flags,
+                producer=owner,
+                mode=MotionMode.AGENT_SERVO.value,
+            )
+            sent_times.append(sent_s)
+            samples.append(sample)
+            if on_sample is not None:
+                on_sample(sample)
+            if after_state.fault_flags:
+                faulted_sample = sample
+                break
+        if faulted_sample is not None:
             self.damping()
             return _eef_result(
                 status="faulted",
                 owner=owner,
-                sent_times=[sent_s],
-                sample=sample,
+                sent_times=sent_times,
+                samples=samples,
                 controller_dt_s=self.controller_dt_s,
                 landing_mode=MotionMode.DAMPING.value,
+                trajectory_sample_hz=send_hz,
             )
         return _eef_result(
             status="completed",
             owner=owner,
-            sent_times=[sent_s],
-            sample=sample,
+            sent_times=sent_times,
+            samples=samples,
             controller_dt_s=self.controller_dt_s,
             landing_mode=MotionMode.HOLD.value,
+            trajectory_sample_hz=send_hz,
         )
 
     def _ensure_controller(self):
@@ -215,12 +297,17 @@ class Arx5SdkCartesianRuntimeBackend:
         command: dict[str, object],
         *,
         controller,
+        start_pose: list[float] | None = None,
     ) -> list[float]:
         kind = command.get("kind")
         eef_command = command.get("eef_command")
         if not isinstance(eef_command, dict):
             raise ValueError("EEF command requires eef_command payload")
-        current_pose = list(self._current_eef_state(controller)["pose_6d"])
+        current_pose = (
+            list(self._current_eef_state(controller)["pose_6d"])
+            if start_pose is None
+            else list(start_pose)
+        )
         if len(current_pose) != 6:
             raise ValueError("SDK EEF pose_6d must contain 6 values")
         if kind == "eef_pose_delta":
@@ -322,24 +409,66 @@ def _eef_result(
     status: str,
     owner: str,
     sent_times: list[float],
-    sample: MotionAuditSample | None,
+    samples: list[MotionAuditSample],
     controller_dt_s: float | None,
     landing_mode: str,
+    trajectory_sample_hz: float | None = None,
     error: dict[str, str] | None = None,
 ) -> MotionExecutionResult:
+    actual_send_hz = _actual_send_hz(sent_times)
+    jitter = _send_jitter_ms(sent_times, trajectory_sample_hz)
     return MotionExecutionResult(
         status=status,
         producer=owner,
         mode=MotionMode.AGENT_SERVO.value,
-        trajectory_sample_hz=None,
-        actual_send_hz=None,
-        send_jitter_ms_p95=None,
-        send_jitter_ms_p99=None,
+        trajectory_sample_hz=trajectory_sample_hz,
+        actual_send_hz=actual_send_hz,
+        send_jitter_ms_p95=jitter["p95"],
+        send_jitter_ms_p99=jitter["p99"],
         controller_dt_s=controller_dt_s,
-        samples=tuple([] if sample is None else [sample]),
+        samples=tuple(samples),
         landing_mode=landing_mode,
         error=error,
     )
+
+
+def _smoothstep(alpha: float) -> float:
+    clamped = min(1.0, max(0.0, float(alpha)))
+    return clamped * clamped * (3.0 - 2.0 * clamped)
+
+
+def _actual_send_hz(sent_times: list[float]) -> float | None:
+    if len(sent_times) < 2:
+        return None
+    elapsed_s = sent_times[-1] - sent_times[0]
+    if elapsed_s <= 0.0:
+        return None
+    return (len(sent_times) - 1) / elapsed_s
+
+
+def _send_jitter_ms(
+    sent_times: list[float],
+    trajectory_sample_hz: float | None,
+) -> dict[str, float | None]:
+    if len(sent_times) < 3 or trajectory_sample_hz is None or trajectory_sample_hz <= 0.0:
+        return {"p95": None, "p99": None}
+    expected_dt_s = 1.0 / trajectory_sample_hz
+    errors_ms = [
+        abs((right - left) - expected_dt_s) * 1000.0
+        for left, right in zip(sent_times, sent_times[1:])
+    ]
+    return {
+        "p95": _nearest_rank_percentile(errors_ms, 0.95),
+        "p99": _nearest_rank_percentile(errors_ms, 0.99),
+    }
+
+
+def _nearest_rank_percentile(values: list[float], percentile: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    index = max(0, min(len(ordered) - 1, math.ceil(percentile * len(ordered)) - 1))
+    return ordered[index]
 
 
 def _controller_dt_s(controller) -> float:

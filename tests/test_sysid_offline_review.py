@@ -150,6 +150,15 @@ def test_offline_review_writes_visual_artifacts_and_keeps_hardware_execution_blo
     assert "hardware_execution_eligible: false" in (
         output_dir / "hardware_smoke_plan.md"
     ).read_text(encoding="utf-8")
+    hardware_plan = (output_dir / "hardware_smoke_plan.md").read_text(
+        encoding="utf-8"
+    )
+    assert "armctrl sysid compile-runtime" in hardware_plan
+    assert "armctrl motion submit joint-trajectory" in hardware_plan
+    assert "sysid run gravity_sweep --adapter sdk" not in hardware_plan
+    assert "sysid run friction_sweep --adapter sdk" not in hardware_plan
+    assert "sysid run fourier_multisine --adapter sdk" not in hardware_plan
+    assert "--adapter sdk" not in hardware_plan
     assert "FIGAROH base condition" in (
         output_dir / "review_report.md"
     ).read_text(encoding="utf-8")

@@ -1,0 +1,39 @@
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_runtime_gateway_docs_describe_removed_sysid_sdk_parser_entrypoint() -> None:
+    current_docs = [
+        ROOT / "docs" / "runtime_gateway" / "README.md",
+        ROOT / "docs" / "runtime_gateway" / "sysid_integration.md",
+    ]
+
+    combined = "\n".join(path.read_text(encoding="utf-8") for path in current_docs)
+
+    assert "sysid run --adapter sdk" in combined
+    assert "sysid compile-runtime" in combined
+    assert "motion submit joint-trajectory" in combined
+    assert "migration/rejected payload" not in combined
+    assert "返回迁移拒绝" not in combined
+    assert "仅返回迁移拒绝" not in combined
+    assert "parser" in combined
+    assert "--adapter {fake}" in combined
+
+
+def test_runtime_gateway_docs_describe_fake_agent_eef_adapter_rehearsal() -> None:
+    current_docs = [
+        ROOT / "docs" / "runtime_gateway" / "README.md",
+        ROOT / "docs" / "runtime_gateway" / "agent_eef_control.md",
+    ]
+
+    combined = "\n".join(path.read_text(encoding="utf-8") for path in current_docs)
+
+    assert "ARMCTRL_BACKEND=fake scripts/lab_agent_runtime_smoke.sh start" in combined
+    assert "--eef-adapter moveit_servo" in combined
+    assert "run-eef" in combined
+    assert "check-eef" in combined
+    assert "adapter registry" in combined
+    assert "不能证明真实 ARX5 EEF 运动质量" in combined
+    assert "heuristic fallback" in combined

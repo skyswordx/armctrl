@@ -21,7 +21,7 @@ SysID reviewed execution trajectory
 一句话原则：
 
 ```text
-保留 SysID operator surface，内部一步到位 ArmCommand 化；
+保留 SysID 离线与 lab 证据语义，真实运动入口显式 ArmCommand 化；
 保护 SysID 离线 OED/轨迹/求解，不为了 runtime 重构而碰算法层。
 ```
 
@@ -31,7 +31,8 @@ SysID reviewed execution trajectory
 ```text
 SysID/OED 离线规划
   -> reviewed execution_trajectory.csv
-  -> armctrl sysid run --adapter sdk
+  -> armctrl sysid compile-runtime
+  -> armctrl motion submit joint-trajectory --compiled-command ...
   -> motion surface: joint-trajectory
   -> live runtime readiness
   -> runtime queue
@@ -43,7 +44,9 @@ SysID/OED 离线规划
 
 因此阶段 1 不应把 SysID 推倒重来。剩余问题主要是接口语义和证据边界收口：
 
-- `--adapter sdk` 这个名字容易误导为 SysID CLI 自己直连 SDK；真实语义应是提交给 runtime，
+- `--adapter sdk` 这个名字容易误导为 SysID CLI 自己直连 SDK；它不再作为真实运动入口保留。
+  当前代码在 parser 层拒绝 `--adapter sdk`：`sysid run` 只接受 `--adapter {fake}`。
+  真实语义必须由 `sysid compile-runtime` 与 `motion submit joint-trajectory` 显式表达，
   runtime backend 为 `arx5_sdk`。
 - `execution_trajectory.csv -> runtime command` 这步应显式成为 SysID runtime compiler。
 - `ArmCommand(kind=joint_trajectory, owner=sysid)` / `motion_kind=joint-trajectory` 应从行为事实固化为 contract/artifact。
@@ -98,87 +101,97 @@ reviewed SysID artifact
 - 为了减少工作量跳过 reviewed `execution_trajectory.csv`。
 - 用真机 runtime 的临时需求反向污染离线优化/辨识模块。
 
-### 2. Lab operator surface：保留
+### 2. Lab operator surface：保留流程，移除旧运动入口
 
-今天已经跑通的 lab SysID 真机验证入口是 operator golden surface。阶段 1 不应粗暴
-删除、大幅改名或改变操作者心智模型。
+今天已经跑通的 lab SysID 真机验证流程是 operator golden workflow。阶段 1 不应破坏
+slow/reduced/full candidate、现场脚本、证据目录和 result-check 语义；但旧的
+`sysid run --adapter sdk` 真实运动入口必须移除，避免继续给人“SysID CLI 可以自己开 SDK/CAN”
+的心智模型。
 
 阶段 1 应保留：
 
-- `armctrl sysid run ... --adapter sdk ...` 这类 operator-facing CLI 形态。
+- `armctrl sysid compile-runtime` 作为新的 SysID runtime compiler 入口。
 - `scripts/lab_fourier_sysid.sh` 现场实验流程脚本。
 - slow / reduced / full Fourier candidate 的实验语义。
 - `console status` 生成的 live readiness artifact；底层兼容 `runtime status`。
 - `motion result` 对 owner、mode、sample count、jitter、tracking、landing 的检查；底层兼容 `runtime result-check`。
 - 真机执行后的 runtime result artifact 与 SysID dataset evidence。
 
-保留的原因不是迷信旧实现，而是这些入口已经在真机上形成可复制实验路径。
-阶段 1 可以新增更干净的内部 contract，但不要先破坏现场复现路径。
+移除旧入口的原因不是否定今天跑通的 SysID 链路，而是区分两件事：
+现场可复现实验路径应保留；真实运动的命令表面必须统一到 runtime-owned
+`joint_trajectory`，不能继续保留一个名字上暗示 direct SDK replay 的入口。
 
-这一层的保留是强约束。阶段 1 允许内部行为变化，但 operator 看到的流程应尽量稳定：
+这一层的保留是强约束。阶段 1 允许脚本流程稳定，但脚本内部必须只使用正式入口：
 
 ```text
 armctrl runtime start
 armctrl console status
-armctrl sysid run ... --adapter sdk ...
+armctrl sysid compile-runtime ...
+armctrl motion submit joint-trajectory --compiled-command ...
 armctrl motion result ...
 scripts/lab_fourier_sysid.sh <init|start|status|preposition|run|check|stop>
 ```
 
-如果后续新增更统一的命令，例如 `armctrl arm-command submit`，它必须先作为并行入口
-存在，不能立即替代 lab operator surface。替代条件是：同一个 slow/reduced/full
-candidate 在新入口下完成真机回归，并且 result artifact 可以和旧入口逐字段对比。
+`armctrl sysid compile-runtime` 是正式 compiler surface。`sysid run --adapter sdk`
+不再并行承担真实运动，也不再承担迁移 payload 职责；它已从 parser 可接受 schema 中移除。
+`command_surface=armctrl.motion.submit.v1` 与 `motion_kind=joint-trajectory`
+才是正式路径。同一个 slow/reduced/full candidate 的真机回归必须通过新入口完成。
 
 ### 3. SysID 真机提交层：一步到位 ArmCommand 化
 
-外部 CLI 可以保留，内部真实执行语义应一步到位收敛到 `ArmCommand`：
+真实执行语义应一步到位收敛到 `ArmCommand`：
 
 ```text
-armctrl sysid run ... --adapter sdk ...
-  -> operator CLI 基本不变
-  -> 要求 live runtime status readiness
-  -> 要求 runtime-session-artifact
-  -> 使用 live q_hold / q_meas 作为 effective q_center / expected start
-  -> 生成或读取 reviewed execution_trajectory.csv
-  -> 读取 q_points
-  -> 读取 dq_points；如果缺失，只能用明确记录的 fallback policy 派生
-  -> 构造 ArmCommand(kind=joint_trajectory, owner=sysid)
+armctrl sysid compile-runtime ...
+  -> 读取 reviewed execution_trajectory.csv
+  -> 保留/派生 q/dq/ddq policy
+  -> 输出 compiled_motion_command.json
+  -> 不读取 runtime session
+  -> 不发送硬件命令
+
+armctrl motion submit joint-trajectory --compiled-command ...
+  -> 要求 live runtime status/readiness
   -> 提交到 live runtime queue
-  -> 返回 queued artifact，不在 SysID CLI 内直接发送 SDK command
+
+armctrl sysid run ... --adapter sdk ...
+  -> parser invalid choice: --adapter {fake}
+  -> 不进入真实运动 handler
+  -> 不读取 runtime session 做准入
+  -> 不生成或提交 runtime command
+  -> 不发送 SDK/CAN command
+  -> 不写旧入口 manifest
 ```
 
-当前代码已经接近这个方向：`sysid run --adapter sdk` 要求 live runtime status readiness，
-读取 `execution_trajectory.csv` 的 q/dq，并用 `owner="sysid"` 提交 runtime
-trajectory command。阶段 1 要做的是把这个语义显式化、contract 化，而不是重做
-SysID 离线层。
+当前代码已经选择 parser-level removed 方向：`sysid run` 的 `--adapter` 只允许 `fake`，
+`--adapter sdk` 由 argparse 直接拒绝，不再读取 readiness、规划轨迹、写旧 manifest
+或提交 runtime command。阶段 1 要做的是把这个选择同步到
+文档、脚本和 release/status 表面，而不是重做 SysID 离线层。
 
-如果新增更干净的入口，例如 `armctrl sysid submit-runtime` 或
-`armctrl arm-command submit --kind joint_trajectory --owner sysid`，它必须与
-`armctrl sysid run ... --adapter sdk ...` 并行一段时间，并用同一 slow/reduced/full
-candidate 证明执行证据等价。
+`armctrl sysid compile-runtime` 与 `armctrl motion submit joint-trajectory --compiled-command`
+是正式入口。它们必须用同一 slow/reduced/full candidate 证明执行证据可复现。
 
-阶段 1 中 `armctrl sysid run ... --adapter sdk ...` 的真实职责应被收窄为：
+阶段 1 中 `armctrl sysid run ... --adapter sdk ...` 不再有真实职责：
 
-- 解析 operator 参数。
-- 校验 confirm 字符串。
-- 读取 live runtime status artifact。
-- 校验 runtime session 与 status artifact 指向同一 live runtime。
-- 读取或生成 SysID planning/review artifact。
-- 从 `execution_trajectory.csv` 编译 `joint_trajectory` command。
-- 做 runtime admission 前的静态 safety summary。
-- 把 command 写入 runtime queue。
-- 返回 queued artifact 和后续 result artifact 路径。
+- parser 直接报 `invalid choice: sdk`。
+- `sysid run` 帮助信息只展示 `--adapter {fake}`。
+- 不再校验真实运动 confirm。
+- 不再写旧入口 manifest。
+- 不再产出会被误读为 runtime evidence 的迁移 payload。
 
-它不再负责：
+正式替代入口是 `sysid compile-runtime` 与
+`motion submit joint-trajectory --compiled-command`。旧入口因此也不再负责：
 
 - 直接打开 SDK/CAN。
+- 读取 live runtime status 作为准入。
+- 生成或读取 SysID planning/review artifact。
+- 编译或提交 `joint_trajectory` command。
 - 在 CLI 进程里循环发送关节命令。
 - 自己实现 hold / damping / Ctrl-C landing。
 - 用历史 artifact 证明 readiness。
 - 私有化 trajectory replay、jitter、tracking、fault 判断。
 
-换句话说，`sysid run --adapter sdk` 在阶段 1 后仍然叫这个名字，是为了保留现场工作流；
-但它的 SDK 语义应变成“提交给持有 SDK 的 runtime”，而不是“SysID 自己持有 SDK”。
+换句话说，`sysid run --adapter sdk` 在阶段 1 后既不是兼容执行入口，也不是迁移护栏命令；
+它是已移除的 schema。真正执行必须显式走 compiler + motion submit。
 
 ### 4. SysID 真机执行层：抽象为通用 joint_trajectory executor
 
@@ -284,7 +297,7 @@ SysID reviewed artifacts
 编译器只做格式转换、起点对齐和证据链接，不重新做 OED、不重新规划、不改变 candidate 的
 辨识语义。
 
-当前实现中，`armctrl sysid run ... --adapter sdk ...` 的 runtime compiler 会把
+当前实现中，`armctrl sysid compile-runtime` 这个 runtime compiler 会把
 `execution_trajectory.csv` 编译为 `joint_trajectory` command，并在 command 与 queued
 manifest 中写入 `artifact_policy`：
 
@@ -297,12 +310,12 @@ manifest 中写入 `artifact_policy`：
 这一步不能反向污染 OED/离线规划层。也就是说，派生出来的 `dq_cmd` 是 runtime compiler
 证据策略，不代表原始 candidate 或 OED solver 曾经输出过速度；缺失的 `ddq_cmd` 也不能在后处理里被当作原始优化证据。
 
-### Step 3：把 operator CLI 内部改为 runtime submit
+### Step 3：移除旧 operator CLI 的真实运动语义
 
-`armctrl sysid run ... --adapter sdk ...` 保持 operator-facing 入口，但内部统一：
+`armctrl sysid run ... --adapter sdk ...` 不再保持真实运动入口。正式提交流程统一为：
 
 ```text
-sysid run
+sysid compile-runtime
   -> compiler
   -> ArmCommand / motion_kind=joint-trajectory
   -> submit runtime queue
@@ -638,15 +651,17 @@ notes:
 
 阶段 1 不算完成，除非满足：
 
-- `armctrl sysid run ... --adapter sdk ...` 的 operator-facing 入口仍可用于 lab。
-- queued payload 和 command artifact 标注 `command_surface=armctrl.motion.submit.v1`、
-  `motion_kind=joint-trajectory`，说明该 operator 入口内部已收束到正式 motion surface。
+- `armctrl sysid run ... --adapter sdk ...` 不再可用于 lab 真实运动；parser 层拒绝 `sdk`，
+  `sysid run` 只接受 `--adapter {fake}`。
+- `armctrl sysid compile-runtime` 输出的 compiled command 标注 `command_surface=armctrl.motion.submit.v1`、
+  `motion_kind=joint-trajectory`，说明 SysID 已收束到正式 motion surface。
 - `scripts/lab_fourier_sysid.sh` 或同等脚本仍能复现 slow/reduced/full。
 - 内部真实执行已经通过 runtime owner path，而不是 SysID 直接开 SDK/CAN。
 - 同一 reviewed candidate trajectory 可以通过新 `joint_trajectory` path 执行。
 - `motion result` 能验证 owner=`sysid`、mode=`trajectory_replay`、sample count、jitter、
   tracking、landing。
-- 新旧 artifact 可以对比执行质量。
+- 不再产生旧入口 manifest；执行质量证据只能来自 compiled command、motion submit、
+  runtime result 与 motion result。
 - SysID 离线 OED/轨迹/求解模块未被 runtime 重构改动。
 
 更具体地，阶段 1 验收分三档：

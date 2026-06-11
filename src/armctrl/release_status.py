@@ -98,7 +98,8 @@ def release_status() -> dict[str, object]:
                 "uv run armctrl sysid plan gravity_sweep --dof 6 --sample-hz 100 --duration 2 --amplitude 0.05 --q-center 0 0.30 0.30 0 0 0 --urdf-path configs/models/X5_camera.urdf --safe-config configs/x5.safe.yaml --output runs/plan-preview-smoke --json",
                 "uv sync --extra dev --extra lerobot",
                 "uv run armctrl lerobot doctor --model X5 --robot-interface can0 --teleop-interface can1 --json",
-                "uv run armctrl sysid run gravity_sweep --adapter sdk --duration 8 --amplitude 0.5 --q-center 0 0.30 0.30 0 0 0 --output runs/tmp-confirm-check --confirm 'I UNDERSTAND THIS WILL MOVE THE ARM' --json",
+                "uv run armctrl sysid compile-runtime --execution-trajectory runs/plan-preview-smoke/execution_trajectory.csv --output runs/sysid-runtime-compile-smoke --json",
+                "uv run armctrl motion submit joint-trajectory --compiled-command runs/sysid-runtime-compile-smoke/compiled_motion_command.json --session-artifact runs/lab/runtime_session.json --owner sysid --json",
             ],
             "test_count": 190,
             "scope": "local contracts and non-hardware simulation safety gates through v0.6.0-rc.25",
@@ -178,7 +179,7 @@ def release_status() -> dict[str, object]:
             "MuJoCo rollout reuses the named allowed collision pairs; unlisted contacts still fail the safety gate.",
             "sim preview and sysid plan can render SVG trajectory previews, including unsafe warning annotations.",
             "sim preview can render browser-openable HTML URDF trajectory animations; unsafe trajectories still render with WARNING and gate reasons.",
-            "The SDK sysid runner is wired for low-amplitude smoke collection, but hardware validation is still explicit deferred validation.",
+            "SysID real motion now goes through sysid compile-runtime plus runtime-owned motion submit; sysid run --adapter sdk is a removed real-motion entrypoint.",
             "SysID plans reject trajectories whose adjacent joint samples exceed max_joint_step_rad before any SDK backend is instantiated.",
             "SysID plans now write trajectory_preview.json and gate motion through the simulation safety preview before SDK execution.",
         ],
@@ -224,7 +225,7 @@ def release_notes() -> dict[str, object]:
         "LeRobot rollout review on the shared simulation gate",
         "LeRobot rollout preview helper for non-hardware EEF-to-rollout closure",
         "LeRobot doctor, native command plans, and dataset metadata bridge",
-        "SDK gravity smoke runner with confirmation, safety gates, and damping landing path",
+        "SysID runtime compiler and runtime-owned joint-trajectory submit path",
         "Safety-space config plus simulation doctor and SysID trajectory preview gate",
     ]
     deferred = list(status["hardware_pending"])

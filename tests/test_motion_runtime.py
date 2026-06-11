@@ -192,10 +192,10 @@ def test_execute_intent_frame_interpolates_agent_10hz_frame_to_50hz_backend():
 
     expected_q = [
         (0.0, 0.0),
-        (0.02, 0.01),
-        (0.04, 0.02),
-        (0.06, 0.03),
-        (0.08, 0.04),
+        (0.0104, 0.0052),
+        (0.0352, 0.0176),
+        (0.0648, 0.0324),
+        (0.0896, 0.0448),
         (0.1, 0.05),
     ]
 
@@ -380,6 +380,42 @@ def test_execute_trajectory_lands_damping_on_watchdog_timeout():
     assert runtime.mode == MotionMode.DAMPING
 
 
+def test_execute_trajectory_tracking_error_aborts_to_hold_not_damping():
+    class LaggingReadBackend(FakeMotionBackend):
+        def read_joint_state(self) -> JointStateSnapshot:
+            return JointStateSnapshot(q_meas=(0.0, 0.0))
+
+    clock = ManualClock()
+    backend = LaggingReadBackend()
+    runtime = MotionRuntime(backend=backend, monotonic=clock.monotonic, sleep=clock.sleep)
+
+    result = runtime.execute_trajectory(
+        [
+            JointTrajectoryPoint(time_s=0.0, q=(0.0, 0.0)),
+            JointTrajectoryPoint(time_s=0.01, q=(0.01, 0.0)),
+            JointTrajectoryPoint(time_s=0.02, q=(0.02, 0.0)),
+        ],
+        producer="sysid",
+        trajectory_sample_hz=100.0,
+        hold_after=True,
+        max_tracking_error_rad=0.005,
+    )
+
+    assert result.status == "aborted"
+    assert result.landing_mode == "hold"
+    assert result.error == {
+        "type": "tracking_error",
+        "message": "max tracking error exceeded",
+    }
+    assert [command.q for command in backend.joint_commands] == [
+        (0.0, 0.0),
+        (0.01, 0.0),
+    ]
+    assert backend.hold_count == 1
+    assert backend.damping_count == 0
+    assert runtime.mode == MotionMode.HOLD
+
+
 def test_execute_trajectory_returns_aborted_result_on_send_exception():
     clock = ManualClock()
     backend = FailingSendBackend(fail_on_send=2)
@@ -429,6 +465,38 @@ def test_execute_intent_frame_lands_damping_and_stops_on_fault_flags():
     assert backend.hold_count == 0
     assert backend.damping_count == 1
     assert runtime.mode == MotionMode.DAMPING
+
+
+def test_execute_intent_frame_tracking_error_aborts_to_hold_not_damping():
+    class LaggingReadBackend(FakeMotionBackend):
+        def read_joint_state(self) -> JointStateSnapshot:
+            return JointStateSnapshot(q_meas=(0.0, 0.0))
+
+    clock = ManualClock()
+    backend = LaggingReadBackend()
+    runtime = MotionRuntime(backend=backend, monotonic=clock.monotonic, sleep=clock.sleep)
+
+    result = runtime.execute_intent_frame(
+        JointIntentFrame(
+            q_start=(0.0, 0.0),
+            q_target=(0.1, 0.0),
+            control_period_s=0.1,
+        ),
+        producer="agent",
+        send_hz=50.0,
+        hold_after=True,
+        max_tracking_error_rad=0.005,
+    )
+
+    assert result.status == "aborted"
+    assert result.landing_mode == "hold"
+    assert result.error == {
+        "type": "tracking_error",
+        "message": "max tracking error exceeded",
+    }
+    assert backend.hold_count == 1
+    assert backend.damping_count == 0
+    assert runtime.mode == MotionMode.HOLD
 
 
 def test_execute_intent_frame_lands_damping_on_watchdog_timeout():
