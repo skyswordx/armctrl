@@ -1634,6 +1634,14 @@ def _eef_controller_manager_contract(
         and warmup_status == "pass"
     )
     start_pose_policy = str(command.get("start_pose_policy", "live_hold"))
+    start_pose_guard = command.get("start_pose_guard")
+    start_q_reference = _eef_start_q_reference(
+        command=command,
+        session=session,
+        start_pose_policy=start_pose_policy,
+    )
+    safe_center_reference = _object_float_list_or_none(session.get("safe_center"))
+    safe_center_required = start_pose_policy in {"live_hold", "safe_center"}
     return {
         "schema": "armctrl.eef_controller_manager.v1",
         "status": "ready" if ready else ("rejected" if phase == "rejected" else "pending"),
@@ -1646,6 +1654,18 @@ def _eef_controller_manager_contract(
         "eef_adapter": command.get("_resolved_eef_adapter"),
         "adapter_resolution": adapter_resolution,
         "start_pose_policy": start_pose_policy,
+        "start_pose_guard": (
+            start_pose_guard if isinstance(start_pose_guard, dict) else None
+        ),
+        "start_q_reference": (
+            list(start_q_reference) if start_q_reference is not None else None
+        ),
+        "safe_center_required": safe_center_required,
+        "safe_center_reference": (
+            list(safe_center_reference)
+            if safe_center_reference is not None
+            else None
+        ),
         "pose_start_contract": (
             "live runtime hold pose"
             if start_pose_policy == "live_hold"
@@ -1677,6 +1697,19 @@ def _eef_controller_manager_contract(
         "warmup_gate": eef_switch or _eef_switch_rejected_contract(command),
         "rejection_reason": rejection_reason,
     }
+
+
+def _eef_start_q_reference(
+    *,
+    command: dict[str, object],
+    session: dict[str, object],
+    start_pose_policy: str,
+) -> list[float] | None:
+    if start_pose_policy == "current_measured_pose":
+        return _object_float_list_or_none(session.get("q_meas"))
+    if start_pose_policy == "live_hold":
+        return _object_float_list_or_none(session.get("q_hold"))
+    return _object_float_list_or_none(command.get("expected_q_start"))
 
 
 def _command_timing_summary(
@@ -3145,6 +3178,12 @@ def _fixed_float_list(
 def _object_float_list(values: object) -> list[float]:
     if not isinstance(values, (list, tuple)):
         raise ValueError("expected a numeric list")
+    return [float(value) for value in values]
+
+
+def _object_float_list_or_none(values: object) -> list[float] | None:
+    if not isinstance(values, (list, tuple)):
+        return None
     return [float(value) for value in values]
 
 

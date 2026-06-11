@@ -155,6 +155,7 @@ scripts/lab_agent_runtime_smoke.sh check-eef
 - EEF command artifact 明确记录 `disconnected_takeover_allowed=false`、`bumpless_switch_required=true`、`no_heuristic_joint_fallback=true`。
 - EEF command artifact 明确记录 `eef_reference_limit`，并证明 submit 与 execute 都执行同一套 per-tick reference limit。
 - EEF runtime result artifact 必须记录 `eef_switch`：warmup 是否通过、backend 是否仍持有 SDK owner、是否从 fresh state 初始化 target。
+- EEF runtime result artifact 必须记录 `eef_controller_manager.start_pose_guard`、`start_q_reference`、`safe_center_required` 和 `safe_center_reference`，避免把 passive/droop、live hold、SAFE_CENTER 和 current measured takeover 混成同一种启动姿态。
 - 现场脚本默认不再启动 disconnected `sdk_cartesian` takeover。
 - `run-eef` 默认使用 `start_pose_policy=live_hold`，从 runtime 正在持续 hold 的受控姿态发出 EEF command。
 - 无硬件测试覆盖 catalog、submit artifact、fake `moveit_servo` adapter 消费、`eef_switch` gate、脚本文案和 Bash parse。
@@ -164,6 +165,7 @@ scripts/lab_agent_runtime_smoke.sh check-eef
 在进入正式 Agent EEF 真机验收前，本地只能证明 gateway contract 和 fake/runtime queue 语义；不能证明真实 EEF 运动质量。真机阶段需要验证：
 
 - Agent joint intent / joint trajectory 仍走 `arx5_sdk` long-lived runtime。
-- Agent EEF command 从 live hold 发起，`eef_switch.status=pass`，且 backend 没有释放 SDK owner。
+- Agent EEF command 从 live hold 发起时，必须能在 result artifact 中看到 `start_q_reference=q_hold` 且 `safe_center_required=true`；如果使用 `current_measured_pose`，则必须明确 `safe_center_required=false`，只能作为成熟 Cartesian adapter 的 current-pose takeover。
+- EEF command 通过 `eef_switch.status=pass`，且 backend 没有释放 SDK owner。
 - EEF delta/twist/pose 的实际运动是连续、小步、可停止的，stale/deadman 后回 hold 或 damping。
 - `start-eef` 只能作为手动诊断入口，不能作为正式通过标准。

@@ -1733,6 +1733,10 @@ def test_runtime_eef_current_measured_pose_executes_despite_cartesian_q_drift(
     assert result["eef_switch"]["checks"]["adapter_prepare_hook_present"] is True
     assert result["eef_switch"]["disconnected_takeover_allowed"] is False
     assert result["eef_switch"]["sdk_owner_released"] is False
+    manager = result["eef_controller_manager"]
+    assert manager["start_pose_policy"] == "current_measured_pose"
+    assert manager["safe_center_required"] is False
+    assert manager["start_q_reference"] == pytest.approx(session["q_meas"])
     updated_session = json.loads(session_artifact.read_text(encoding="utf-8"))
     assert updated_session["mode"] == "hold_safe"
     assert updated_session["owner"] is None
@@ -2371,6 +2375,11 @@ def test_runtime_eef_command_executes_with_configured_moveit_backend(
     manager = result["eef_controller_manager"]
     assert manager["schema"] == "armctrl.eef_controller_manager.v1"
     assert manager["status"] == "ready"
+    assert manager["start_pose_policy"] == "live_hold"
+    assert manager["start_pose_guard"]["status"] == "pass"
+    assert manager["start_q_reference"] == pytest.approx(session["q_hold"])
+    assert manager["safe_center_required"] is True
+    assert manager["safe_center_reference"] == pytest.approx(session["safe_center"])
     assert manager["mode_switch_policy"] == "runtime_internal_controller_manager"
     assert manager["controller_sequence"] == [
         "joint_hold_active",
