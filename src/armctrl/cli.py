@@ -2809,7 +2809,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             _emit(payload, as_json=args.as_json)
             return 3
         _emit(payload, as_json=args.as_json)
-        return 0
+        return _motion_submit_exit_code(payload)
 
     if args.command == "motion" and args.motion_command == "submit":
         return _handle_motion_submit(args)
@@ -5220,7 +5220,7 @@ def _handle_motion_submit(args: argparse.Namespace) -> int:
                 artifact_key="motion_submit",
             )
             _emit(payload, as_json=args.as_json)
-            return 0
+            return _motion_submit_exit_code(payload)
 
         if args.motion_kind == "joint-intent":
             payload = submit_intent_command(
@@ -5255,7 +5255,7 @@ def _handle_motion_submit(args: argparse.Namespace) -> int:
                 artifact_key="motion_submit",
             )
             _emit(payload, as_json=args.as_json)
-            return 0
+            return _motion_submit_exit_code(payload)
 
         if args.motion_kind == "eef-delta":
             payload = submit_eef_command(
@@ -5288,7 +5288,7 @@ def _handle_motion_submit(args: argparse.Namespace) -> int:
                 artifact_key="motion_submit",
             )
             _emit(payload, as_json=args.as_json)
-            return 0
+            return _motion_submit_exit_code(payload)
 
         if args.motion_kind == "eef-twist":
             payload = submit_eef_command(
@@ -5416,6 +5416,10 @@ def _annotate_motion_submit_payload(
         legacy_equivalent=legacy_equivalent,
     )
     return annotated
+
+
+def _motion_submit_exit_code(payload: dict[str, object]) -> int:
+    return 0 if payload.get("status") == "queued" else 3
 
 
 def _annotate_motion_command_artifact(

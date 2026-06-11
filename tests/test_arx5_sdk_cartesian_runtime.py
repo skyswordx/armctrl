@@ -9,7 +9,12 @@ import pytest
 from armctrl.arx5_sdk_cartesian_runtime import Arx5SdkCartesianRuntimeBackend
 from armctrl.motion_runtime import ArmRuntime, FakeMotionBackend
 from armctrl.runtime_ipc import execute_pending_runtime_commands, submit_eef_command
-from armctrl.runtime_session import start_arx5_cartesian_runtime_session, start_fake_runtime_session
+from armctrl.runtime_session import (
+    eef_adapter_manager_payload,
+    runtime_controller_manager_payload,
+    start_arx5_cartesian_runtime_session,
+    start_fake_runtime_session,
+)
 
 
 class _FakeGain:
@@ -238,6 +243,14 @@ def test_runtime_queue_executes_sdk_cartesian_eef_command(tmp_path) -> None:
     payload["last_hold_wall_time_s"] = time.time()
     payload["hold_age_s"] = 0.0
     payload["readiness"] = {"agent_sysid_smoke_allowed": True, "failed_checks": []}
+    payload["eef_adapter_manager"] = eef_adapter_manager_payload(
+        primary_backend="fake",
+        configured_adapters=["sdk_cartesian"],
+    )
+    payload["runtime_controller_manager"] = runtime_controller_manager_payload(
+        backend="fake",
+        eef_adapter_manager=payload["eef_adapter_manager"],
+    )
     session_artifact.write_text(json.dumps(payload), encoding="utf-8")
     controller = _FakeCartesianController()
     backend = Arx5SdkCartesianRuntimeBackend(

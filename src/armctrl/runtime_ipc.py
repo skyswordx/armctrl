@@ -446,6 +446,39 @@ def submit_eef_command(
         heartbeat_timeout_s=float(heartbeat_timeout_s),
         max_heartbeat_age_s=float(max_heartbeat_age_s),
     )
+    adapter_gate = _eef_submit_adapter_gate(
+        session=session,
+        requested_backend=str(backend),
+    )
+    if adapter_gate["status"] != "pass":
+        payload = {
+            "status": "blocked",
+            "schema": "armctrl.arm_runtime_submit.v1",
+            "owner": str(owner),
+            "mode": MotionMode.AGENT_SERVO.value,
+            "command_space": "eef",
+            "backend": str(backend),
+            "runtime_session_id": session.get("runtime_session_id"),
+            "movement_command_sent": False,
+            "hardware_executable_now": False,
+            "start_pose_policy": str(start_pose_policy),
+            "start_pose_guard": start_pose_guard,
+            "eef_reference_limit": eef_reference_limit,
+            "eef_adapter_manager": adapter_gate["eef_adapter_manager"],
+            "runtime_controller_manager": session.get("runtime_controller_manager"),
+            "reason": adapter_gate["reason"],
+            "runtime": {
+                "single_motion_owner": True,
+                "session_artifact": str(session_artifact_path),
+            },
+            "mature_backend_policy": _eef_mature_backend_policy(str(backend)),
+            "next_gate": (
+                "restart or configure the long-lived runtime with a mature EEF "
+                "adapter registry for this backend; do not use disconnected "
+                "sdk_cartesian takeover or heuristic joint fallback"
+            ),
+        }
+        return _write_optional_output(payload, output_path)
     command_id = str(uuid4())
     queue_dir = runtime_command_queue_dir(session_artifact_path)
     pending_path = queue_dir / "pending" / f"{command_id}.json"
@@ -472,26 +505,7 @@ def submit_eef_command(
         "session_artifact": str(session_artifact_path),
         "result_artifact": str(result_path),
         "hardware_execution_requires_backend_adapter": True,
-        "mature_backend_policy": {
-            "selected": str(backend),
-            "no_heuristic_joint_fallback": True,
-            "execution_model": "continuous_owner_eef_servo",
-            "disconnected_takeover_allowed": False,
-            "bumpless_switch_required": True,
-            "warmup_policy": (
-                "seed the EEF target from current FK, run zero-command warmup, "
-                "and only then accept live EEF owner commands"
-            ),
-            "reference_limit_policy": (
-                "reject EEF commands whose per-tick linear/angular reference "
-                "step exceeds configured limits; do not silently clamp"
-            ),
-            "fallback_policy": "stay_in_hold_or_damping; never release SDK/CAN between modes",
-            "planned_path_alternative": (
-                "reviewed EEF pose goals may compile to joint_trajectory, but "
-                "that is not the realtime EEF servo path"
-            ),
-        },
+        "mature_backend_policy": _eef_mature_backend_policy(str(backend)),
     }
     pending_path.parent.mkdir(parents=True, exist_ok=True)
     result_path.parent.mkdir(parents=True, exist_ok=True)
@@ -506,9 +520,12 @@ def submit_eef_command(
         "backend": str(backend),
         "runtime_session_id": session.get("runtime_session_id"),
         "movement_command_sent": False,
+        "hardware_executable_now": True,
         "start_pose_policy": str(start_pose_policy),
         "start_pose_guard": start_pose_guard,
         "eef_reference_limit": eef_reference_limit,
+        "eef_adapter_manager": adapter_gate["eef_adapter_manager"],
+        "runtime_controller_manager": session.get("runtime_controller_manager"),
         "runtime": {
             "single_motion_owner": True,
             "queue": str(queue_dir),
@@ -529,6 +546,68 @@ def submit_eef_command(
 
 def runtime_command_queue_dir(session_artifact_path: Path) -> Path:
     return session_artifact_path.parent / f"{session_artifact_path.stem}_commands"
+
+
+def _eef_mature_backend_policy(backend: str) -> dict[str, object]:
+    return {
+        "selected": str(backend),
+        "no_heuristic_joint_fallback": True,
+        "execution_model": "continuous_owner_eef_servo",
+        "disconnected_takeover_allowed": False,
+        "bumpless_switch_required": True,
+        "warmup_policy": (
+            "seed the EEF target from current FK, run zero-command warmup, "
+            "and only then accept live EEF owner commands"
+        ),
+        "reference_limit_policy": (
+            "reject EEF commands whose per-tick linear/angular reference "
+            "step exceeds configured limits; do not silently clamp"
+        ),
+        "fallback_policy": "stay_in_hold_or_damping; never release SDK/CAN between modes",
+        "planned_path_alternative": (
+            "reviewed EEF pose goals may compile to joint_trajectory, but "
+            "that is not the realtime EEF servo path"
+        ),
+    }
+
+
+def _eef_submit_adapter_gate(
+    *,
+    session: dict[str, object],
+    requested_backend: str,
+) -> dict[str, object]:
+    manager = session.get("eef_adapter_manager")
+    if not isinstance(manager, dict):
+        manager = {
+            "schema": "armctrl.eef_adapter_manager.v1",
+            "status": "unconfigured",
+            "configured_adapters": [],
+            "eef_command_executable": False,
+            "adapter_registry_required": True,
+            "primary_backend_fallback_allowed": False,
+            "disconnected_takeover_allowed": False,
+        }
+    configured = [
+        str(adapter)
+        for adapter in manager.get("configured_adapters", [])
+        if isinstance(adapter, str)
+    ]
+    executable = bool(manager.get("eef_command_executable"))
+    if executable and str(requested_backend) in configured:
+        return {
+            "status": "pass",
+            "eef_adapter_manager": manager,
+            "reason": "requested EEF backend is configured in the live runtime adapter registry",
+        }
+    return {
+        "status": "blocked",
+        "eef_adapter_manager": manager,
+        "reason": (
+            "EEF command requires a configured mature EEF backend adapter inside "
+            "the live runtime before it can be queued; requested_backend="
+            f"{requested_backend!s}, configured_adapters={configured!r}"
+        ),
+    }
 
 
 def execute_pending_runtime_commands(

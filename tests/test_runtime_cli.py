@@ -23,8 +23,10 @@ from armctrl.cli import (
 )
 from armctrl.runtime_session import heartbeat_runtime_session_payload
 from armctrl.runtime_session import ARX5_RUNTIME_START_CONFIRMATION
+from armctrl.runtime_session import eef_adapter_manager_payload
 from armctrl.runtime_session import record_runtime_hold_tick
 from armctrl.runtime_session import refresh_runtime_status_payload
+from armctrl.runtime_session import runtime_controller_manager_payload
 from armctrl.runtime_session import runtime_readiness
 from armctrl.runtime_session import RuntimeSessionError
 from armctrl.runtime_session import start_fake_runtime_session, stop_runtime_session_from_artifact
@@ -76,7 +78,9 @@ def _passing_hold_damping_artifact() -> dict[str, object]:
     }
 
 
-def test_cli_runtime_submit_eef_pose_delta_queues_agent_command(tmp_path: Path) -> None:
+def test_cli_runtime_submit_eef_pose_delta_blocks_without_ready_adapter(
+    tmp_path: Path,
+) -> None:
     session_artifact = tmp_path / "runtime_session.json"
     output_artifact = tmp_path / "eef_submit.json"
     _start_fake_hold_session(session_artifact)
@@ -120,24 +124,83 @@ def test_cli_runtime_submit_eef_pose_delta_queues_agent_command(tmp_path: Path) 
             "5",
             "--json",
         ],
-        check=True,
         capture_output=True,
         text=True,
     )
     payload = json.loads(completed.stdout)
-    command = json.loads(Path(payload["artifacts"]["command"]).read_text(encoding="utf-8"))
+    queue_dir = session_artifact.parent / "runtime_session_commands" / "pending"
 
-    assert payload["status"] == "queued"
+    assert completed.returncode == 3
+    assert payload["status"] == "blocked"
     assert payload["owner"] == "agent"
     assert payload["mode"] == "agent_servo"
     assert payload["movement_command_sent"] is False
+    assert payload["hardware_executable_now"] is False
     assert payload["command_space"] == "eef"
-    assert command["kind"] == "eef_pose_delta"
-    assert command["backend"] == "moveit_servo"
-    assert command["eef_command"]["frame"] == "eef_link"
-    assert command["eef_command"]["delta_position_m"] == [0.002, 0.0, 0.0]
-    assert command["eef_command"]["delta_rpy_rad"] == [0.0, 0.0, 0.0]
-    assert command["hardware_execution_requires_backend_adapter"] is True
+    assert payload["eef_adapter_manager"]["status"] == "unconfigured"
+    assert payload["eef_adapter_manager"]["eef_command_executable"] is False
+    assert "configured mature EEF backend adapter" in payload["reason"]
+    assert not queue_dir.exists()
+
+
+def test_cli_motion_submit_eef_delta_blocks_without_ready_adapter(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    output_artifact = tmp_path / "eef_submit.json"
+    _start_fake_hold_session(session_artifact)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "motion",
+            "submit",
+            "eef-delta",
+            "--session-artifact",
+            str(session_artifact),
+            "--owner",
+            "agent",
+            "--backend",
+            "moveit_servo",
+            "--expected-q-start",
+            "0.0",
+            "0.3",
+            "0.3",
+            "--delta-position",
+            "0.002",
+            "0.0",
+            "0.0",
+            "--delta-rpy",
+            "0.0",
+            "0.0",
+            "0.0",
+            "--control-period-s",
+            "0.1",
+            "--send-hz",
+            "50",
+            "--output",
+            str(output_artifact),
+            "--max-heartbeat-age-s",
+            "5",
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+    queue_dir = session_artifact.parent / "runtime_session_commands" / "pending"
+
+    assert completed.returncode == 3
+    assert payload["status"] == "blocked"
+    assert payload["movement_command_sent"] is False
+    assert payload["hardware_executable_now"] is False
+    assert payload["eef_adapter_manager"]["status"] == "unconfigured"
+    assert payload["eef_adapter_manager"]["eef_command_executable"] is False
+    assert "configured mature EEF backend adapter" in payload["reason"]
+    assert not queue_dir.exists()
 
 
 def test_cli_motion_submit_joint_intent_queues_runtime_command(tmp_path: Path) -> None:
@@ -884,6 +947,7 @@ def test_cli_motion_submit_joint_trajectory_accepts_compiled_sysid_command(
 def test_cli_motion_submit_eef_delta_queues_sdk_cartesian_command(tmp_path: Path) -> None:
     session_artifact = tmp_path / "runtime_session.json"
     _start_fake_hold_session(session_artifact)
+    _configure_eef_adapter_manager(session_artifact, adapter="sdk_cartesian")
 
     completed = subprocess.run(
         [
@@ -938,6 +1002,7 @@ def test_cli_motion_submit_eef_twist_queues_moveit_servo_command(
 ) -> None:
     session_artifact = tmp_path / "runtime_session.json"
     _start_fake_hold_session(session_artifact)
+    _configure_eef_adapter_manager(session_artifact, adapter="moveit_servo")
 
     completed = subprocess.run(
         [
@@ -990,6 +1055,7 @@ def test_cli_motion_submit_eef_pose_queues_runtime_command(
 ) -> None:
     session_artifact = tmp_path / "runtime_session.json"
     _start_fake_hold_session(session_artifact)
+    _configure_eef_adapter_manager(session_artifact, adapter="moveit_servo")
 
     completed = subprocess.run(
         [
@@ -1241,6 +1307,7 @@ def test_cli_console_catalog_exposes_profiles_without_runtime() -> None:
 def test_cli_runtime_submit_eef_accepts_sdk_cartesian_backend(tmp_path: Path) -> None:
     session_artifact = tmp_path / "runtime_session.json"
     _start_fake_hold_session(session_artifact)
+    _configure_eef_adapter_manager(session_artifact, adapter="sdk_cartesian")
 
     payload = submit_eef_command(
         session_artifact_path=session_artifact,
@@ -1306,6 +1373,11 @@ def test_cli_runtime_submit_eef_current_measured_pose_allows_cartesian_q_drift(
     session["q_meas"] = [1.4, 0.2, 0.1]
     session["readiness"] = runtime_readiness(session)
     session_artifact.write_text(json.dumps(session), encoding="utf-8")
+    _configure_eef_adapter_manager(
+        session_artifact,
+        adapter="sdk_cartesian",
+        primary_backend="sdk_cartesian",
+    )
 
     payload = submit_eef_command(
         session_artifact_path=session_artifact,
@@ -1344,6 +1416,12 @@ def test_runtime_eef_current_measured_pose_executes_despite_cartesian_q_drift(
     session["q_meas"] = [1.458571434020996, 0.00629425048828125, 0.04444074630737305]
     session["readiness"] = runtime_readiness(session)
     session_artifact.write_text(json.dumps(session), encoding="utf-8")
+    _configure_eef_adapter_manager(
+        session_artifact,
+        adapter="sdk_cartesian",
+        primary_backend="sdk_cartesian",
+    )
+    session = json.loads(session_artifact.read_text(encoding="utf-8"))
     primary_backend = FakeMotionBackend()
     primary_backend.send_joint_command(
         tuple(float(value) for value in session["q_meas"]),
@@ -1515,7 +1593,7 @@ def test_cli_runtime_start_sdk_cartesian_is_diagnostic_only_without_explicit_opt
     assert payload["artifacts"]["runtime_session"] == str(output_artifact)
 
 
-def test_runtime_eef_command_rejects_without_mature_backend_executor(
+def test_runtime_eef_submit_blocks_without_mature_backend_adapter(
     tmp_path: Path,
 ) -> None:
     session_artifact = tmp_path / "runtime_session.json"
@@ -1528,7 +1606,7 @@ def test_runtime_eef_command_rejects_without_mature_backend_executor(
         mode=MotionMode.HOLD,
         monotonic_s=0.0,
     )
-    submit_eef_command(
+    payload = submit_eef_command(
         session_artifact_path=session_artifact,
         owner="agent",
         backend="moveit_servo",
@@ -1544,19 +1622,14 @@ def test_runtime_eef_command_rejects_without_mature_backend_executor(
         max_heartbeat_age_s=5.0,
     )
 
-    result = execute_pending_runtime_commands(
-        session_artifact_path=session_artifact,
-        backend=backend,
-        max_heartbeat_age_s=5.0,
-    )
-
-    assert result is not None
-    assert result["status"] == "rejected"
-    assert result["owner"] == "agent"
-    assert result["mode"] == "agent_servo"
-    assert result["movement_command_sent"] is False
-    assert "EEF runtime command requires a configured mature backend adapter" in result["reason"]
-    assert result["eef_switch"]["status"] == "not_run"
+    assert payload["status"] == "blocked"
+    assert payload["owner"] == "agent"
+    assert payload["mode"] == "agent_servo"
+    assert payload["movement_command_sent"] is False
+    assert payload["hardware_executable_now"] is False
+    assert "configured mature EEF backend adapter" in payload["reason"]
+    assert payload["eef_adapter_manager"]["eef_command_executable"] is False
+    assert not (session_artifact.parent / "runtime_session_commands" / "pending").exists()
     assert len(backend.joint_commands) == 1
 
 
@@ -1626,6 +1699,7 @@ def test_runtime_eef_command_revalidates_reference_limit_before_execute(
 ) -> None:
     session_artifact = tmp_path / "runtime_session.json"
     _start_fake_hold_session(session_artifact)
+    _configure_eef_adapter_manager(session_artifact, adapter="moveit_servo")
     session = json.loads(session_artifact.read_text(encoding="utf-8"))
     primary_backend = FakeMotionBackend()
     primary_backend.send_joint_command(
@@ -1681,6 +1755,7 @@ def test_runtime_eef_pose_requires_adapter_reference_limiter_before_execute(
 ) -> None:
     session_artifact = tmp_path / "runtime_session.json"
     _start_fake_hold_session(session_artifact)
+    _configure_eef_adapter_manager(session_artifact, adapter="moveit_servo")
     session = json.loads(session_artifact.read_text(encoding="utf-8"))
     published: list[dict[str, object]] = []
     primary_backend = FakeMotionBackend()
@@ -1743,6 +1818,7 @@ def test_runtime_eef_command_rejects_backend_that_releases_owner_during_switch(
 ) -> None:
     session_artifact = tmp_path / "runtime_session.json"
     _start_fake_hold_session(session_artifact)
+    _configure_eef_adapter_manager(session_artifact, adapter="moveit_servo")
     session = json.loads(session_artifact.read_text(encoding="utf-8"))
     primary_backend = FakeMotionBackend()
     primary_backend.send_joint_command(
@@ -1859,6 +1935,7 @@ def test_runtime_eef_command_executes_with_configured_moveit_backend(
 ) -> None:
     session_artifact = tmp_path / "runtime_session.json"
     _start_fake_hold_session(session_artifact)
+    _configure_eef_adapter_manager(session_artifact, adapter="moveit_servo")
     session = json.loads(session_artifact.read_text(encoding="utf-8"))
     published: list[dict[str, object]] = []
     primary_backend = FakeMotionBackend()
@@ -1947,6 +2024,7 @@ def test_runtime_eef_command_executes_with_primary_runtime_and_adapter_registry(
 ) -> None:
     session_artifact = tmp_path / "runtime_session.json"
     _start_fake_hold_session(session_artifact)
+    _configure_eef_adapter_manager(session_artifact, adapter="moveit_servo")
     session = json.loads(session_artifact.read_text(encoding="utf-8"))
     primary_backend = FakeMotionBackend()
     primary_backend.send_joint_command(
@@ -2025,7 +2103,7 @@ def test_runtime_eef_command_rejects_primary_backend_without_adapter_registry(
         runtime_session_id=str(session["runtime_session_id"]),
     )
     runtime.mark_hold_safe(q_hold=tuple(float(value) for value in session["q_hold"]))
-    submit_eef_command(
+    payload = submit_eef_command(
         session_artifact_path=session_artifact,
         owner="agent",
         backend="moveit_servo",
@@ -2041,24 +2119,13 @@ def test_runtime_eef_command_rejects_primary_backend_without_adapter_registry(
         max_heartbeat_age_s=5.0,
     )
 
-    result = execute_pending_runtime_commands(
-        session_artifact_path=session_artifact,
-        backend=primary_backend,
-        runtime=runtime,
-        max_heartbeat_age_s=5.0,
-    )
-
-    assert result is not None
-    assert result["status"] == "rejected"
-    assert "configured mature backend adapter" in result["reason"]
-    assert result["eef_command"]["eef_adapter"] is None
-    assert result["eef_command"]["adapter_resolution"] == "missing_adapter_registry"
-    assert result["eef_controller_manager"]["status"] == "rejected"
-    assert result["eef_controller_manager"]["adapter_registry_required"] is True
-    assert result["eef_controller_manager"]["primary_backend_fallback_allowed"] is False
-    assert result["eef_controller_manager"]["disconnected_takeover_allowed"] is False
-    assert result["eef_controller_manager"]["warmup_gate"]["status"] == "not_run"
-    assert result["movement_command_sent"] is False
+    assert payload["status"] == "blocked"
+    assert "configured mature EEF backend adapter" in payload["reason"]
+    assert payload["eef_adapter_manager"]["adapter_registry_required"] is True
+    assert payload["eef_adapter_manager"]["primary_backend_fallback_allowed"] is False
+    assert payload["eef_adapter_manager"]["disconnected_takeover_allowed"] is False
+    assert payload["movement_command_sent"] is False
+    assert payload["hardware_executable_now"] is False
 
 
 def test_runtime_eef_pose_executes_with_configured_adapter_registry(
@@ -2066,6 +2133,7 @@ def test_runtime_eef_pose_executes_with_configured_adapter_registry(
 ) -> None:
     session_artifact = tmp_path / "runtime_session.json"
     _start_fake_hold_session(session_artifact)
+    _configure_eef_adapter_manager(session_artifact, adapter="moveit_servo")
     session = json.loads(session_artifact.read_text(encoding="utf-8"))
     primary_backend = FakeMotionBackend()
     primary_backend.send_joint_command(
@@ -6091,6 +6159,26 @@ def _start_fake_hold_session(path: Path) -> None:
         max_heartbeat_age_s=1.0,
     )
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _configure_eef_adapter_manager(
+    path: Path,
+    *,
+    adapter: str,
+    primary_backend: str = "fake",
+) -> dict[str, object]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    manager = eef_adapter_manager_payload(
+        primary_backend=primary_backend,
+        configured_adapters=[adapter],
+    )
+    payload["eef_adapter_manager"] = manager
+    payload["runtime_controller_manager"] = runtime_controller_manager_payload(
+        backend=primary_backend,
+        eef_adapter_manager=manager,
+    )
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return payload
 
 
 def _wait_for_session_artifact(path: Path) -> dict[str, object]:
