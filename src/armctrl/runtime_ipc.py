@@ -467,6 +467,36 @@ def submit_eef_command(
         heartbeat_timeout_s=float(heartbeat_timeout_s),
         max_heartbeat_age_s=float(max_heartbeat_age_s),
     )
+    start_pose_guard = _eef_start_pose_guard(start_pose_guard)
+    if start_pose_guard["status"] != "pass":
+        payload = {
+            "status": "blocked",
+            "schema": "armctrl.arm_runtime_submit.v1",
+            "owner": str(owner),
+            "mode": MotionMode.AGENT_SERVO.value,
+            "command_space": "eef",
+            "backend": str(backend),
+            "runtime_session_id": session.get("runtime_session_id"),
+            "movement_command_sent": False,
+            "hardware_executable_now": False,
+            "start_pose_policy": str(start_pose_policy),
+            "start_pose_guard": start_pose_guard,
+            "eef_reference_limit": eef_reference_limit,
+            "eef_adapter_manager": session.get("eef_adapter_manager"),
+            "runtime_controller_manager": session.get("runtime_controller_manager"),
+            "reason": _eef_start_pose_guard_error_message(start_pose_guard),
+            "runtime": {
+                "single_motion_owner": True,
+                "session_artifact": str(session_artifact_path),
+            },
+            "mature_backend_policy": _eef_mature_backend_policy(str(backend)),
+            "next_gate": (
+                "recover the joint runtime to SAFE_CENTER live hold before "
+                "starting Agent EEF live_hold, or explicitly use the reviewed "
+                "current_measured_pose takeover policy"
+            ),
+        }
+        return _write_optional_output(payload, output_path)
     adapter_gate = _eef_submit_adapter_gate(
         session=session,
         requested_backend=str(backend),
@@ -712,6 +742,31 @@ def execute_runtime_command(
             heartbeat_timeout_s=float(command.get("heartbeat_timeout_s", 0.5)),
             max_heartbeat_age_s=float(max_heartbeat_age_s),
         )
+        if command.get("kind") in EEF_COMMAND_KINDS:
+            command["start_pose_guard"] = _eef_start_pose_guard(
+                _start_pose_guard(
+                    session,
+                    expected_q_start=_object_float_list(command.get("expected_q_start")),
+                    start_pose_policy=str(command.get("start_pose_policy", "live_hold")),
+                    max_start_error_rad=float(command.get("max_start_error_rad", 0.02)),
+                )
+            )
+            if command["start_pose_guard"]["status"] != "pass":
+                error_payload = dict(session)
+                error_payload["expected_q_start"] = _object_float_list(
+                    command.get("expected_q_start")
+                )
+                error_payload["max_start_error_rad"] = float(
+                    command.get("max_start_error_rad", 0.02)
+                )
+                error_payload["start_pose_policy"] = command["start_pose_guard"][
+                    "policy"
+                ]
+                error_payload["start_pose_guard"] = command["start_pose_guard"]
+                raise RuntimeSessionError(
+                    _eef_start_pose_guard_error_message(command["start_pose_guard"]),
+                    error_payload,
+                )
         command_backend = _resolve_command_execution_backend(
             command,
             session=session,
@@ -3107,6 +3162,29 @@ def _start_pose_guard(
     }
 
 
+def _eef_start_pose_guard(
+    start_pose_guard: dict[str, object],
+) -> dict[str, object]:
+    guard = dict(start_pose_guard)
+    policy = str(guard.get("policy"))
+    safe_center_required = policy in {"live_hold", "safe_center"}
+    guard["safe_center_required"] = safe_center_required
+    if not safe_center_required:
+        return guard
+    failed_checks = list(guard.get("failed_checks") or [])
+    q_hold_to_safe_center = guard.get("q_hold_to_safe_center_max_abs_rad")
+    max_start_error_rad = float(guard.get("max_start_error_rad", 0.02))
+    safe_center_failed = (
+        q_hold_to_safe_center is None
+        or float(q_hold_to_safe_center) > max_start_error_rad
+    )
+    if safe_center_failed and "q_hold_close_to_safe_center" not in failed_checks:
+        failed_checks.append("q_hold_close_to_safe_center")
+    guard["failed_checks"] = failed_checks
+    guard["status"] = "pass" if not failed_checks else "fail"
+    return guard
+
+
 def _start_pose_guard_error_message(start_pose_guard: dict[str, object]) -> str:
     policy = start_pose_guard.get("policy")
     failed_checks = start_pose_guard.get("failed_checks")
@@ -3119,6 +3197,13 @@ def _start_pose_guard_error_message(start_pose_guard: dict[str, object]) -> str:
     if isinstance(failed_checks, list) and "q_meas_close_to_q_hold" in failed_checks:
         return "current q_meas is not close to runtime q_hold"
     return "runtime start pose guard failed"
+
+
+def _eef_start_pose_guard_error_message(start_pose_guard: dict[str, object]) -> str:
+    failed_checks = start_pose_guard.get("failed_checks")
+    if isinstance(failed_checks, list) and "q_hold_close_to_safe_center" in failed_checks:
+        return "Agent EEF live_hold requires runtime q_hold at SAFE_CENTER"
+    return _start_pose_guard_error_message(start_pose_guard)
 
 
 def _optional_float_sequence(values: object) -> list[float] | None:

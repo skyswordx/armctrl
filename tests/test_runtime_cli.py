@@ -1189,6 +1189,75 @@ def test_cli_motion_submit_eef_delta_queues_sdk_cartesian_command(tmp_path: Path
     assert command["motion_kind"] == "eef-delta"
 
 
+def test_cli_motion_submit_eef_delta_live_hold_requires_safe_center(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    session = _configure_eef_adapter_manager(
+        session_artifact,
+        adapter="sdk_cartesian",
+    )
+    non_safe_hold = [1.2, 0.0, 0.0]
+    session["q_hold"] = non_safe_hold
+    session["q_meas"] = non_safe_hold
+    session["last_hold_wall_time_s"] = time.time()
+    heartbeat = dict(session["heartbeat"])
+    heartbeat["wall_time_s"] = time.time()
+    session["heartbeat"] = heartbeat
+    session_artifact.write_text(
+        json.dumps(session, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "motion",
+            "submit",
+            "eef-delta",
+            "--session-artifact",
+            str(session_artifact),
+            "--owner",
+            "agent",
+            "--backend",
+            "sdk_cartesian",
+            "--expected-q-start",
+            "1.2",
+            "0.0",
+            "0.0",
+            "--delta-position",
+            "0.001",
+            "0.0",
+            "0.0",
+            "--delta-rpy",
+            "0.0",
+            "0.0",
+            "0.0",
+            "--start-pose-policy",
+            "live_hold",
+            "--max-heartbeat-age-s",
+            "5",
+            "--json",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(completed.stdout)
+    queue_dir = runtime_command_queue_dir(session_artifact)
+
+    assert completed.returncode == 3
+    assert payload["status"] == "blocked"
+    assert payload["start_pose_policy"] == "live_hold"
+    assert payload["start_pose_guard"]["safe_center_required"] is True
+    assert "q_hold_close_to_safe_center" in payload["start_pose_guard"]["failed_checks"]
+    assert "SAFE_CENTER" in payload["reason"]
+    assert not queue_dir.exists()
+
+
 def test_cli_motion_submit_eef_delta_blocks_non_executable_adapter_status(
     tmp_path: Path,
 ) -> None:
@@ -2188,6 +2257,85 @@ def test_runtime_eef_pose_requires_adapter_reference_limiter_before_execute(
     assert "EEF reference limit failed" in result["reason"]
     assert "pose_reference_limiter_configured" in result["reason"]
     assert published == []
+
+
+def test_runtime_eef_command_revalidates_live_hold_safe_center_before_execute(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    _configure_eef_adapter_manager(session_artifact, adapter="moveit_servo")
+    session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    primary_backend = FakeMotionBackend()
+    primary_backend.send_joint_command(
+        tuple(float(value) for value in session["q_hold"]),
+        producer="test_bootstrap",
+        mode=MotionMode.HOLD,
+        monotonic_s=0.0,
+    )
+    runtime = ArmRuntime(
+        backend=primary_backend,
+        safe_center=tuple(float(value) for value in session["safe_center"]),
+        runtime_session_id=str(session["runtime_session_id"]),
+    )
+    runtime.mark_hold_safe(q_hold=tuple(float(value) for value in session["q_hold"]))
+    payload = submit_eef_command(
+        session_artifact_path=session_artifact,
+        owner="agent",
+        backend="moveit_servo",
+        kind="eef_pose_delta",
+        frame="eef_link",
+        expected_q_start=tuple(session["q_hold"]),
+        control_period_s=0.1,
+        send_hz=50.0,
+        delta_position_m=(0.002, 0.0, 0.0),
+        delta_rpy_rad=(0.0, 0.0, 0.0),
+        max_start_error_rad=0.02,
+        heartbeat_timeout_s=0.5,
+        max_heartbeat_age_s=5.0,
+    )
+    command_path = Path(payload["artifacts"]["command"])
+    command = json.loads(command_path.read_text(encoding="utf-8"))
+    non_safe_hold = [1.2, 0.0, 0.0]
+    command["expected_q_start"] = non_safe_hold
+    command["start_pose_guard"]["expected_q_start"] = non_safe_hold
+    command["start_pose_guard"]["q_hold"] = non_safe_hold
+    command["start_pose_guard"]["q_meas"] = non_safe_hold
+    command["start_pose_guard"]["q_hold_to_expected_start_max_abs_rad"] = 0.0
+    command["start_pose_guard"]["q_hold_to_safe_center_max_abs_rad"] = 1.2
+    command_path.write_text(json.dumps(command), encoding="utf-8")
+    session["q_hold"] = non_safe_hold
+    session["q_meas"] = non_safe_hold
+    session["last_hold_wall_time_s"] = time.time()
+    heartbeat = dict(session["heartbeat"])
+    heartbeat["wall_time_s"] = time.time()
+    session["heartbeat"] = heartbeat
+    session_artifact.write_text(
+        json.dumps(session, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    runtime.mark_hold_safe(q_hold=tuple(non_safe_hold))
+    moveit_adapter = MoveItServoRuntimeBackend(
+        q_state=tuple(non_safe_hold),
+        publisher=lambda _message: None,
+        monotonic=lambda: 10.0,
+        sleep=lambda _duration_s: None,
+    )
+
+    result = execute_pending_runtime_commands(
+        session_artifact_path=session_artifact,
+        backend=primary_backend,
+        runtime=runtime,
+        eef_backends={"moveit_servo": moveit_adapter},
+        max_heartbeat_age_s=5.0,
+    )
+
+    assert result is not None
+    assert result["status"] == "rejected"
+    assert result["movement_command_sent"] is False
+    assert "SAFE_CENTER" in result["reason"]
+    assert result["start_pose_guard"]["safe_center_required"] is True
+    assert "q_hold_close_to_safe_center" in result["start_pose_guard"]["failed_checks"]
 
 
 def test_runtime_eef_command_rejects_backend_that_releases_owner_during_switch(
