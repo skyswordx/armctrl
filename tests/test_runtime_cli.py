@@ -1898,6 +1898,25 @@ def test_runtime_eef_command_executes_with_configured_moveit_backend(
     assert result["eef_switch"]["disconnected_takeover_allowed"] is False
     assert result["eef_switch"]["sdk_owner_released"] is False
     assert result["eef_switch"]["checks"]["publisher_configured"] is True
+    manager = result["eef_controller_manager"]
+    assert manager["schema"] == "armctrl.eef_controller_manager.v1"
+    assert manager["status"] == "ready"
+    assert manager["mode_switch_policy"] == "runtime_internal_controller_manager"
+    assert manager["controller_sequence"] == [
+        "joint_hold_active",
+        "resolve_explicit_eef_adapter",
+        "acquire_single_runtime_owner",
+        "seed_eef_target_from_current_state",
+        "zero_command_warmup",
+        "execute_eef_servo_command",
+        "release_to_hold_or_fault_to_damping",
+    ]
+    assert manager["passive_safe_policy"].startswith("passive/droop pose")
+    assert manager["safe_position_policy"].startswith("SAFE_CENTER")
+    assert manager["primary_backend_fallback_allowed"] is False
+    assert manager["disconnected_takeover_allowed"] is False
+    assert manager["no_heuristic_joint_fallback"] is True
+    assert manager["warmup_gate"]["status"] == "pass"
     updated_session = json.loads(session_artifact.read_text(encoding="utf-8"))
     assert updated_session["mode"] == "hold_safe"
     assert updated_session["owner"] is None
@@ -2014,6 +2033,11 @@ def test_runtime_eef_command_rejects_primary_backend_without_adapter_registry(
     assert "configured mature backend adapter" in result["reason"]
     assert result["eef_command"]["eef_adapter"] is None
     assert result["eef_command"]["adapter_resolution"] == "missing_adapter_registry"
+    assert result["eef_controller_manager"]["status"] == "rejected"
+    assert result["eef_controller_manager"]["adapter_registry_required"] is True
+    assert result["eef_controller_manager"]["primary_backend_fallback_allowed"] is False
+    assert result["eef_controller_manager"]["disconnected_takeover_allowed"] is False
+    assert result["eef_controller_manager"]["warmup_gate"]["status"] == "not_run"
     assert result["movement_command_sent"] is False
 
 

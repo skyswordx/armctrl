@@ -573,6 +573,11 @@ def execute_runtime_command(
             primary_backend=backend,
             eef_backends=eef_backends,
         )
+        eef_controller_manager = _eef_controller_manager_contract(
+            command=command,
+            session=session,
+            phase="resolved_backend",
+        )
         _ensure_command_has_executable_backend(command, backend=command_backend)
         live_runtime = runtime
         if live_runtime is None:
@@ -645,6 +650,12 @@ def execute_runtime_command(
                 command=command,
                 backend=command_backend,
             )
+            eef_controller_manager = _eef_controller_manager_contract(
+                command=command,
+                session=session,
+                phase="warmup_passed",
+                eef_switch=eef_switch,
+            )
         motion = _execute_motion_command(
             command,
             runtime=live_runtime,
@@ -683,6 +694,7 @@ def execute_runtime_command(
                 first_send_wall_time_s=first_send_wall_time_s,
                 status_update=status_update,
                 eef_switch=eef_switch,
+                eef_controller_manager=eef_controller_manager,
             )
         if motion.status == "completed":
             progress.publish()
@@ -740,6 +752,7 @@ def execute_runtime_command(
             first_send_wall_time_s=first_send_wall_time_s,
             status_update=status_update,
             eef_switch=eef_switch,
+            eef_controller_manager=eef_controller_manager,
         )
     except (ArmRuntimeError, RuntimeSessionError, ValueError) as error:
         rejected_wall_time_s = time.time()
@@ -765,6 +778,16 @@ def execute_runtime_command(
             ),
             "eef_switch": (
                 _eef_switch_rejected_contract(command)
+                if command.get("kind") in EEF_COMMAND_KINDS
+                else None
+            ),
+            "eef_controller_manager": (
+                _eef_controller_manager_contract(
+                    command=command,
+                    session=session,
+                    phase="rejected",
+                    rejection_reason=str(error),
+                )
                 if command.get("kind") in EEF_COMMAND_KINDS
                 else None
             ),
@@ -1187,6 +1210,7 @@ def _command_result_payload(
     watchdog: dict[str, object] | None = None,
     status_update: dict[str, object] | None = None,
     eef_switch: dict[str, object] | None = None,
+    eef_controller_manager: dict[str, object] | None = None,
 ) -> dict[str, object]:
     completed_wall_time_s = time.time()
     timing = _command_timing_summary(
@@ -1285,6 +1309,14 @@ def _command_result_payload(
     if command.get("kind") in EEF_COMMAND_KINDS:
         payload["motion"]["eef_command"] = _eef_motion_contract(command)
         payload["eef_switch"] = eef_switch or _eef_switch_rejected_contract(command)
+        payload["eef_controller_manager"] = (
+            eef_controller_manager
+            or _eef_controller_manager_contract(
+                command=command,
+                session={},
+                phase="unknown",
+            )
+        )
     if watchdog is not None:
         payload["watchdog"] = watchdog
     return payload
@@ -1343,6 +1375,71 @@ def _eef_switch_rejected_contract(command: dict[str, object]) -> dict[str, objec
         "disconnected_takeover_allowed": False,
         "sdk_owner_released": False,
         "reason": "command rejected before EEF servo switch warmup",
+    }
+
+
+def _eef_controller_manager_contract(
+    *,
+    command: dict[str, object],
+    session: dict[str, object],
+    phase: str,
+    eef_switch: dict[str, object] | None = None,
+    rejection_reason: str | None = None,
+) -> dict[str, object]:
+    adapter_resolution = command.get("_eef_adapter_resolution")
+    warmup_status = (
+        eef_switch.get("status")
+        if isinstance(eef_switch, dict)
+        else ("not_run" if phase == "rejected" else None)
+    )
+    ready = (
+        command.get("kind") in EEF_COMMAND_KINDS
+        and adapter_resolution == "configured_adapter_registry"
+        and warmup_status == "pass"
+    )
+    start_pose_policy = str(command.get("start_pose_policy", "live_hold"))
+    return {
+        "schema": "armctrl.eef_controller_manager.v1",
+        "status": "ready" if ready else ("rejected" if phase == "rejected" else "pending"),
+        "phase": str(phase),
+        "runtime_session_id": session.get("runtime_session_id"),
+        "owner": command.get("owner"),
+        "command_kind": command.get("kind"),
+        "command_space": "eef",
+        "runtime_backend": command.get("_resolved_runtime_backend"),
+        "eef_adapter": command.get("_resolved_eef_adapter"),
+        "adapter_resolution": adapter_resolution,
+        "start_pose_policy": start_pose_policy,
+        "pose_start_contract": (
+            "live runtime hold pose"
+            if start_pose_policy == "live_hold"
+            else start_pose_policy
+        ),
+        "passive_safe_policy": (
+            "passive/droop pose is not an Agent EEF controlled start pose; "
+            "EEF owner may start only after live runtime hold/readiness"
+        ),
+        "safe_position_policy": (
+            "SAFE_CENTER is a joint runtime hold/recovery pose; EEF servo "
+            "initializes target from current live FK after owner acquisition"
+        ),
+        "mode_switch_policy": "runtime_internal_controller_manager",
+        "controller_sequence": [
+            "joint_hold_active",
+            "resolve_explicit_eef_adapter",
+            "acquire_single_runtime_owner",
+            "seed_eef_target_from_current_state",
+            "zero_command_warmup",
+            "execute_eef_servo_command",
+            "release_to_hold_or_fault_to_damping",
+        ],
+        "bumpless_switch_required": True,
+        "adapter_registry_required": True,
+        "primary_backend_fallback_allowed": False,
+        "disconnected_takeover_allowed": False,
+        "no_heuristic_joint_fallback": True,
+        "warmup_gate": eef_switch or _eef_switch_rejected_contract(command),
+        "rejection_reason": rejection_reason,
     }
 
 
