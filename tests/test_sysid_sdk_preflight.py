@@ -1,6 +1,7 @@
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -488,6 +489,32 @@ def _passing_startup_recovery_artifact() -> dict[str, object]:
             "landing_mode": "hold",
         },
         "fault_landing_mode": "damping",
+    }
+
+
+def _passing_runtime_status_artifact() -> dict[str, object]:
+    now_s = time.time()
+    return {
+        "schema": "armctrl.arm_runtime_status.v1",
+        "status": "ok",
+        "mode": "hold_safe",
+        "owner": None,
+        "q_meas": [0.0, 0.3, 0.3, 0.0, 0.0, 0.0],
+        "q_hold": [0.0, 0.3, 0.3, 0.0, 0.0, 0.0],
+        "safe_center": [0.0, 0.3, 0.3, 0.0, 0.0, 0.0],
+        "hold_fresh": True,
+        "last_hold_wall_time_s": now_s,
+        "fault_flags": [],
+        "heartbeat": {
+            "fresh": True,
+            "age_s": 0.01,
+            "max_age_s": 5.0,
+            "wall_time_s": now_s,
+        },
+        "readiness": {
+            "agent_sysid_smoke_allowed": True,
+            "failed_checks": [],
+        },
     }
 
 
@@ -3202,11 +3229,13 @@ def test_sdk_agent_sysid_smoke_readiness_accepts_startup_recovery_success() -> N
     assert passing["next_gate"] == "agent_smoke_then_sysid_smoke_on_target"
 
 
-def test_cli_sysid_agent_smoke_readiness_reads_gate_artifacts(tmp_path: Path) -> None:
+def test_cli_sysid_agent_smoke_readiness_rejects_tiny_motion_artifact(
+    tmp_path: Path,
+) -> None:
     doctor_artifact = tmp_path / "doctor.json"
     hold_damping_artifact = tmp_path / "hold_damping.json"
     tiny_motion_artifact = tmp_path / "tiny_motion_execute.json"
-    output_artifact = tmp_path / "agent_sysid_readiness.json"
+    runtime_status_artifact = tmp_path / "runtime_status.json"
     doctor_artifact.write_text(
         json.dumps(_passing_doctor_artifact()),
         encoding="utf-8",
@@ -3217,6 +3246,10 @@ def test_cli_sysid_agent_smoke_readiness_reads_gate_artifacts(tmp_path: Path) ->
     )
     tiny_motion_artifact.write_text(
         json.dumps(_passing_tiny_motion_execute_artifact()),
+        encoding="utf-8",
+    )
+    runtime_status_artifact.write_text(
+        json.dumps(_passing_runtime_status_artifact()),
         encoding="utf-8",
     )
 
@@ -3231,8 +3264,142 @@ def test_cli_sysid_agent_smoke_readiness_reads_gate_artifacts(tmp_path: Path) ->
             str(doctor_artifact),
             "--hold-damping-artifact",
             str(hold_damping_artifact),
+            "--runtime-status-artifact",
+            str(runtime_status_artifact),
             "--tiny-motion-artifact",
             str(tiny_motion_artifact),
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert "unrecognized arguments: --tiny-motion-artifact" in completed.stderr
+
+
+def test_cli_sysid_agent_smoke_readiness_rejects_startup_recovery_artifact(
+    tmp_path: Path,
+) -> None:
+    doctor_artifact = tmp_path / "doctor.json"
+    hold_damping_artifact = tmp_path / "hold_damping.json"
+    startup_recovery_artifact = tmp_path / "startup_recovery.json"
+    runtime_status_artifact = tmp_path / "runtime_status.json"
+    doctor_artifact.write_text(
+        json.dumps(_passing_doctor_artifact()),
+        encoding="utf-8",
+    )
+    hold_damping_artifact.write_text(
+        json.dumps(_passing_hold_damping_artifact()),
+        encoding="utf-8",
+    )
+    startup_recovery_artifact.write_text(
+        json.dumps(_passing_startup_recovery_artifact()),
+        encoding="utf-8",
+    )
+    runtime_status_artifact.write_text(
+        json.dumps(_passing_runtime_status_artifact()),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "sysid",
+            "sdk-agent-sysid-smoke-readiness",
+            "--doctor-artifact",
+            str(doctor_artifact),
+            "--hold-damping-artifact",
+            str(hold_damping_artifact),
+            "--runtime-status-artifact",
+            str(runtime_status_artifact),
+            "--startup-recovery-artifact",
+            str(startup_recovery_artifact),
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert "unrecognized arguments: --startup-recovery-artifact" in completed.stderr
+
+
+def test_cli_sysid_agent_smoke_readiness_requires_runtime_status_artifact(
+    tmp_path: Path,
+) -> None:
+    doctor_artifact = tmp_path / "doctor.json"
+    hold_damping_artifact = tmp_path / "hold_damping.json"
+    doctor_artifact.write_text(
+        json.dumps(_passing_doctor_artifact()),
+        encoding="utf-8",
+    )
+    hold_damping_artifact.write_text(
+        json.dumps(_passing_hold_damping_artifact()),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "sysid",
+            "sdk-agent-sysid-smoke-readiness",
+            "--doctor-artifact",
+            str(doctor_artifact),
+            "--hold-damping-artifact",
+            str(hold_damping_artifact),
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert "the following arguments are required: --runtime-status-artifact" in completed.stderr
+
+
+def test_cli_sysid_agent_smoke_readiness_accepts_live_runtime_status(
+    tmp_path: Path,
+) -> None:
+    doctor_artifact = tmp_path / "doctor.json"
+    hold_damping_artifact = tmp_path / "hold_damping.json"
+    runtime_status_artifact = tmp_path / "runtime_status.json"
+    output_artifact = tmp_path / "agent_sysid_readiness.json"
+    doctor_artifact.write_text(
+        json.dumps(_passing_doctor_artifact()),
+        encoding="utf-8",
+    )
+    hold_damping_artifact.write_text(
+        json.dumps(_passing_hold_damping_artifact()),
+        encoding="utf-8",
+    )
+    runtime_status_artifact.write_text(
+        json.dumps(_passing_runtime_status_artifact()),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "sysid",
+            "sdk-agent-sysid-smoke-readiness",
+            "--doctor-artifact",
+            str(doctor_artifact),
+            "--hold-damping-artifact",
+            str(hold_damping_artifact),
+            "--runtime-status-artifact",
+            str(runtime_status_artifact),
+            "--max-heartbeat-age-s",
+            "5",
             "--output",
             str(output_artifact),
             "--json",
@@ -3247,125 +3414,8 @@ def test_cli_sysid_agent_smoke_readiness_reads_gate_artifacts(tmp_path: Path) ->
     assert payload["status"] == "ok"
     assert payload["schema"] == "armctrl.sysid_agent_smoke_readiness.v1"
     assert payload["agent_sysid_smoke_allowed"] is True
-    assert payload["artifacts"]["readiness"] == str(output_artifact)
-
-    saved_payload = json.loads(output_artifact.read_text(encoding="utf-8"))
-    assert saved_payload == payload
-
-
-def test_cli_sysid_agent_smoke_readiness_accepts_startup_recovery_artifact(
-    tmp_path: Path,
-) -> None:
-    doctor_artifact = tmp_path / "doctor.json"
-    hold_damping_artifact = tmp_path / "hold_damping.json"
-    startup_recovery_artifact = tmp_path / "startup_recovery.json"
-    output_artifact = tmp_path / "agent_sysid_readiness.json"
-    doctor_artifact.write_text(
-        json.dumps(_passing_doctor_artifact()),
-        encoding="utf-8",
-    )
-    hold_damping_artifact.write_text(
-        json.dumps(_passing_hold_damping_artifact()),
-        encoding="utf-8",
-    )
-    startup_recovery_artifact.write_text(
-        json.dumps(_passing_startup_recovery_artifact()),
-        encoding="utf-8",
-    )
-
-    completed = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "armctrl.cli",
-            "sysid",
-            "sdk-agent-sysid-smoke-readiness",
-            "--doctor-artifact",
-            str(doctor_artifact),
-            "--hold-damping-artifact",
-            str(hold_damping_artifact),
-            "--startup-recovery-artifact",
-            str(startup_recovery_artifact),
-            "--output",
-            str(output_artifact),
-            "--json",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-
-    payload = json.loads(completed.stdout)
-
-    assert payload["schema"] == "armctrl.sysid_agent_smoke_readiness.v1"
-    assert payload["agent_sysid_smoke_allowed"] is True
-    assert payload["prerequisites"]["startup_recovery"] == "pass"
-    assert payload["startup_recovery"]["run_status"] == "completed"
-    assert payload["artifacts"]["readiness"] == str(output_artifact)
-
-
-def test_cli_sysid_agent_smoke_readiness_blocks_failed_tiny_motion_acceptance(
-    tmp_path: Path,
-) -> None:
-    doctor_artifact = tmp_path / "doctor.json"
-    hold_damping_artifact = tmp_path / "hold_damping.json"
-    tiny_motion_artifact = tmp_path / "tiny_motion_execute_failed_acceptance.json"
-    output_artifact = tmp_path / "agent_sysid_readiness_blocked.json"
-    doctor_artifact.write_text(
-        json.dumps(_passing_doctor_artifact()),
-        encoding="utf-8",
-    )
-    hold_damping_artifact.write_text(
-        json.dumps(_passing_hold_damping_artifact()),
-        encoding="utf-8",
-    )
-    failed_tiny_motion = _passing_tiny_motion_execute_artifact()
-    failed_tiny_motion["acceptance"] = {
-        "schema": "armctrl.real_motion_acceptance.v1",
-        "stage": "tiny_motion",
-        "status": "review_required",
-        "checks": {
-            "no_fault_flags": {
-                "status": "fail",
-                "fault_flags": ["over_current"],
-            }
-        },
-        "next_gate": "inspect_acceptance_checks_before_next_hardware_gate",
-    }
-    tiny_motion_artifact.write_text(
-        json.dumps(failed_tiny_motion),
-        encoding="utf-8",
-    )
-
-    completed = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "armctrl.cli",
-            "sysid",
-            "sdk-agent-sysid-smoke-readiness",
-            "--doctor-artifact",
-            str(doctor_artifact),
-            "--hold-damping-artifact",
-            str(hold_damping_artifact),
-            "--tiny-motion-artifact",
-            str(tiny_motion_artifact),
-            "--output",
-            str(output_artifact),
-            "--json",
-        ],
-        capture_output=True,
-        text=True,
-    )
-
-    payload = json.loads(completed.stdout)
-
-    assert completed.returncode == 3
-    assert payload["status"] == "blocked"
-    assert payload["schema"] == "armctrl.sysid_agent_smoke_readiness.v1"
-    assert payload["agent_sysid_smoke_allowed"] is False
-    assert payload["prerequisites"]["tiny_motion"] == "fail"
-    assert payload["tiny_motion"]["acceptance"]["status"] == "review_required"
+    assert payload["prerequisites"]["runtime_status"] == "pass"
+    assert payload["runtime_status"]["readiness"]["agent_sysid_smoke_allowed"] is True
     assert payload["artifacts"]["readiness"] == str(output_artifact)
 
     saved_payload = json.loads(output_artifact.read_text(encoding="utf-8"))

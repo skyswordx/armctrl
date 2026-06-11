@@ -1296,8 +1296,13 @@ def test_cli_console_catalog_exposes_profiles_without_runtime() -> None:
     assert "armctrl sysid sdk-jog-real" not in payload["command_classes"]["formal"]
     assert "armctrl runtime submit-trajectory" in payload["command_classes"]["legacy_alias"]
     assert (
+        "armctrl sysid sdk-agent-sysid-smoke-readiness "
+        "--runtime-status-artifact <live_runtime_status.json>"
+        in payload["command_classes"]["legacy_compatibility_wrapper"]
+    )
+    assert (
         "armctrl sysid sdk-agent-sysid-smoke-readiness"
-        in payload["command_classes"]["read_only_diagnostic"]
+        not in payload["command_classes"]["read_only_diagnostic"]
     )
     assert payload["command_classes"]["diagnostic"] == [
         "see read_only_diagnostic and hardware_diagnostic_only"

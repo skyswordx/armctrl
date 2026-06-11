@@ -1990,13 +1990,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         required=True,
     )
     sysid_agent_sysid_smoke_readiness_parser.add_argument(
-        "--tiny-motion-artifact",
-    )
-    sysid_agent_sysid_smoke_readiness_parser.add_argument(
-        "--startup-recovery-artifact",
-    )
-    sysid_agent_sysid_smoke_readiness_parser.add_argument(
         "--runtime-status-artifact",
+        required=True,
     )
     sysid_agent_sysid_smoke_readiness_parser.add_argument(
         "--max-heartbeat-age-s",
@@ -4894,42 +4889,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         hold_damping_artifact = json.loads(
             Path(args.hold_damping_artifact).read_text(encoding="utf-8")
         )
-        tiny_motion_artifact = (
-            json.loads(Path(args.tiny_motion_artifact).read_text(encoding="utf-8"))
-            if args.tiny_motion_artifact is not None
-            else None
+        runtime_status_artifact = refresh_runtime_status_payload(
+            json.loads(Path(args.runtime_status_artifact).read_text(encoding="utf-8")),
+            max_heartbeat_age_s=args.max_heartbeat_age_s,
         )
-        startup_recovery_artifact = (
-            json.loads(
-                Path(args.startup_recovery_artifact).read_text(encoding="utf-8")
-            )
-            if args.startup_recovery_artifact is not None
-            else None
-        )
-        runtime_status_artifact = (
-            refresh_runtime_status_payload(
-                json.loads(
-                    Path(args.runtime_status_artifact).read_text(encoding="utf-8")
-                ),
-                max_heartbeat_age_s=args.max_heartbeat_age_s,
-            )
-            if args.runtime_status_artifact is not None
-            else None
-        )
-        if (
-            tiny_motion_artifact is None
-            and startup_recovery_artifact is None
-            and runtime_status_artifact is None
-        ):
-            parser.error(
-                "sdk-agent-sysid-smoke-readiness requires --runtime-status-artifact, "
-                "--startup-recovery-artifact, or --tiny-motion-artifact"
-            )
         result = SdkAgentSysIdSmokeReadinessChecker().check(
             doctor_artifact=doctor_artifact,
             hold_damping_artifact=hold_damping_artifact,
-            tiny_motion_artifact=tiny_motion_artifact,
-            startup_recovery_artifact=startup_recovery_artifact,
             runtime_status_artifact=runtime_status_artifact,
         )
         result_payload = result.to_json()
@@ -5098,8 +5064,13 @@ def _command_surface_classes() -> dict[str, object]:
             "armctrl sysid sdk-arm-session",
             "armctrl sysid sdk-tiny-motion-plan",
             "armctrl sysid sdk-tiny-motion-execute-fake",
-            "armctrl sysid sdk-agent-sysid-smoke-readiness",
             "armctrl sysid sdk-handshake-plan",
+        ],
+        "legacy_compatibility_wrapper": [
+            (
+                "armctrl sysid sdk-agent-sysid-smoke-readiness "
+                "--runtime-status-artifact <live_runtime_status.json>"
+            ),
         ],
         "hardware_diagnostic_only": [
             "armctrl sysid sdk-jog-real",
