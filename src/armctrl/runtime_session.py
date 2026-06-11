@@ -75,6 +75,68 @@ def eef_adapter_manager_payload(
     }
 
 
+def runtime_controller_manager_payload(
+    *,
+    backend: str,
+    eef_adapter_manager: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Describe runtime-owned controllers available to Agent/SysID/Recipe/UI."""
+
+    eef_manager = (
+        eef_adapter_manager
+        if isinstance(eef_adapter_manager, dict)
+        else eef_adapter_manager_payload(primary_backend=str(backend))
+    )
+    eef_ready = bool(eef_manager.get("eef_command_executable"))
+    eef_status = "available" if eef_ready else "needs_mature_adapter"
+    return {
+        "schema": "armctrl.runtime_controller_manager.v1",
+        "status": "ok",
+        "primary_runtime_backend": str(backend),
+        "sdk_can_singleton": True,
+        "mode_switch_owner": "arm_runtime",
+        "controller_switch_policy": "runtime_internal_no_cli_reopen",
+        "controllers": {
+            "joint_hold": {
+                "status": "available",
+                "command_space": "joint",
+                "role": "safe live hold and release target",
+                "requires_live_hold": True,
+            },
+            "joint_trajectory": {
+                "status": "available",
+                "command_space": "joint",
+                "role": "SysID/Recipe/preposition reviewed trajectory replay",
+                "contract": "q_points/dq_points/ddq_points/sample_hz/send_hz",
+                "safety": "start_pose_guard + segment/velocity/tracking evidence",
+            },
+            "joint_intent": {
+                "status": "available",
+                "command_space": "joint",
+                "role": "Agent low-frequency target intent shaped into short horizon trajectory",
+                "safety": "max_joint_delta + max_joint_velocity + smoothstep artifact",
+            },
+            "eef_servo": {
+                "status": eef_status,
+                "command_space": "eef",
+                "role": "Agent/Teleop EEF delta/twist/pose through mature servo adapter",
+                "adapter_registry_required": True,
+                "configured_adapters": list(eef_manager.get("configured_adapters") or []),
+                "missing_adapters": list(eef_manager.get("missing_adapters") or []),
+                "bumpless_switch_required": True,
+                "start_pose_policy": "live runtime hold; passive/droop is not a controlled Agent EEF start",
+                "safe_position_policy": "SAFE_CENTER is maintained by joint_hold before EEF target is seeded from current FK",
+            },
+        },
+        "fallback_policy": {
+            "primary_backend_fallback_allowed": False,
+            "disconnected_takeover_allowed": False,
+            "no_heuristic_joint_fallback": True,
+            "fault_landing_mode": MotionMode.DAMPING.value,
+        },
+    }
+
+
 def start_fake_runtime_session(
     *,
     q_current: Sequence[float],
@@ -725,6 +787,15 @@ def refresh_runtime_status_payload(
     refreshed = dict(payload)
     refreshed["schema"] = RUNTIME_STATUS_SCHEMA
     refreshed["status"] = "ok"
+    if not isinstance(refreshed.get("eef_adapter_manager"), dict):
+        refreshed["eef_adapter_manager"] = eef_adapter_manager_payload(
+            primary_backend=str(refreshed.get("backend") or "unknown"),
+            configured_adapters=(),
+        )
+    refreshed["runtime_controller_manager"] = runtime_controller_manager_payload(
+        backend=str(refreshed.get("backend") or "unknown"),
+        eef_adapter_manager=refreshed["eef_adapter_manager"],
+    )
     heartbeat = _heartbeat_status(
         refreshed.get("heartbeat"),
         max_heartbeat_age_s=float(max_heartbeat_age_s),
@@ -809,6 +880,7 @@ def runtime_status_summary(payload: dict[str, object]) -> dict[str, object]:
         "heartbeat": heartbeat if isinstance(heartbeat, dict) else None,
         "readiness": readiness if isinstance(readiness, dict) else runtime_readiness(payload),
         "eef_adapter_manager": payload.get("eef_adapter_manager"),
+        "runtime_controller_manager": payload.get("runtime_controller_manager"),
     }
 
 
@@ -857,6 +929,10 @@ def runtime_status_payload(
             configured_adapters=(),
         ),
     }
+    payload["runtime_controller_manager"] = runtime_controller_manager_payload(
+        backend=str(backend),
+        eef_adapter_manager=payload["eef_adapter_manager"],
+    )
     if recovery is not None:
         payload["recovery"] = recovery
     payload["readiness"] = runtime_readiness(payload)

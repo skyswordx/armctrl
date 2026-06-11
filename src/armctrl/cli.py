@@ -49,6 +49,7 @@ from armctrl.runtime_session import (
     refresh_runtime_status_payload,
     release_owner_from_artifact,
     runtime_readiness,
+    runtime_controller_manager_payload,
     runtime_status_from_artifact,
     start_arx5_cartesian_runtime_session,
     start_arx5_runtime_session,
@@ -6111,6 +6112,10 @@ def _attach_eef_adapter_manager_from_args(
             "runtime gateway rehearsal"
         )
         updated["eef_adapter_manager"] = manager
+    updated["runtime_controller_manager"] = runtime_controller_manager_payload(
+        backend=str(updated.get("backend") or "unknown"),
+        eef_adapter_manager=updated["eef_adapter_manager"],
+    )
     return updated
 
 

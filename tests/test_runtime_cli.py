@@ -1577,6 +1577,17 @@ def test_runtime_status_exposes_unconfigured_eef_adapter_manager() -> None:
     assert manager["disconnected_takeover_allowed"] is False
     assert manager["no_heuristic_joint_fallback"] is True
     assert manager["eef_command_executable"] is False
+    controllers = refreshed["runtime_controller_manager"]["controllers"]
+    assert controllers["joint_hold"]["status"] == "available"
+    assert controllers["joint_trajectory"]["status"] == "available"
+    assert controllers["joint_intent"]["status"] == "available"
+    assert controllers["eef_servo"]["status"] == "needs_mature_adapter"
+    assert (
+        refreshed["runtime_controller_manager"]["fallback_policy"][
+            "disconnected_takeover_allowed"
+        ]
+        is False
+    )
 
 
 def test_runtime_eef_adapter_manager_ignores_fake_adapter_on_real_backend() -> None:
@@ -1599,6 +1610,11 @@ def test_runtime_eef_adapter_manager_ignores_fake_adapter_on_real_backend() -> N
     assert manager["ignored_requested_adapters"] == ["moveit_servo"]
     assert manager["eef_command_executable"] is False
     assert "offline runtime gateway rehearsal" in manager["reason"]
+    controllers = updated["runtime_controller_manager"]["controllers"]
+    assert controllers["joint_trajectory"]["status"] == "available"
+    assert controllers["joint_intent"]["status"] == "available"
+    assert controllers["eef_servo"]["status"] == "needs_mature_adapter"
+    assert controllers["eef_servo"]["configured_adapters"] == []
 
 
 def test_runtime_eef_command_revalidates_reference_limit_before_execute(
@@ -5608,6 +5624,18 @@ def test_cli_runtime_start_fake_serve_executes_eef_with_configured_adapter(
             is False
         )
         assert served_status["eef_adapter_manager"]["eef_command_executable"] is True
+        assert (
+            served_status["runtime_controller_manager"]["controllers"]["eef_servo"][
+                "status"
+            ]
+            == "available"
+        )
+        assert (
+            served_status["runtime_controller_manager"]["controllers"]["joint_trajectory"][
+                "contract"
+            ]
+            == "q_points/dq_points/ddq_points/sample_hz/send_hz"
+        )
 
         submit_completed = subprocess.run(
             [
