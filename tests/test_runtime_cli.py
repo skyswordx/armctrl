@@ -820,6 +820,60 @@ def test_cli_motion_compile_agent_waypoints_rejects_high_acceleration(
     assert "joint_acceleration_within_limit" in payload["reason"]
 
 
+def test_cli_motion_compile_agent_waypoints_rejects_direction_reversal_acceleration(
+    tmp_path: Path,
+) -> None:
+    output_dir = tmp_path / "compiled-agent-reversal-waypoints"
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "motion",
+            "compile",
+            "joint-trajectory",
+            "--source",
+            "agent",
+            "--owner",
+            "agent",
+            "--expected-q-start",
+            "0.0",
+            "0.3",
+            "0.3",
+            "--q-point",
+            "0.0",
+            "0.3",
+            "0.3",
+            "--q-point",
+            "0.02",
+            "0.3",
+            "0.3",
+            "--q-point",
+            "0.0",
+            "0.3",
+            "0.3",
+            "--sample-hz",
+            "10",
+            "--max-joint-velocity-rad-s",
+            "0.25",
+            "--max-joint-acceleration-rad-s2",
+            "0.5",
+            "--output",
+            str(output_dir),
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+
+    assert completed.returncode == 3
+    assert payload["status"] == "rejected"
+    assert "joint_acceleration_within_limit" in payload["reason"]
+
+
 def test_runtime_revalidates_agent_joint_trajectory_safety_before_execute(
     tmp_path: Path,
 ) -> None:
@@ -876,6 +930,65 @@ def test_runtime_revalidates_agent_joint_trajectory_safety_before_execute(
         and command.mode == MotionMode.TRAJECTORY_REPLAY.value
         for command in backend.joint_commands
     )
+
+
+def test_runtime_revalidates_agent_joint_trajectory_direction_reversal_acceleration(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    submitted = submit_trajectory_command(
+        session_artifact_path=session_artifact,
+        owner="agent",
+        expected_q_start=(0.0, 0.3, 0.3),
+        q_points=[(0.0, 0.3, 0.3), (0.004, 0.3, 0.3)],
+        send_hz=50.0,
+        trajectory_sample_hz=50.0,
+        max_start_error_rad=0.02,
+        heartbeat_timeout_s=0.5,
+        max_heartbeat_age_s=5.0,
+        max_joint_segment_delta_rad=0.1,
+        max_joint_velocity_rad_s=0.25,
+        max_joint_acceleration_rad_s2=0.5,
+    )
+    command_path = Path(submitted["artifacts"]["command"])
+    command = json.loads(command_path.read_text(encoding="utf-8"))
+    command["q_points"] = [
+        [0.0, 0.3, 0.3],
+        [0.02, 0.3, 0.3],
+        [0.0, 0.3, 0.3],
+    ]
+    command["trajectory_sample_hz"] = 10.0
+    command.pop("joint_trajectory_safety", None)
+    command_path.write_text(json.dumps(command), encoding="utf-8")
+
+    session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    backend = FakeMotionBackend()
+    backend.send_joint_command(
+        tuple(float(value) for value in session["q_meas"]),
+        producer="test_bootstrap",
+        mode=MotionMode.HOLD,
+        monotonic_s=0.0,
+    )
+    runtime = ArmRuntime(
+        backend=backend,
+        safe_center=tuple(float(value) for value in session["safe_center"]),
+        runtime_session_id=str(session["runtime_session_id"]),
+    )
+    runtime.mark_hold_safe(q_hold=tuple(float(value) for value in session["q_hold"]))
+
+    result = execute_pending_runtime_commands(
+        session_artifact_path=session_artifact,
+        backend=backend,
+        runtime=runtime,
+        max_heartbeat_age_s=5.0,
+    )
+
+    assert result is not None
+    assert result["status"] == "rejected"
+    assert "joint trajectory safety failed" in result["reason"]
+    assert "joint_acceleration_within_limit" in result["reason"]
+    assert result["movement_command_sent"] is False
 
 
 def test_runtime_revalidates_agent_joint_intent_safety_before_execute(

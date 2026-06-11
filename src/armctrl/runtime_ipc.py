@@ -2577,19 +2577,40 @@ def _ensure_joint_trajectory_safety(
         if isinstance(existing, dict)
         else None
     )
+    command_max_segment_delta = _optional_float(
+        command.get("max_joint_segment_delta_rad")
+    )
+    command_max_velocity = _optional_float(command.get("max_joint_velocity_rad_s"))
+    command_max_acceleration = _optional_float(
+        command.get("max_joint_acceleration_rad_s2")
+    )
     owner = str(command.get("owner"))
-    max_velocity = existing_max_velocity
+    max_segment_delta = (
+        existing_max_segment_delta
+        if existing_max_segment_delta is not None
+        else command_max_segment_delta
+    )
+    max_velocity = (
+        existing_max_velocity
+        if existing_max_velocity is not None
+        else command_max_velocity
+    )
     if max_velocity is None and owner == "agent":
         max_velocity = DEFAULT_AGENT_MAX_JOINT_VELOCITY_RAD_S
+    max_acceleration = (
+        existing_max_acceleration
+        if existing_max_acceleration is not None
+        else command_max_acceleration
+    )
     guard = _joint_trajectory_safety_guard(
         owner=owner,
         q_points=q_points,
         trajectory_sample_hz=float(
             command.get("trajectory_sample_hz", command.get("send_hz", 50.0))
         ),
-        max_joint_segment_delta_rad=existing_max_segment_delta,
+        max_joint_segment_delta_rad=max_segment_delta,
         max_joint_velocity_rad_s=max_velocity,
-        max_joint_acceleration_rad_s2=existing_max_acceleration,
+        max_joint_acceleration_rad_s2=max_acceleration,
     )
     command["joint_trajectory_safety"] = guard
     if guard["status"] != "pass":
@@ -2853,6 +2874,7 @@ def _joint_trajectory_safety_guard(
 
     segment_deltas: list[list[float]] = []
     segment_abs_deltas: list[list[float]] = []
+    segment_velocities: list[list[float]] = []
     segment_abs_velocities: list[list[float]] = []
     for previous, current in zip(q_points, q_points[1:]):
         deltas = [
@@ -2860,15 +2882,15 @@ def _joint_trajectory_safety_guard(
             for previous_value, current_value in zip(previous, current)
         ]
         abs_deltas = [abs(value) for value in deltas]
+        velocities = [value * float(trajectory_sample_hz) for value in deltas]
         segment_deltas.append(deltas)
         segment_abs_deltas.append(abs_deltas)
-        segment_abs_velocities.append(
-            [value * float(trajectory_sample_hz) for value in abs_deltas]
-        )
+        segment_velocities.append(velocities)
+        segment_abs_velocities.append([abs(value) for value in velocities])
     segment_abs_accelerations: list[list[float]] = []
     for previous_velocity, current_velocity in zip(
-        segment_abs_velocities,
-        segment_abs_velocities[1:],
+        segment_velocities,
+        segment_velocities[1:],
     ):
         segment_abs_accelerations.append(
             [
@@ -2915,6 +2937,7 @@ def _joint_trajectory_safety_guard(
         "max_joint_acceleration_rad_s2": max_acceleration,
         "segment_delta_rad": segment_deltas,
         "segment_abs_delta_rad": segment_abs_deltas,
+        "segment_velocity_rad_s": segment_velocities,
         "segment_abs_velocity_rad_s": segment_abs_velocities,
         "segment_abs_acceleration_rad_s2": segment_abs_accelerations,
         "max_segment_abs_delta_rad": max_abs_delta,

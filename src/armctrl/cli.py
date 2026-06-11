@@ -5868,6 +5868,7 @@ def _compiled_joint_trajectory_safety(
 
     segment_deltas: list[list[float]] = []
     segment_abs_deltas: list[list[float]] = []
+    segment_velocities: list[list[float]] = []
     segment_abs_velocities: list[list[float]] = []
     for previous, current in zip(q_points, q_points[1:]):
         deltas = [
@@ -5875,15 +5876,15 @@ def _compiled_joint_trajectory_safety(
             for previous_value, current_value in zip(previous, current)
         ]
         abs_deltas = [abs(value) for value in deltas]
+        velocities = [value * float(trajectory_sample_hz) for value in deltas]
         segment_deltas.append(deltas)
         segment_abs_deltas.append(abs_deltas)
-        segment_abs_velocities.append(
-            [value * float(trajectory_sample_hz) for value in abs_deltas]
-        )
+        segment_velocities.append(velocities)
+        segment_abs_velocities.append([abs(value) for value in velocities])
     segment_abs_accelerations: list[list[float]] = []
     for previous_velocity, current_velocity in zip(
-        segment_abs_velocities,
-        segment_abs_velocities[1:],
+        segment_velocities,
+        segment_velocities[1:],
     ):
         segment_abs_accelerations.append(
             [
@@ -5930,6 +5931,7 @@ def _compiled_joint_trajectory_safety(
         "max_joint_acceleration_rad_s2": max_acceleration,
         "segment_delta_rad": segment_deltas,
         "segment_abs_delta_rad": segment_abs_deltas,
+        "segment_velocity_rad_s": segment_velocities,
         "segment_abs_velocity_rad_s": segment_abs_velocities,
         "segment_abs_acceleration_rad_s2": segment_abs_accelerations,
         "max_segment_abs_delta_rad": max_abs_delta,
