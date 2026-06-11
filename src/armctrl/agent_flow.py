@@ -870,9 +870,9 @@ def _default_arx5_agent_backend_factory(
     interface: str,
     controller_dt_s: float | None = None,
 ):
-    from armctrl.sysid_run import Arx5InterfaceCollectionBackend
+    from armctrl.arx5_sdk_joint_runtime import Arx5SdkJointRuntimeBackend
 
-    return Arx5InterfaceCollectionBackend(
+    return Arx5SdkJointRuntimeBackend(
         model=model,
         interface=interface,
         controller_dt_s=controller_dt_s,

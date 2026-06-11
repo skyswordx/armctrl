@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from armctrl.motion_runtime import FakeMotionBackend, JointTrajectoryPoint, MotionRuntime
-from armctrl.sysid_run import Arx5InterfaceCollectionBackend
+from armctrl.arx5_sdk_joint_runtime import Arx5SdkJointRuntimeBackend
 from armctrl.sysid_sdk import (
     SDK_HOLD_DAMPING_CONFIRMATION,
     SDK_RECOVER_STARTUP_CONFIRMATION,
@@ -993,7 +993,7 @@ def test_sdk_startup_recovery_rejects_unsafe_step_limit_before_send() -> None:
 
 def test_arx5_backend_restores_motion_gain_and_timestamps_commands_before_streaming() -> None:
     clock = ManualClock()
-    backend = Arx5InterfaceCollectionBackend(
+    backend = Arx5SdkJointRuntimeBackend(
         model="X5",
         interface="can0",
         arx5_module=MotionGainArx5Module,
@@ -1037,7 +1037,7 @@ def test_arx5_backend_restores_motion_gain_and_timestamps_commands_before_stream
 
 def test_arx5_backend_writes_trajectory_velocity_into_sdk_joint_state() -> None:
     clock = ManualClock()
-    backend = Arx5InterfaceCollectionBackend(
+    backend = Arx5SdkJointRuntimeBackend(
         model="X5",
         interface="can0",
         arx5_module=MotionGainArx5Module,
@@ -1073,7 +1073,7 @@ def test_arx5_backend_writes_trajectory_velocity_into_sdk_joint_state() -> None:
 
 def test_arx5_backend_accepts_method_style_sdk_gain_api() -> None:
     clock = ManualClock()
-    backend = Arx5InterfaceCollectionBackend(
+    backend = Arx5SdkJointRuntimeBackend(
         model="X5",
         interface="can0",
         arx5_module=MethodStyleGainArx5Module,

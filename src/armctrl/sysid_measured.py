@@ -352,9 +352,9 @@ def _tau_meas_trace() -> dict[str, object]:
         "code_path": [
             "armctrl.motion_runtime.JointStateSnapshot.tau_meas",
             "armctrl.motion_runtime.MotionAuditSample.tau_meas",
-            "armctrl.sysid_run.Arx5InterfaceCollectionBackend.read_joint_state",
+            "armctrl.arx5_sdk_joint_runtime.Arx5SdkJointRuntimeBackend.read_joint_state",
             "self._controller.get_joint_state().torque()",
-            "armctrl.sysid_run.Arx5InterfaceCollectionBackend._rows_from_motion_result",
+            "armctrl.arx5_sdk_joint_runtime.Arx5SdkJointRuntimeBackend._rows_from_motion_result",
             "derived_sysid_csv/tau_meas_1..6",
         ],
         "sdk_source_status": "python_binding_field_confirmed_unit_unconfirmed",

@@ -9,9 +9,9 @@ import pytest
 
 from armctrl.motion_runtime import MotionMode
 from armctrl.sysid import SysIdPlanRequest, trajectory_rows
-from armctrl.sysid_run import (
-    Arx5InterfaceCollectionBackend,
-    SDK_CONFIRMATION,
+from armctrl.arx5_sdk_joint_runtime import (
+    ARX5_JOINT_RUNTIME_CONFIRMATION,
+    Arx5SdkJointRuntimeBackend,
 )
 from armctrl.runtime_session import (
     record_runtime_hold_tick,
@@ -510,6 +510,8 @@ def test_sysid_run_module_does_not_keep_legacy_sdk_runner_gate() -> None:
 
     source = Path(sysid_run.__file__).read_text(encoding="utf-8")
 
+    assert not hasattr(sysid_run, "Arx5SdkJointRuntimeBackend")
+    assert not hasattr(sysid_run, "ARX5_JOINT_RUNTIME_CONFIRMATION")
     assert not hasattr(sysid_run, "SdkSysIdRunnerGate")
     assert "sdk-agent-sysid-smoke-readiness" not in source
     assert "complete real tiny motion before sdk sysid run" not in source
@@ -543,7 +545,7 @@ def test_cli_sysid_run_sdk_removed_even_with_live_runtime_and_candidate(
     def forbidden_submit(**kwargs) -> dict[str, object]:
         raise AssertionError("removed sysid run must not submit runtime command")
 
-    monkeypatch.setattr(cli, "Arx5InterfaceCollectionBackend", ForbiddenArx5Backend)
+    monkeypatch.setattr(cli, "Arx5SdkJointRuntimeBackend", ForbiddenArx5Backend)
     monkeypatch.setattr(cli, "submit_trajectory_command", forbidden_submit)
 
     with pytest.raises(SystemExit) as error:
@@ -576,7 +578,7 @@ def test_cli_sysid_run_sdk_removed_even_with_live_runtime_and_candidate(
                 "--runtime-session-artifact",
                 str(runtime_session),
                 "--confirm",
-                SDK_CONFIRMATION,
+                ARX5_JOINT_RUNTIME_CONFIRMATION,
                 "--output",
                 str(output_dir),
                 "--json",
@@ -610,7 +612,7 @@ def test_cli_sysid_run_sdk_removed_does_not_report_fake_acceptance_or_faults(
         def __init__(self, **kwargs) -> None:
             raise AssertionError("sdk sysid must not open SDK outside runtime")
 
-    monkeypatch.setattr(cli, "Arx5InterfaceCollectionBackend", ForbiddenBackendFactory)
+    monkeypatch.setattr(cli, "Arx5SdkJointRuntimeBackend", ForbiddenBackendFactory)
 
     with pytest.raises(SystemExit) as error:
         cli.main(
@@ -638,7 +640,7 @@ def test_cli_sysid_run_sdk_removed_does_not_report_fake_acceptance_or_faults(
                 "--output",
                 str(output_dir),
                 "--confirm",
-                SDK_CONFIRMATION,
+                ARX5_JOINT_RUNTIME_CONFIRMATION,
                 "--readiness-artifact",
                 str(readiness_artifact),
                 "--runtime-session-artifact",
@@ -663,7 +665,7 @@ def test_cli_sysid_run_sdk_removed_does_not_report_fake_acceptance_or_faults(
 
 def test_cli_sysid_run_rejects_legacy_real_motion_options(tmp_path: Path) -> None:
     legacy_options = [
-        ("--confirm", SDK_CONFIRMATION),
+        ("--confirm", ARX5_JOINT_RUNTIME_CONFIRMATION),
         ("--readiness-artifact", str(tmp_path / "runtime_status.json")),
         ("--max-tracking-error-rad", "0.04"),
         ("--max-tau-abs", "2.0"),
@@ -901,7 +903,7 @@ def test_arx5_interface_backend_sends_joint_commands_and_lands_damping() -> None
         safe_config_path=str(X5_SAFE_CONFIG),
         output_dir=Path("unused"),
     )
-    backend = Arx5InterfaceCollectionBackend(
+    backend = Arx5SdkJointRuntimeBackend(
         model="X5",
         interface="can0",
         arx5_module=FakeArx5Module,
@@ -959,7 +961,7 @@ def test_arx5_interface_backend_preserves_sdk_fault_flags() -> None:
         def Arx5JointController(robot_config, controller_config, interface: str):
             return FaultFlagController(robot_config, controller_config, interface)
 
-    backend = Arx5InterfaceCollectionBackend(
+    backend = Arx5SdkJointRuntimeBackend(
         model="X5",
         interface="can0",
         arx5_module=FaultFlagArx5Module,
@@ -979,7 +981,7 @@ def test_arx5_interface_backend_preserves_sdk_fault_flags() -> None:
 
 
 def test_arx5_interface_backend_uses_measured_controller_dt_when_provided() -> None:
-    backend = Arx5InterfaceCollectionBackend(
+    backend = Arx5SdkJointRuntimeBackend(
         model="X5",
         interface="can0",
         arx5_module=FakeArx5Module,

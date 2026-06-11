@@ -177,6 +177,8 @@ armctrl sysid run ... --adapter sdk ...
 - 不再校验真实运动 confirm。
 - 不再写旧入口 manifest。
 - 不再产出会被误读为 runtime evidence 的迁移 payload。
+- `armctrl.sysid_run` 模块只保留 offline/fake runner；ARX5 SDK joint backend 位于
+  `armctrl.arx5_sdk_joint_runtime`，作为 runtime/diagnostic backend 使用，不再挂在 SysID run 模块下。
 
 正式替代入口是 `sysid compile-runtime` 与
 `motion submit joint-trajectory --compiled-command`。旧入口因此也不再负责：

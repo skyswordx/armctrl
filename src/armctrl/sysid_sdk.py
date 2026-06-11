@@ -17,7 +17,7 @@ from armctrl.runtime_session import (
     runtime_status_prerequisite_status,
     runtime_status_summary,
 )
-from armctrl.sysid_run import Arx5InterfaceCollectionBackend
+from armctrl.arx5_sdk_joint_runtime import Arx5SdkJointRuntimeBackend
 
 SDK_HOLD_DAMPING_CONFIRMATION = "I UNDERSTAND THIS WILL CHANGE THE ARM CONTROL MODE"
 SDK_TINY_MOTION_CONFIRMATION = "I UNDERSTAND THIS WILL MOVE ONE JOINT A TINY AMOUNT"
@@ -494,7 +494,7 @@ class SdkArmSession:
         failed = [name for name, status in prerequisites.items() if status != "pass"]
         if failed:
             raise RuntimeError("sdk arm session prerequisites failed: " + ", ".join(failed))
-        backend = Arx5InterfaceCollectionBackend(
+        backend = Arx5SdkJointRuntimeBackend(
             model=model,
             interface=interface,
             arx5_module=self._arx5,
@@ -752,7 +752,7 @@ class SdkTinyMotionExecutor:
             raise NotImplementedError(f"unsupported tiny motion backend: {backend_name}")
         if model is None or interface is None:
             raise ValueError("model and interface are required for arx5_sdk backend")
-        backend = Arx5InterfaceCollectionBackend(
+        backend = Arx5SdkJointRuntimeBackend(
             model=model,
             interface=interface,
             arx5_module=self._arx5,
@@ -863,7 +863,7 @@ class SdkJogReal:
         dof = len(q_start)
         if not 1 <= joint_index <= dof:
             raise ValueError("joint_index is out of range")
-        backend = Arx5InterfaceCollectionBackend(
+        backend = Arx5SdkJointRuntimeBackend(
             model=model,
             interface=interface,
             arx5_module=self._arx5,
@@ -1011,7 +1011,7 @@ class SdkStartupRecovery:
         q_target_tuple = tuple(float(value) for value in q_target)
         if len(q_target_tuple) != len(session_q):
             raise ValueError("q_target length must match session state")
-        backend = Arx5InterfaceCollectionBackend(
+        backend = Arx5SdkJointRuntimeBackend(
             model=model,
             interface=interface,
             arx5_module=self._arx5,

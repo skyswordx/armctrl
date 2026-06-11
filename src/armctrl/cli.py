@@ -140,10 +140,12 @@ from armctrl.sysid_figaroh_adapter import FigarohEvidenceAdapter, FigarohHandoff
 from armctrl.sysid_measured import MeasuredSysIdAnalyzeRequest, MeasuredSysIdAnalyzer
 from armctrl.sysid_package import SysIdPackager
 from armctrl.sysid_postprocess import SysIdPostprocessor, SysIdPostprocessResult
+from armctrl.arx5_sdk_joint_runtime import (
+    Arx5SdkJointRuntimeBackend,
+    ARX5_JOINT_RUNTIME_CONFIRMATION,
+)
 from armctrl.sysid_run import (
-    Arx5InterfaceCollectionBackend,
     FakeSysIdRunner,
-    SDK_CONFIRMATION,
 )
 from armctrl.sysid_review import SysIdOfflineReviewRequest, SysIdOfflineReviewer
 from armctrl.sysid_sdk import (
@@ -2096,7 +2098,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
                 _emit(payload, as_json=args.as_json)
                 return 3
-            backend = Arx5InterfaceCollectionBackend(
+            backend = Arx5SdkJointRuntimeBackend(
                 model=args.model,
                 interface=args.interface,
                 max_joint_step_rad=args.max_joint_step_rad,
@@ -2225,7 +2227,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return 3
             recovery_payload: dict[str, object] | None = None
             if args.recover_to_safe_first:
-                recovery_backend = Arx5InterfaceCollectionBackend(
+                recovery_backend = Arx5SdkJointRuntimeBackend(
                     model=args.model,
                     interface=args.interface,
                     max_joint_step_rad=args.max_joint_step_rad,
@@ -6671,7 +6673,7 @@ def _derive_sysid_execution_dq_points(
 
 def _arx5_active_hold_tick(
     *,
-    backend: Arx5InterfaceCollectionBackend,
+    backend: Arx5SdkJointRuntimeBackend,
     hold_hz: float,
 ) -> Callable[[dict[str, object]], None]:
     def hold_tick(payload: dict[str, object]) -> None:
