@@ -6730,62 +6730,6 @@ def _diagnostic_only_sdk_payload(payload: dict[str, object]) -> dict[str, object
     return annotated
 
 
-def _attach_sysid_run_manifest(
-    payload: dict[str, object],
-    output_dir: str,
-) -> dict[str, object]:
-    manifest_path = Path(output_dir) / "manifest.json"
-    payload_with_artifact = dict(payload)
-    if "quality" not in payload_with_artifact:
-        payload_with_artifact["quality"] = _sysid_run_quality(payload_with_artifact)
-    existing_artifacts = payload_with_artifact.get("artifacts")
-    artifacts = dict(existing_artifacts) if isinstance(existing_artifacts, dict) else {}
-    artifacts["manifest"] = str(manifest_path)
-    payload_with_artifact["artifacts"] = artifacts
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_text(
-        json.dumps(payload_with_artifact, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    return payload_with_artifact
-
-
-def _sysid_run_quality(payload: dict[str, object]) -> dict[str, object]:
-    status = payload.get("status")
-    if status == "queued":
-        return {
-            "motion_smoke_pass": None,
-            "runtime_quality_pass": None,
-            "sysid_dataset_ready": False,
-            "failure_class": None,
-            "stage": "queued_pending_runtime_result",
-        }
-    if status in {"rejected", "blocked"}:
-        return {
-            "motion_smoke_pass": False,
-            "runtime_quality_pass": False,
-            "sysid_dataset_ready": False,
-            "failure_class": _sysid_failure_class(payload),
-            "stage": "admission",
-        }
-    return {
-        "motion_smoke_pass": None,
-        "runtime_quality_pass": None,
-        "sysid_dataset_ready": False,
-        "failure_class": None,
-        "stage": "unknown",
-    }
-
-
-def _sysid_failure_class(payload: dict[str, object]) -> str:
-    reason = str(payload.get("reason") or "")
-    if "readiness" in reason or "runtime" in reason:
-        return "readiness_failure"
-    if "safety" in reason or payload.get("safety"):
-        return "admission_failure"
-    return "admission_failure"
-
-
 def _runtime_first_sysid_readiness_artifact(
     readiness_artifact: dict[str, object],
     *,
@@ -7015,17 +6959,6 @@ def _runtime_result_artifact_paths_for_run_dir(run_dir: Path) -> list[Path]:
     return candidates
 
 
-def _sysid_run_readiness_allowed(readiness_artifact: dict[str, object]) -> bool:
-    if readiness_artifact.get("schema") != "armctrl.arm_runtime_status.v1":
-        return False
-    readiness = readiness_artifact.get("readiness")
-    return (
-        isinstance(readiness, dict)
-        and readiness.get("live_hold_allowed") is True
-        and readiness.get("safe_center_allowed") is True
-    )
-
-
 def _nonpassing_acceptance_status(payload: dict[str, object]) -> str | None:
     acceptance = payload.get("acceptance")
     if not isinstance(acceptance, dict):
@@ -7034,42 +6967,6 @@ def _nonpassing_acceptance_status(payload: dict[str, object]) -> str | None:
     if status is None or status == "pass":
         return None
     return str(status)
-
-
-def _sysid_readiness_summary(
-    *,
-    readiness_artifact_path: Path,
-    readiness_artifact: dict[str, object],
-) -> dict[str, object]:
-    readiness = (
-        readiness_artifact.get("readiness")
-        if isinstance(readiness_artifact.get("readiness"), dict)
-        else {}
-    )
-    return {
-        "artifact_path": str(readiness_artifact_path),
-        "agent_sysid_smoke_allowed": readiness.get(
-            "agent_sysid_smoke_allowed",
-            readiness_artifact.get("agent_sysid_smoke_allowed"),
-        ),
-        "prerequisites": readiness_artifact.get("prerequisites"),
-        "tiny_motion": readiness_artifact.get("tiny_motion"),
-    }
-
-
-def _controller_dt_from_readiness_artifact(
-    readiness_artifact: dict[str, object],
-) -> float | None:
-    tiny_motion = readiness_artifact.get("tiny_motion")
-    if not isinstance(tiny_motion, dict):
-        return None
-    try:
-        controller_dt_s = float(tiny_motion.get("controller_dt_s"))
-    except (TypeError, ValueError):
-        return None
-    if not math.isfinite(controller_dt_s) or controller_dt_s <= 0.0:
-        return None
-    return controller_dt_s
 
 
 def _sysid_solver_gate(dataset_path: Path) -> dict[str, object]:

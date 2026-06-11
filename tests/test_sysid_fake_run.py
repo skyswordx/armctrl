@@ -533,6 +533,19 @@ def test_sysid_run_module_does_not_keep_legacy_sdk_runner_gate() -> None:
     assert "before sysid run" not in source
 
 
+def test_cli_does_not_keep_legacy_sysid_run_quality_helpers() -> None:
+    import armctrl.cli as cli
+
+    source = Path(cli.__file__).read_text(encoding="utf-8")
+
+    assert "_attach_sysid_run_manifest" not in source
+    assert "_sysid_run_quality" not in source
+    assert "_sysid_failure_class" not in source
+    assert "_sysid_run_readiness_allowed" not in source
+    assert "_sysid_readiness_summary" not in source
+    assert "_controller_dt_from_readiness_artifact" not in source
+
+
 def test_cli_sysid_run_sdk_removed_even_with_live_runtime_and_candidate(
     tmp_path: Path,
     monkeypatch,
