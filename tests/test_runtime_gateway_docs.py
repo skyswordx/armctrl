@@ -59,3 +59,13 @@ def test_lab_checklist_uses_formal_motion_result_surface() -> None:
 
     assert "uv run armctrl runtime result-check" not in text
     assert "uv run armctrl motion result" in text
+
+
+def test_sysid_operator_manual_keeps_readiness_and_transition_runtime_owned() -> None:
+    manual = ROOT / "docs" / "others" / "hardware_sysid_operator_manual.md"
+    text = manual.read_text(encoding="utf-8")
+
+    assert "sysid run --adapter sdk` 会用同一个阈值" not in text
+    assert "--tiny-motion-artifact \"$RUN_DIR/tiny_motion_real.json\"" not in text
+    assert "Runtime-owned SysID execution no longer uses `sysid run --adapter sdk`" in text
+    assert "--runtime-status-artifact \"$RUN_DIR/runtime_status.json\"" in text

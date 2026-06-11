@@ -470,7 +470,10 @@ safety:
 `max_joint_step_rad` 有两层作用：
 
 - `sysid plan` 会检查 planned trajectory 中相邻采样点的最大关节步长，过大则 `trajectory_step_check=fail`；
-- `sysid run --adapter sdk` 会用同一个阈值从当前姿态限步过渡到轨迹第一帧，过渡阶段不记录数据。
+- Runtime-owned SysID execution no longer uses `sysid run --adapter sdk`.
+  First-frame transition and per-segment step limits belong to the compiled
+  joint trajectory command consumed by `armctrl motion submit joint-trajectory`;
+  the live runtime owns SDK/CAN and records the transition/result evidence.
 
 修改原则：
 
@@ -642,12 +645,12 @@ uv run armctrl sysid sdk-tiny-motion-execute-real \
 uv run armctrl sysid sdk-agent-sysid-smoke-readiness \
   --doctor-artifact "$RUN_DIR/sdk_doctor.json" \
   --hold-damping-artifact "$RUN_DIR/hold_damping.json" \
-  --tiny-motion-artifact "$RUN_DIR/tiny_motion_real.json" \
+  --runtime-status-artifact "$RUN_DIR/runtime_status.json" \
   --output "$RUN_DIR/agent_sysid_readiness.json" \
   --json
 ```
 
-只有 `agent_sysid_smoke_allowed == true` 时，才允许继续设计 Agent smoke 或 SysID smoke。若为 `false`，不要进入后续真机运动；先看 `prerequisites` 和 `tiny_motion` 摘要。
+只有 live runtime status 的 `agent_sysid_smoke_allowed == true` 时，才允许继续设计 Agent smoke 或 SysID smoke。若为 `false`，不要进入后续真机运动；先看 `readiness.failed_checks` 和 runtime status 摘要。
 
 ### 4A.1 Agent real runtime smoke
 
