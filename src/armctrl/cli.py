@@ -41,6 +41,7 @@ from armctrl.runtime_session import (
     RuntimeSessionError,
     acquire_owner_from_artifact,
     arx5_runtime_start_preflight,
+    eef_adapter_manager_payload,
     heartbeat_runtime_session_payload,
     owner_heartbeat_from_artifact,
     recover_runtime_session_from_artifact,
@@ -2080,6 +2081,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 artifact_key="runtime_session",
             )
             if args.serve:
+                payload = _attach_eef_adapter_manager_from_args(
+                    payload,
+                    args,
+                    allow_configured_adapters=False,
+                )
+                _write_json_atomic(Path(args.output), payload)
                 _clear_runtime_stop_request(Path(args.output))
                 runtime = _live_runtime_from_session_payload(
                     backend=backend,
@@ -2274,6 +2281,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 artifact_key="runtime_session",
             )
             if args.serve:
+                payload = _attach_eef_adapter_manager_from_args(
+                    payload,
+                    args,
+                    allow_configured_adapters=False,
+                )
+                _write_json_atomic(Path(args.output), payload)
                 _clear_runtime_stop_request(Path(args.output))
                 runtime = _live_runtime_from_session_payload(
                     backend=backend,
@@ -2308,6 +2321,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             artifact_key="runtime_session",
         )
         if args.serve:
+            payload = _attach_eef_adapter_manager_from_args(payload, args)
+            _write_json_atomic(Path(args.output), payload)
             _clear_runtime_stop_request(Path(args.output))
             backend = FakeMotionBackend()
             backend.send_joint_command(
@@ -6067,6 +6082,36 @@ def _runtime_eef_backends_from_args(
         else:  # pragma: no cover - argparse choices keep this unreachable.
             raise ValueError(f"unsupported EEF adapter: {adapter}")
     return result
+
+
+def _attach_eef_adapter_manager_from_args(
+    payload: dict[str, object],
+    args: argparse.Namespace,
+    *,
+    allow_configured_adapters: bool = True,
+) -> dict[str, object]:
+    updated = dict(payload)
+    configured_adapters = (
+        tuple(getattr(args, "eef_adapter", []) or ())
+        if allow_configured_adapters
+        else ()
+    )
+    updated["eef_adapter_manager"] = eef_adapter_manager_payload(
+        primary_backend=str(updated.get("backend") or "unknown"),
+        configured_adapters=configured_adapters,
+    )
+    if getattr(args, "eef_adapter", None) and not allow_configured_adapters:
+        manager = dict(updated["eef_adapter_manager"])
+        manager["ignored_requested_adapters"] = list(getattr(args, "eef_adapter", []) or [])
+        manager["status"] = "unconfigured"
+        manager["eef_command_executable"] = False
+        manager["reason"] = (
+            "real hardware runtime requires a concrete mature EEF adapter "
+            "manager; CLI fake moveit_servo adapter is only valid for offline "
+            "runtime gateway rehearsal"
+        )
+        updated["eef_adapter_manager"] = manager
+    return updated
 
 
 def _runtime_stop_request_path(session_artifact_path: Path) -> Path:

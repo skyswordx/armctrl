@@ -16,7 +16,11 @@ from armctrl.motion_runtime import (
     JointStateSnapshot,
     MotionMode,
 )
-from armctrl.cli import _runtime_stop_request_path, _serve_runtime_session_until_stopped
+from armctrl.cli import (
+    _attach_eef_adapter_manager_from_args,
+    _runtime_stop_request_path,
+    _serve_runtime_session_until_stopped,
+)
 from armctrl.runtime_session import heartbeat_runtime_session_payload
 from armctrl.runtime_session import ARX5_RUNTIME_START_CONFIRMATION
 from armctrl.runtime_session import record_runtime_hold_tick
@@ -1550,6 +1554,51 @@ def test_runtime_eef_command_rejects_without_mature_backend_executor(
     assert "EEF runtime command requires a configured mature backend adapter" in result["reason"]
     assert result["eef_switch"]["status"] == "not_run"
     assert len(backend.joint_commands) == 1
+
+
+def test_runtime_status_exposes_unconfigured_eef_adapter_manager() -> None:
+    payload = start_fake_runtime_session(
+        q_current=(0.0, 0.3, 0.3),
+        safe_center=(0.0, 0.3, 0.3),
+        send_hz=50.0,
+        hold_hz=50.0,
+        max_joint_step_rad=0.01,
+        max_heartbeat_age_s=1.0,
+    )
+    refreshed = refresh_runtime_status_payload(payload, max_heartbeat_age_s=1.0)
+
+    manager = refreshed["eef_adapter_manager"]
+    assert manager["schema"] == "armctrl.eef_adapter_manager.v1"
+    assert manager["status"] == "unconfigured"
+    assert manager["primary_runtime_backend"] == "fake"
+    assert manager["configured_adapters"] == []
+    assert manager["adapter_registry_required"] is True
+    assert manager["primary_backend_fallback_allowed"] is False
+    assert manager["disconnected_takeover_allowed"] is False
+    assert manager["no_heuristic_joint_fallback"] is True
+    assert manager["eef_command_executable"] is False
+
+
+def test_runtime_eef_adapter_manager_ignores_fake_adapter_on_real_backend() -> None:
+    payload = {
+        "schema": "armctrl.arm_runtime_session.v1",
+        "backend": "arx5_sdk",
+    }
+    args = type("Args", (), {"eef_adapter": ["moveit_servo"]})()
+
+    updated = _attach_eef_adapter_manager_from_args(
+        payload,
+        args,
+        allow_configured_adapters=False,
+    )
+
+    manager = updated["eef_adapter_manager"]
+    assert manager["status"] == "unconfigured"
+    assert manager["primary_runtime_backend"] == "arx5_sdk"
+    assert manager["configured_adapters"] == []
+    assert manager["ignored_requested_adapters"] == ["moveit_servo"]
+    assert manager["eef_command_executable"] is False
+    assert "offline runtime gateway rehearsal" in manager["reason"]
 
 
 def test_runtime_eef_command_revalidates_reference_limit_before_execute(
@@ -5518,6 +5567,23 @@ def test_cli_runtime_start_fake_serve_executes_eef_with_configured_adapter(
     try:
         served = _wait_for_session_artifact(session_artifact)
         assert served["mode"] == "hold_safe"
+        served_status = refresh_runtime_status_payload(
+            served,
+            max_heartbeat_age_s=1.0,
+        )
+        assert served_status["eef_adapter_manager"]["status"] == "ready"
+        assert served_status["eef_adapter_manager"]["configured_adapters"] == [
+            "moveit_servo"
+        ]
+        assert (
+            served_status["eef_adapter_manager"]["primary_backend_fallback_allowed"]
+            is False
+        )
+        assert (
+            served_status["eef_adapter_manager"]["disconnected_takeover_allowed"]
+            is False
+        )
+        assert served_status["eef_adapter_manager"]["eef_command_executable"] is True
 
         submit_completed = subprocess.run(
             [

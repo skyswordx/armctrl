@@ -28,12 +28,51 @@ RUNTIME_STATUS_SCHEMA = "armctrl.arm_runtime_status.v1"
 ARX5_RUNTIME_START_CONFIRMATION = (
     "I UNDERSTAND THIS WILL START THE REAL ARM RUNTIME"
 )
+SUPPORTED_EEF_RUNTIME_ADAPTERS = ("moveit_servo", "sdk_cartesian")
 
 
 class RuntimeSessionError(RuntimeError):
     def __init__(self, message: str, payload: dict[str, object]) -> None:
         self.payload = payload
         super().__init__(message)
+
+
+def eef_adapter_manager_payload(
+    *,
+    primary_backend: str,
+    configured_adapters: Sequence[str] | None = None,
+) -> dict[str, object]:
+    """Describe the in-runtime EEF adapter registry for status/artifact audit."""
+
+    configured = []
+    for adapter in configured_adapters or ():
+        adapter_name = str(adapter)
+        if adapter_name not in configured:
+            configured.append(adapter_name)
+    missing = [
+        adapter
+        for adapter in SUPPORTED_EEF_RUNTIME_ADAPTERS
+        if adapter not in configured
+    ]
+    return {
+        "schema": "armctrl.eef_adapter_manager.v1",
+        "status": "ready" if configured else "unconfigured",
+        "primary_runtime_backend": str(primary_backend),
+        "supported_adapters": list(SUPPORTED_EEF_RUNTIME_ADAPTERS),
+        "configured_adapters": configured,
+        "missing_adapters": missing,
+        "adapter_registry_required": True,
+        "primary_backend_fallback_allowed": False,
+        "disconnected_takeover_allowed": False,
+        "no_heuristic_joint_fallback": True,
+        "bumpless_switch_required": True,
+        "eef_command_executable": bool(configured),
+        "policy": (
+            "EEF commands must resolve through an explicit in-runtime mature "
+            "adapter registry; the primary runtime backend may not be used as "
+            "a silent fallback."
+        ),
+    }
 
 
 def start_fake_runtime_session(
@@ -769,6 +808,7 @@ def runtime_status_summary(payload: dict[str, object]) -> dict[str, object]:
         "fault_flags": payload.get("fault_flags"),
         "heartbeat": heartbeat if isinstance(heartbeat, dict) else None,
         "readiness": readiness if isinstance(readiness, dict) else runtime_readiness(payload),
+        "eef_adapter_manager": payload.get("eef_adapter_manager"),
     }
 
 
@@ -812,6 +852,10 @@ def runtime_status_payload(
             "single_motion_owner": True,
             "readiness_requires_live_hold": True,
         },
+        "eef_adapter_manager": eef_adapter_manager_payload(
+            primary_backend=str(backend),
+            configured_adapters=(),
+        ),
     }
     if recovery is not None:
         payload["recovery"] = recovery
