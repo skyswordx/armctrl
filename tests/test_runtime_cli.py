@@ -577,6 +577,8 @@ def test_cli_motion_compile_agent_joint_target_writes_shared_joint_trajectory_co
             "0.02",
             "--max-joint-velocity-rad-s",
             "0.25",
+            "--max-joint-acceleration-rad-s2",
+            "0.25",
             "--max-tracking-error-rad",
             "0.04",
             "--output",
@@ -619,6 +621,12 @@ def test_cli_motion_compile_agent_joint_target_writes_shared_joint_trajectory_co
     assert command["interpolation_policy"] == "smoothstep_joint_target"
     assert command["resampling_policy"] == "compiled_joint_trajectory_to_runtime_send_hz"
     assert command["joint_trajectory_safety"]["status"] == "pass"
+    assert command["joint_trajectory_safety"]["max_joint_acceleration_rad_s2"] == (
+        pytest.approx(0.25)
+    )
+    assert command["joint_trajectory_safety"][
+        "max_segment_abs_acceleration_rad_s2"
+    ] <= 0.25
 
 
 def test_cli_motion_compile_agent_waypoints_derives_missing_dq_ddq_with_policy(
@@ -685,6 +693,60 @@ def test_cli_motion_compile_agent_waypoints_derives_missing_dq_ddq_with_policy(
     assert command["artifact_policy"]["q_cmd"] == "preserved_waypoints"
     assert command["artifact_policy"]["dq_cmd"] == "derived_finite_difference"
     assert command["artifact_policy"]["ddq_cmd"] == "derived_finite_difference"
+
+
+def test_cli_motion_compile_agent_waypoints_rejects_high_acceleration(
+    tmp_path: Path,
+) -> None:
+    output_dir = tmp_path / "compiled-agent-jerky-waypoints"
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "motion",
+            "compile",
+            "joint-trajectory",
+            "--source",
+            "agent",
+            "--owner",
+            "agent",
+            "--expected-q-start",
+            "0.0",
+            "0.3",
+            "0.3",
+            "--q-point",
+            "0.0",
+            "0.3",
+            "0.3",
+            "--q-point",
+            "0.02",
+            "0.3",
+            "0.3",
+            "--q-point",
+            "0.0205",
+            "0.3",
+            "0.3",
+            "--sample-hz",
+            "10",
+            "--max-joint-velocity-rad-s",
+            "0.25",
+            "--max-joint-acceleration-rad-s2",
+            "0.5",
+            "--output",
+            str(output_dir),
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+
+    assert completed.returncode == 3
+    assert payload["status"] == "rejected"
+    assert "joint_acceleration_within_limit" in payload["reason"]
 
 
 def test_runtime_revalidates_agent_joint_trajectory_safety_before_execute(
@@ -5422,6 +5484,7 @@ def test_runtime_queue_records_joint_trajectory_shaping_contract(tmp_path: Path)
         max_heartbeat_age_s=1.0,
         max_joint_segment_delta_rad=0.01,
         max_joint_velocity_rad_s=0.25,
+        max_joint_acceleration_rad_s2=1.0,
     )
 
     result = execute_pending_runtime_commands(
@@ -5438,6 +5501,12 @@ def test_runtime_queue_records_joint_trajectory_shaping_contract(tmp_path: Path)
     assert motion["joint_trajectory_safety"]["status"] == "pass"
     assert motion["max_joint_segment_delta_rad"] == pytest.approx(0.01)
     assert motion["max_joint_velocity_rad_s"] == pytest.approx(0.25)
+    assert motion["joint_trajectory_safety"]["max_joint_acceleration_rad_s2"] == (
+        pytest.approx(1.0)
+    )
+    assert motion["joint_trajectory_safety"][
+        "max_segment_abs_acceleration_rad_s2"
+    ] == pytest.approx(0.0)
     assert motion["q_policy"] == "generated_smoothstep_joint_target"
     assert motion["dq_policy"] == "derived_smoothstep_analytic"
     assert motion["ddq_policy"] == "derived_smoothstep_analytic"

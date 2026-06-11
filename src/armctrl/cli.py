@@ -520,6 +520,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=float,
     )
     runtime_submit_trajectory_parser.add_argument(
+        "--max-joint-acceleration-rad-s2",
+        type=float,
+    )
+    runtime_submit_trajectory_parser.add_argument(
         "--max-tracking-error-rad",
         type=float,
     )
@@ -715,6 +719,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=float,
     )
     motion_compile_joint_trajectory_parser.add_argument(
+        "--max-joint-acceleration-rad-s2",
+        type=float,
+    )
+    motion_compile_joint_trajectory_parser.add_argument(
         "--start-pose-policy",
         choices=["live_hold", "safe_center", "explicit_q", "current_measured_pose"],
         default="live_hold",
@@ -773,6 +781,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     motion_joint_trajectory_parser.add_argument(
         "--max-joint-velocity-rad-s",
+        type=float,
+    )
+    motion_joint_trajectory_parser.add_argument(
+        "--max-joint-acceleration-rad-s2",
         type=float,
     )
     motion_joint_trajectory_parser.add_argument(
@@ -2700,6 +2712,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     owner=args.owner,
                     requested_limit=args.max_joint_velocity_rad_s,
                 ),
+                max_joint_acceleration_rad_s2=args.max_joint_acceleration_rad_s2,
             )
         except (RuntimeSessionError, ValueError) as error:
             error_payload = error.payload if isinstance(error, RuntimeSessionError) else {}
@@ -5113,6 +5126,7 @@ def _handle_motion_compile(args: argparse.Namespace) -> int:
                 owner=args.owner,
                 requested_limit=args.max_joint_velocity_rad_s,
             ),
+            max_joint_acceleration_rad_s2=args.max_joint_acceleration_rad_s2,
             max_tracking_error_rad=args.max_tracking_error_rad,
             tracking_error_grace_samples=args.tracking_error_grace_samples,
             tracking_error_consecutive_samples=(
@@ -5179,6 +5193,7 @@ def _handle_motion_submit(args: argparse.Namespace) -> int:
                     owner=args.owner,
                     requested_limit=args.max_joint_velocity_rad_s,
                 ),
+                max_joint_acceleration_rad_s2=args.max_joint_acceleration_rad_s2,
             )
             payload = _annotate_motion_submit_payload(
                 payload,
@@ -5543,6 +5558,9 @@ def _submit_compiled_joint_trajectory_command(
         max_joint_velocity_rad_s=_optional_float(
             compiled.get("max_joint_velocity_rad_s")
         ),
+        max_joint_acceleration_rad_s2=_optional_float(
+            compiled.get("max_joint_acceleration_rad_s2")
+        ),
     )
     payload = _annotate_motion_submit_payload(
         payload,
@@ -5579,6 +5597,7 @@ def _compile_joint_trajectory_command(
     start_pose_policy: str,
     max_joint_segment_delta_rad: float | None,
     max_joint_velocity_rad_s: float | None,
+    max_joint_acceleration_rad_s2: float | None,
     max_tracking_error_rad: float | None,
     tracking_error_grace_samples: int | None,
     tracking_error_consecutive_samples: int | None,
@@ -5639,6 +5658,7 @@ def _compile_joint_trajectory_command(
         trajectory_sample_hz=float(sample_hz),
         max_joint_segment_delta_rad=max_joint_segment_delta_rad,
         max_joint_velocity_rad_s=max_joint_velocity_rad_s,
+        max_joint_acceleration_rad_s2=max_joint_acceleration_rad_s2,
     )
     if joint_trajectory_safety["status"] != "pass":
         raise ValueError(
@@ -5680,6 +5700,10 @@ def _compile_joint_trajectory_command(
         command["max_joint_segment_delta_rad"] = float(max_joint_segment_delta_rad)
     if max_joint_velocity_rad_s is not None:
         command["max_joint_velocity_rad_s"] = float(max_joint_velocity_rad_s)
+    if max_joint_acceleration_rad_s2 is not None:
+        command["max_joint_acceleration_rad_s2"] = float(
+            max_joint_acceleration_rad_s2
+        )
     if duration_s is not None:
         command["duration_s"] = float(duration_s)
     if max_tracking_error_rad is not None:
@@ -5790,6 +5814,7 @@ def _compiled_joint_trajectory_safety(
     trajectory_sample_hz: float,
     max_joint_segment_delta_rad: float | None,
     max_joint_velocity_rad_s: float | None,
+    max_joint_acceleration_rad_s2: float | None,
 ) -> dict[str, object]:
     if trajectory_sample_hz <= 0.0:
         raise ValueError("trajectory_sample_hz must be positive")
@@ -5805,6 +5830,13 @@ def _compiled_joint_trajectory_safety(
     )
     if max_velocity is not None and max_velocity <= 0.0:
         raise ValueError("max_joint_velocity_rad_s must be positive")
+    max_acceleration = (
+        None
+        if max_joint_acceleration_rad_s2 is None
+        else float(max_joint_acceleration_rad_s2)
+    )
+    if max_acceleration is not None and max_acceleration <= 0.0:
+        raise ValueError("max_joint_acceleration_rad_s2 must be positive")
 
     segment_deltas: list[list[float]] = []
     segment_abs_deltas: list[list[float]] = []
@@ -5820,6 +5852,21 @@ def _compiled_joint_trajectory_safety(
         segment_abs_velocities.append(
             [value * float(trajectory_sample_hz) for value in abs_deltas]
         )
+    segment_abs_accelerations: list[list[float]] = []
+    for previous_velocity, current_velocity in zip(
+        segment_abs_velocities,
+        segment_abs_velocities[1:],
+    ):
+        segment_abs_accelerations.append(
+            [
+                abs(float(current_value) - float(previous_value))
+                * float(trajectory_sample_hz)
+                for previous_value, current_value in zip(
+                    previous_velocity,
+                    current_velocity,
+                )
+            ]
+        )
     max_abs_delta = max(
         (value for segment in segment_abs_deltas for value in segment),
         default=0.0,
@@ -5828,11 +5875,17 @@ def _compiled_joint_trajectory_safety(
         (value for segment in segment_abs_velocities for value in segment),
         default=0.0,
     )
+    max_abs_acceleration = max(
+        (value for segment in segment_abs_accelerations for value in segment),
+        default=0.0,
+    )
     failed_checks: list[str] = []
     if max_segment_delta is not None and max_abs_delta > max_segment_delta:
         failed_checks.append("joint_segment_delta_within_limit")
     if max_velocity is not None and max_abs_velocity > max_velocity:
         failed_checks.append("joint_velocity_within_limit")
+    if max_acceleration is not None and max_abs_acceleration > max_acceleration:
+        failed_checks.append("joint_acceleration_within_limit")
     policy = (
         "reject_oversized_or_too_fast_agent_joint_trajectory"
         if str(owner) == "agent"
@@ -5846,11 +5899,14 @@ def _compiled_joint_trajectory_safety(
         "trajectory_sample_hz": float(trajectory_sample_hz),
         "max_joint_segment_delta_rad": max_segment_delta,
         "max_joint_velocity_rad_s": max_velocity,
+        "max_joint_acceleration_rad_s2": max_acceleration,
         "segment_delta_rad": segment_deltas,
         "segment_abs_delta_rad": segment_abs_deltas,
         "segment_abs_velocity_rad_s": segment_abs_velocities,
+        "segment_abs_acceleration_rad_s2": segment_abs_accelerations,
         "max_segment_abs_delta_rad": max_abs_delta,
         "max_segment_abs_velocity_rad_s": max_abs_velocity,
+        "max_segment_abs_acceleration_rad_s2": max_abs_acceleration,
         "failed_checks": failed_checks,
     }
 
