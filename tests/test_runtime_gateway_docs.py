@@ -51,3 +51,11 @@ def test_lab_docs_do_not_publish_executable_removed_sysid_sdk_commands() -> None
         assert "uv run armctrl sysid run gravity_sweep --adapter sdk" not in text
         assert "armctrl sysid compile-runtime" in text
         assert "armctrl motion submit joint-trajectory" in text
+
+
+def test_lab_checklist_uses_formal_motion_result_surface() -> None:
+    checklist = ROOT / "docs" / "others" / "lab_hardware_validation_checklist.md"
+    text = checklist.read_text(encoding="utf-8")
+
+    assert "uv run armctrl runtime result-check" not in text
+    assert "uv run armctrl motion result" in text

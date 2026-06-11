@@ -139,7 +139,7 @@ Expected result:
 Inspect the live runtime result, not only the submit artifact:
 
 ```bash
-uv run armctrl runtime result-check \
+uv run armctrl motion result \
   --run-dir "$RUN_DIR" \
   --expect-owner agent \
   --expect-mode agent_servo \
@@ -147,7 +147,7 @@ uv run armctrl runtime result-check \
   --json
 ```
 
-Expected runtime result checks:
+Expected motion result checks:
 
 - `status == "completed"`
 - `owner == "agent"`
@@ -235,7 +235,7 @@ Expected result:
 Inspect the live runtime result:
 
 ```bash
-uv run armctrl runtime result-check \
+uv run armctrl motion result \
   --run-dir "$RUN_DIR" \
   --expect-owner sysid \
   --expect-mode trajectory_replay \
@@ -244,7 +244,7 @@ uv run armctrl runtime result-check \
   --json
 ```
 
-Expected runtime result checks:
+Expected motion result checks:
 
 - `status == "completed"`
 - `owner == "sysid"`
@@ -317,7 +317,7 @@ Expected result:
 Inspect the live runtime result:
 
 ```bash
-uv run armctrl runtime result-check \
+uv run armctrl motion result \
   --run-dir "$RUN_DIR" \
   --expect-owner recipe \
   --expect-mode trajectory_replay \
@@ -325,7 +325,7 @@ uv run armctrl runtime result-check \
   --json
 ```
 
-Expected runtime result checks:
+Expected motion result checks:
 
 - `status == "pass"`
 - `owner == "recipe"`
@@ -343,7 +343,7 @@ After Agent, SysID, or Recipe commands have produced runtime result artifacts,
 summarize all results in the run directory:
 
 ```bash
-uv run armctrl runtime result-check \
+uv run armctrl motion result \
   --run-dir "$RUN_DIR" \
   --all \
   --require-owner agent \
