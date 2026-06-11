@@ -613,12 +613,26 @@ def _eef_submit_adapter_gate(
         for adapter in manager.get("configured_adapters", [])
         if isinstance(adapter, str)
     ]
-    executable = bool(manager.get("eef_command_executable"))
+    adapter_status = manager.get("adapter_status")
+    requested_status = (
+        adapter_status.get(str(requested_backend))
+        if isinstance(adapter_status, dict)
+        else None
+    )
+    adapter_executable = (
+        bool(requested_status.get("executable"))
+        if isinstance(requested_status, dict)
+        else bool(manager.get("eef_command_executable"))
+    )
+    executable = bool(manager.get("eef_command_executable")) and adapter_executable
     if executable and str(requested_backend) in configured:
         return {
             "status": "pass",
             "eef_adapter_manager": manager,
-            "reason": "requested EEF backend is configured in the live runtime adapter registry",
+            "reason": (
+                "requested EEF backend is executable in the live runtime "
+                "adapter registry"
+            ),
         }
     return {
         "status": "blocked",
@@ -626,7 +640,8 @@ def _eef_submit_adapter_gate(
         "reason": (
             "EEF command requires a configured mature EEF backend adapter inside "
             "the live runtime before it can be queued; requested_backend="
-            f"{requested_backend!s}, configured_adapters={configured!r}"
+            f"{requested_backend!s}, configured_adapters={configured!r}, "
+            f"adapter_executable={adapter_executable!r}"
         ),
     }
 

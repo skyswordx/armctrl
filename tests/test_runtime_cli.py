@@ -1182,6 +1182,72 @@ def test_cli_motion_submit_eef_delta_queues_sdk_cartesian_command(tmp_path: Path
     assert command["motion_kind"] == "eef-delta"
 
 
+def test_cli_motion_submit_eef_delta_blocks_non_executable_adapter_status(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    session = _configure_eef_adapter_manager(
+        session_artifact,
+        adapter="sdk_cartesian",
+    )
+    manager = dict(session["eef_adapter_manager"])
+    adapter_status = dict(manager["adapter_status"])
+    sdk_status = dict(adapter_status["sdk_cartesian"])
+    sdk_status["executable"] = False
+    sdk_status["reason"] = "adapter warmup not configured"
+    adapter_status["sdk_cartesian"] = sdk_status
+    manager["adapter_status"] = adapter_status
+    session["eef_adapter_manager"] = manager
+    session_artifact.write_text(
+        json.dumps(session, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "motion",
+            "submit",
+            "eef-delta",
+            "--session-artifact",
+            str(session_artifact),
+            "--owner",
+            "agent",
+            "--backend",
+            "sdk_cartesian",
+            "--expected-q-start",
+            "0.0",
+            "0.3",
+            "0.3",
+            "--delta-position",
+            "0.001",
+            "0.0",
+            "0.0",
+            "--delta-rpy",
+            "0.0",
+            "0.0",
+            "0.0",
+            "--max-heartbeat-age-s",
+            "5",
+            "--json",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(completed.stdout)
+
+    assert completed.returncode == 3
+    assert payload["status"] == "blocked"
+    assert payload["movement_command_sent"] is False
+    assert payload["hardware_executable_now"] is False
+    assert "adapter_executable=False" in payload["reason"]
+    assert not (session_artifact.parent / "runtime_session_commands").exists()
+
+
 def test_cli_motion_submit_eef_twist_queues_moveit_servo_command(
     tmp_path: Path,
 ) -> None:
@@ -1946,6 +2012,9 @@ def test_runtime_status_exposes_unconfigured_eef_adapter_manager() -> None:
     assert manager["disconnected_takeover_allowed"] is False
     assert manager["no_heuristic_joint_fallback"] is True
     assert manager["eef_command_executable"] is False
+    assert manager["adapter_status"]["moveit_servo"]["configured"] is False
+    assert manager["adapter_status"]["moveit_servo"]["executable"] is False
+    assert manager["adapter_status"]["moveit_servo"]["requires_bumpless_switch"] is True
     controllers = refreshed["runtime_controller_manager"]["controllers"]
     assert controllers["joint_hold"]["status"] == "available"
     assert controllers["joint_trajectory"]["status"] == "available"
@@ -1978,6 +2047,11 @@ def test_runtime_eef_adapter_manager_ignores_fake_adapter_on_real_backend() -> N
     assert manager["configured_adapters"] == []
     assert manager["ignored_requested_adapters"] == ["moveit_servo"]
     assert manager["eef_command_executable"] is False
+    assert manager["adapter_status"]["moveit_servo"]["configured"] is False
+    assert manager["adapter_status"]["moveit_servo"]["executable"] is False
+    assert manager["adapter_status"]["moveit_servo"]["hardware_scope"] == (
+        "not_configured_for_real_runtime"
+    )
     assert "offline runtime gateway rehearsal" in manager["reason"]
     controllers = updated["runtime_controller_manager"]["controllers"]
     assert controllers["joint_trajectory"]["status"] == "available"
@@ -6084,6 +6158,15 @@ def test_cli_runtime_start_fake_serve_executes_eef_with_configured_adapter(
         assert served_status["eef_adapter_manager"]["configured_adapters"] == [
             "moveit_servo"
         ]
+        assert served_status["eef_adapter_manager"]["adapter_status"]["moveit_servo"][
+            "configured"
+        ] is True
+        assert served_status["eef_adapter_manager"]["adapter_status"]["moveit_servo"][
+            "executable"
+        ] is True
+        assert served_status["eef_adapter_manager"]["adapter_status"]["moveit_servo"][
+            "hardware_scope"
+        ] == "fake_rehearsal"
         assert (
             served_status["eef_adapter_manager"]["primary_backend_fallback_allowed"]
             is False

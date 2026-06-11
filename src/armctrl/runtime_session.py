@@ -54,6 +54,18 @@ def eef_adapter_manager_payload(
         for adapter in SUPPORTED_EEF_RUNTIME_ADAPTERS
         if adapter not in configured
     ]
+    adapter_status = {
+        adapter: {
+            "configured": adapter in configured,
+            "executable": adapter in configured,
+            "hardware_scope": (
+                "fake_rehearsal" if str(primary_backend) == "fake" else "runtime_adapter"
+            ),
+            "requires_bumpless_switch": True,
+            "requires_prepare_hook": True,
+        }
+        for adapter in SUPPORTED_EEF_RUNTIME_ADAPTERS
+    }
     return {
         "schema": "armctrl.eef_adapter_manager.v1",
         "status": "ready" if configured else "unconfigured",
@@ -61,6 +73,7 @@ def eef_adapter_manager_payload(
         "supported_adapters": list(SUPPORTED_EEF_RUNTIME_ADAPTERS),
         "configured_adapters": configured,
         "missing_adapters": missing,
+        "adapter_status": adapter_status,
         "adapter_registry_required": True,
         "primary_backend_fallback_allowed": False,
         "disconnected_takeover_allowed": False,

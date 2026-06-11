@@ -6245,6 +6245,17 @@ def _attach_eef_adapter_manager_from_args(
         manager["ignored_requested_adapters"] = list(getattr(args, "eef_adapter", []) or [])
         manager["status"] = "unconfigured"
         manager["eef_command_executable"] = False
+        adapter_status = manager.get("adapter_status")
+        if isinstance(adapter_status, dict):
+            manager["adapter_status"] = {
+                str(name): {
+                    **(dict(status) if isinstance(status, dict) else {}),
+                    "configured": False,
+                    "executable": False,
+                    "hardware_scope": "not_configured_for_real_runtime",
+                }
+                for name, status in adapter_status.items()
+            }
         manager["reason"] = (
             "real hardware runtime requires a concrete mature EEF adapter "
             "manager; CLI fake moveit_servo adapter is only valid for offline "
