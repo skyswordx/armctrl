@@ -163,13 +163,20 @@ If this returns `blocked` or `rejected`, inspect `runtime_status.json` first; re
 
 ## 4. SysID Attach Gate
 
-Verify the same no-direct-SDK rule for SysID:
+Verify the same no-direct-SDK rule for SysID. Real SysID motion is no longer
+submitted through `armctrl sysid run --adapter sdk`; that parser entrypoint is
+removed for hardware. The formal path is:
+
+1. Produce or select a reviewed `execution_trajectory.csv`.
+2. Compile it into a runtime-owned joint trajectory command.
+3. Submit that compiled command to the live runtime queue.
+
+For the lab smoke, first create a small reviewed gravity trajectory:
 
 ```bash
-uv run armctrl sysid run gravity_sweep \
-  --adapter sdk \
-  --model X5 \
-  --interface can0 \
+export SYSID_PLAN_DIR="$RUN_DIR/sysid-gravity-smoke-plan"
+
+uv run armctrl sysid plan gravity_sweep \
   --dof 6 \
   --sample-hz 100 \
   --duration 8 \
@@ -177,10 +184,42 @@ uv run armctrl sysid run gravity_sweep \
   --q-center $SAFE_CENTER \
   --urdf-path configs/models/X5_camera.urdf \
   --safe-config configs/x5.safe.yaml \
+  --output "$SYSID_PLAN_DIR" \
+  --json
+```
+
+Then compile the reviewed trajectory for the live runtime:
+
+```bash
+export SYSID_COMPILED_DIR="$RUN_DIR/compiled-sysid-gravity-smoke"
+
+uv run armctrl sysid compile-runtime \
+  --execution-trajectory "$SYSID_PLAN_DIR/execution_trajectory.csv" \
+  --dof 6 \
+  --sample-hz 100 \
+  --expected-q-start $SAFE_CENTER \
+  --owner sysid \
+  --start-pose-policy live_hold \
+  --send-hz 100 \
+  --max-tracking-error-rad 0.04 \
+  --tracking-error-grace-samples 3 \
+  --tracking-error-consecutive-samples 3 \
+  --output "$SYSID_COMPILED_DIR" \
+  --json
+```
+
+Finally submit the compiled command to the live runtime queue:
+
+```bash
+uv run armctrl motion submit joint-trajectory \
+  --session-artifact "$RUN_DIR/runtime_session.json" \
+  --compiled-command "$SYSID_COMPILED_DIR/compiled_motion_command.json" \
+  --max-heartbeat-age-s 1.0 \
+  --heartbeat-timeout-s 3.0 \
+  --max-tracking-error-rad 0.04 \
+  --tracking-error-grace-samples 3 \
+  --tracking-error-consecutive-samples 3 \
   --output "$RUN_DIR/ident-sdk-gravity-smoke" \
-  --confirm "I UNDERSTAND THIS WILL MOVE THE ARM" \
-  --readiness-artifact "$RUN_DIR/runtime_status.json" \
-  --runtime-session-artifact "$RUN_DIR/runtime_session.json" \
   --json
 ```
 
@@ -223,28 +262,23 @@ Expected runtime result checks:
 Run the SysID command a second time with a different output directory:
 
 ```bash
-uv run armctrl sysid run gravity_sweep \
-  --adapter sdk \
-  --model X5 \
-  --interface can0 \
-  --dof 6 \
-  --sample-hz 100 \
-  --duration 8 \
-  --amplitude 0.05 \
-  --q-center $SAFE_CENTER \
-  --urdf-path configs/models/X5_camera.urdf \
-  --safe-config configs/x5.safe.yaml \
+uv run armctrl motion submit joint-trajectory \
+  --session-artifact "$RUN_DIR/runtime_session.json" \
+  --compiled-command "$SYSID_COMPILED_DIR/compiled_motion_command.json" \
+  --max-heartbeat-age-s 1.0 \
+  --heartbeat-timeout-s 3.0 \
+  --max-tracking-error-rad 0.04 \
+  --tracking-error-grace-samples 3 \
+  --tracking-error-consecutive-samples 3 \
   --output "$RUN_DIR/ident-sdk-gravity-smoke-repeat" \
-  --confirm "I UNDERSTAND THIS WILL MOVE THE ARM" \
-  --readiness-artifact "$RUN_DIR/runtime_status.json" \
-  --runtime-session-artifact "$RUN_DIR/runtime_session.json" \
   --json
 ```
 
-The second run must also queue and complete from live `q_hold`. It must not be rejected because `q_hold` no longer exactly equals the historical `SAFE_CENTER`.
-The submit command re-reads `runtime_session.json`, so it should use the current
-live `q_hold` even when `--readiness-artifact "$RUN_DIR/runtime_status.json"`
-points to the earlier status check.
+The second run must also queue and complete through the same live runtime owner
+path. If the live hold pose has intentionally moved away from the compiled
+start pose, re-run `sysid compile-runtime` with `--expected-q-start` set to the
+current live `q_hold` from `runtime status`; do not resurrect
+`sysid run --adapter sdk`.
 
 If this returns `blocked` or `rejected`, inspect `runtime_status.json` and the generated SysID plan safety result before retrying.
 

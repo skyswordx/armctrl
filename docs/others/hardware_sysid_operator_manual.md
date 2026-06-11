@@ -1,3 +1,10 @@
+> OBSOLETE: this is a historical operator manual. Do not copy hardware-motion
+> commands from this file. The current lab-facing procedure is
+> `docs/others/lab_hardware_validation_checklist.md`, and the current SysID
+> hardware path is `armctrl sysid compile-runtime` followed by
+> `armctrl motion submit joint-trajectory --compiled-command ...`.
+> `armctrl sysid run --adapter sdk` has been removed as a real-motion entrypoint.
+
 # ARX5/X5 真机 SysID 与 Agent 操作手册
 
 本文面向 n100d 目标机和 X5 真机验证。所有命令默认在目标机执行：
@@ -724,23 +731,14 @@ Agent real runtime smoke 必须满足：
 - `$RUN_DIR/agent_sysid_readiness.json` 已经存在，且 `agent_sysid_smoke_allowed == true`；
 - 如果 4A.1 Agent real runtime smoke 输出 `status=rejected`、`hardware_motion=unknown` 或 fault，不要进入 SysID smoke。
 
-```bash
-uv run armctrl sysid run gravity_sweep \
-  --adapter sdk \
-  --model X5 \
-  --interface can0 \
-  --dof 6 \
-  --sample-hz 100 \
-  --duration 8 \
-  --amplitude 0.05 \
-  --q-center $SAFE_CENTER \
-  --urdf-path configs/models/X5_camera.urdf \
-  --safe-config configs/x5.safe.yaml \
-  --output runs/ident-sdk-gravity-smoke \
-  --confirm "I UNDERSTAND THIS WILL MOVE THE ARM" \
-  --readiness-artifact "$RUN_DIR/agent_sysid_readiness.json" \
-  --json
+```text
+OBSOLETE REAL-MOTION ENTRYPOINT REMOVED.
+Use the current runtime-owned path instead:
+  1. armctrl sysid plan ... --output <plan-dir>
+  2. armctrl sysid compile-runtime --execution-trajectory <plan-dir>/execution_trajectory.csv --expected-q-start <live q_hold> ...
+  3. armctrl motion submit joint-trajectory --session-artifact "$RUN_DIR/runtime_session.json" --compiled-command <compile-dir>/compiled_motion_command.json ...
 ```
+
 
 SysID smoke 输出和 `runs/ident-sdk-gravity-smoke/manifest.json` 必须满足：
 
@@ -809,23 +807,13 @@ smoke 阶段主要看：
 
 只有 smoke 稳定，才逐步尝试：
 
-```bash
-uv run armctrl sysid run gravity_sweep \
-  --adapter sdk \
-  --model X5 \
-  --interface can0 \
-  --dof 6 \
-  --sample-hz 100 \
-  --duration 12 \
-  --amplitude 0.10 \
-  --q-center $SAFE_CENTER \
-  --urdf-path configs/models/X5_camera.urdf \
-  --safe-config configs/x5.safe.yaml \
-  --output runs/ident-sdk-gravity-a010 \
-  --confirm "I UNDERSTAND THIS WILL MOVE THE ARM" \
-  --readiness-artifact "$RUN_DIR/agent_sysid_readiness.json" \
-  --json
+```text
+OBSOLETE REAL-MOTION ENTRYPOINT REMOVED.
+For higher-amplitude SysID, regenerate/review the trajectory, compile it with
+armctrl sysid compile-runtime, then submit the compiled command through
+armctrl motion submit joint-trajectory. Do not use sysid run --adapter sdk.
 ```
+
 
 再后处理：
 
@@ -1008,6 +996,12 @@ uv run armctrl sysid sdk-preflight --model X5 --interface can0 --json
 uv run armctrl sysid sdk-handshake-plan --model X5 --interface can0 --json
 uv run armctrl sim doctor --json
 uv run armctrl sysid plan gravity_sweep --dof 6 --sample-hz 100 --duration 8 --amplitude 0.05 --q-center $SAFE_CENTER --urdf-path configs/models/X5_camera.urdf --safe-config configs/x5.safe.yaml --output runs/plan-gravity-smoke --json
-uv run armctrl sysid run gravity_sweep --adapter sdk --model X5 --interface can0 --dof 6 --sample-hz 100 --duration 8 --amplitude 0.05 --q-center $SAFE_CENTER --urdf-path configs/models/X5_camera.urdf --safe-config configs/x5.safe.yaml --output runs/ident-sdk-gravity-smoke --confirm "I UNDERSTAND THIS WILL MOVE THE ARM" --readiness-artifact "$RUN_DIR/agent_sysid_readiness.json" --json
+# OBSOLETE: real SysID hardware motion now requires sysid compile-runtime + motion submit joint-trajectory.
 uv run armctrl sysid postprocess --dataset runs/ident-sdk-gravity-smoke --solve --json
 ```
+> OBSOLETE: this is a historical operator manual. Do not copy hardware-motion
+> commands from this file. The current lab-facing procedure is
+> `docs/others/lab_hardware_validation_checklist.md`, and the current SysID
+> hardware path is `armctrl sysid compile-runtime` followed by
+> `armctrl motion submit joint-trajectory --compiled-command ...`.
+> `armctrl sysid run --adapter sdk` has been removed as a real-motion entrypoint.

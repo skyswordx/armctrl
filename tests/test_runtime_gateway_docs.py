@@ -37,3 +37,17 @@ def test_runtime_gateway_docs_describe_fake_agent_eef_adapter_rehearsal() -> Non
     assert "adapter registry" in combined
     assert "不能证明真实 ARX5 EEF 运动质量" in combined
     assert "heuristic fallback" in combined
+
+
+def test_lab_docs_do_not_publish_executable_removed_sysid_sdk_commands() -> None:
+    lab_docs = [
+        ROOT / "docs" / "others" / "lab_hardware_validation_checklist.md",
+        ROOT / "docs" / "others" / "hardware_sysid_operator_manual.md",
+    ]
+
+    for path in lab_docs:
+        text = path.read_text(encoding="utf-8")
+        assert "uv run armctrl sysid run gravity_sweep \\" not in text
+        assert "uv run armctrl sysid run gravity_sweep --adapter sdk" not in text
+        assert "armctrl sysid compile-runtime" in text
+        assert "armctrl motion submit joint-trajectory" in text
