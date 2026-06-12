@@ -33,6 +33,8 @@ class Arx5SdkCartesianRuntimeBackend:
     controller_dt_s: float | None = None
     preview_time_s: float | None = None
     resume_gain_duration_s: float = 0.4
+    max_linear_step_m: float = 0.005
+    max_angular_step_rad: float = 0.05
     monotonic: Callable[[], float] = time.monotonic
     sleep: Callable[[float], None] = time.sleep
 
@@ -314,6 +316,11 @@ class Arx5SdkCartesianRuntimeBackend:
             delta = _triple(eef_command.get("delta_position_m")) + _triple(
                 eef_command.get("delta_rpy_rad")
             )
+            self._raise_if_reference_step_oversized(
+                linear_step=delta[:3],
+                angular_step=delta[3:],
+                command=command,
+            )
         elif kind == "eef_twist":
             control_period_s = float(eef_command.get("control_period_s"))
             if control_period_s <= 0.0:
@@ -325,17 +332,75 @@ class Arx5SdkCartesianRuntimeBackend:
                     + _triple(eef_command.get("angular_rps"))
                 )
             ]
+            self._raise_if_reference_step_oversized(
+                linear_step=delta[:3],
+                angular_step=delta[3:],
+                command=command,
+            )
         elif kind == "eef_pose":
             if eef_command.get("pose_reference_limiter") != "adapter_live_reference_limit":
                 raise ValueError(
                     "SDK Cartesian eef_pose requires adapter_live_reference_limit"
                 )
-            return _triple(eef_command.get("position_m")) + _triple(
+            target = _triple(eef_command.get("position_m")) + _triple(
                 eef_command.get("rpy_rad")
             )
+            self._raise_if_reference_step_oversized(
+                linear_step=[
+                    target_value - current_value
+                    for current_value, target_value in zip(
+                        current_pose[:3],
+                        target[:3],
+                        strict=True,
+                    )
+                ],
+                angular_step=[
+                    target_value - current_value
+                    for current_value, target_value in zip(
+                        current_pose[3:],
+                        target[3:],
+                        strict=True,
+                    )
+                ],
+                command=command,
+            )
+            return target
         else:
             raise ValueError(f"unsupported ARX5 SDK Cartesian EEF command kind: {kind}")
         return [pose + step for pose, step in zip(current_pose, delta, strict=True)]
+
+    def _raise_if_reference_step_oversized(
+        self,
+        *,
+        linear_step: list[float],
+        angular_step: list[float],
+        command: dict[str, object],
+    ) -> None:
+        limit = command.get("eef_reference_limit")
+        max_linear = (
+            _positive_float_or_none(limit.get("max_linear_step_m"))
+            if isinstance(limit, dict)
+            else None
+        )
+        max_angular = (
+            _positive_float_or_none(limit.get("max_angular_step_rad"))
+            if isinstance(limit, dict)
+            else None
+        )
+        max_linear = self.max_linear_step_m if max_linear is None else max_linear
+        max_angular = self.max_angular_step_rad if max_angular is None else max_angular
+        linear_max_abs = max((abs(value) for value in linear_step), default=0.0)
+        angular_max_abs = max((abs(value) for value in angular_step), default=0.0)
+        failed_checks: list[str] = []
+        if linear_max_abs > max_linear:
+            failed_checks.append("linear_step_within_limit")
+        if angular_max_abs > max_angular:
+            failed_checks.append("angular_step_within_limit")
+        if failed_checks:
+            raise ValueError(
+                "SDK Cartesian EEF reference limit failed: "
+                + ", ".join(failed_checks)
+            )
 
     def _prepare_cartesian_takeover(self, controller) -> None:
         self._sync_eef_target_to_current_state(controller)

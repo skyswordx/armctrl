@@ -2651,6 +2651,43 @@ def test_arx5_sdk_cartesian_backend_executes_limited_absolute_eef_pose() -> None
     assert result.landing_mode == "hold"
 
 
+def test_arx5_sdk_cartesian_backend_rejects_oversized_absolute_eef_pose() -> None:
+    controller = FakeSdkCartesianController()
+    clock = ManualClock()
+    backend = Arx5SdkCartesianRuntimeBackend(
+        arx5_module=FakeSdkCartesianModule(),
+        controller=controller,
+        controller_dt_s=0.002,
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+
+    with pytest.raises(ValueError, match="SDK Cartesian EEF reference limit failed"):
+        backend.execute_eef_command(
+            {
+                "kind": "eef_pose",
+                "send_hz": 50.0,
+                "eef_reference_limit": {
+                    "schema": "armctrl.eef_reference_limit.v1",
+                    "status": "pass",
+                    "max_linear_step_m": 0.005,
+                    "max_angular_step_rad": 0.05,
+                    "pose_reference_limiter": "adapter_live_reference_limit",
+                },
+                "eef_command": {
+                    "frame": "base_link",
+                    "position_m": [0.260, 0.0, 0.20],
+                    "rpy_rad": [0.0, 0.0, 0.0],
+                    "pose_reference_limiter": "adapter_live_reference_limit",
+                    "control_period_s": 0.1,
+                },
+            },
+            owner="agent",
+        )
+
+    assert controller.commands == []
+
+
 def test_runtime_eef_command_executes_with_configured_moveit_backend(
     tmp_path: Path,
 ) -> None:
