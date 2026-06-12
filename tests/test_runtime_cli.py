@@ -2327,6 +2327,7 @@ def test_runtime_eef_pose_requires_adapter_reference_limiter_before_execute(
     )
     eef_adapter = MoveItServoRuntimeBackend(
         q_state=tuple(float(value) for value in session["q_hold"]),
+        current_eef_pose_6d=(0.30, 0.0, 0.20, 0.0, 0.0, 0.0),
         publisher=lambda message: published.append(message),
         monotonic=lambda: 10.0,
         sleep=lambda _duration_s: None,
@@ -2539,6 +2540,7 @@ def test_moveit_servo_runtime_backend_builds_twist_from_pose_delta() -> None:
 def test_moveit_servo_runtime_backend_builds_pose_reference() -> None:
     published: list[dict[str, object]] = []
     backend = MoveItServoRuntimeBackend(
+        current_eef_pose_6d=(0.30, 0.0, 0.20, 0.0, 0.0, 0.0),
         publisher=lambda message: published.append(message),
         monotonic=lambda: 10.0,
         sleep=lambda _duration_s: None,
@@ -2567,6 +2569,41 @@ def test_moveit_servo_runtime_backend_builds_pose_reference() -> None:
     assert published[0]["pose"]["position_m"] == [0.3, 0.0, 0.2]
     assert published[0]["pose"]["rpy_rad"] == [0.0, 0.0, 0.0]
     assert published[0]["reference_limit_policy"] == "adapter_live_reference_limit"
+
+
+def test_moveit_servo_runtime_backend_rejects_oversized_absolute_pose() -> None:
+    published: list[dict[str, object]] = []
+    backend = MoveItServoRuntimeBackend(
+        current_eef_pose_6d=(0.20, 0.0, 0.20, 0.0, 0.0, 0.0),
+        publisher=lambda message: published.append(message),
+        monotonic=lambda: 10.0,
+        sleep=lambda _duration_s: None,
+    )
+
+    with pytest.raises(ValueError, match="MoveIt Servo EEF reference limit failed"):
+        backend.execute_eef_command(
+            {
+                "kind": "eef_pose",
+                "send_hz": 50.0,
+                "eef_reference_limit": {
+                    "schema": "armctrl.eef_reference_limit.v1",
+                    "status": "pass",
+                    "max_linear_step_m": 0.005,
+                    "max_angular_step_rad": 0.05,
+                    "pose_reference_limiter": "adapter_live_reference_limit",
+                },
+                "eef_command": {
+                    "frame": "base_link",
+                    "position_m": [0.260, 0.0, 0.20],
+                    "rpy_rad": [0.0, 0.0, 0.0],
+                    "pose_reference_limiter": "adapter_live_reference_limit",
+                    "control_period_s": 0.1,
+                },
+            },
+            owner="agent",
+        )
+
+    assert published == []
 
 
 class FakeSdkEefState:
@@ -2705,6 +2742,7 @@ def test_runtime_eef_command_executes_with_configured_moveit_backend(
     )
     moveit_adapter = MoveItServoRuntimeBackend(
         q_state=tuple(float(value) for value in session["q_hold"]),
+        current_eef_pose_6d=(0.30, 0.0, 0.20, 0.0, 0.0, 0.0),
         publisher=lambda message: published.append(message),
         monotonic=lambda: 10.0,
         sleep=lambda _duration_s: None,
@@ -2805,6 +2843,7 @@ def test_runtime_eef_command_executes_with_primary_runtime_and_adapter_registry(
     published: list[dict[str, object]] = []
     moveit_adapter = MoveItServoRuntimeBackend(
         q_state=tuple(float(value) for value in session["q_hold"]),
+        current_eef_pose_6d=(0.30, 0.0, 0.20, 0.0, 0.0, 0.0),
         publisher=lambda message: published.append(message),
         monotonic=lambda: 10.0,
         sleep=lambda _duration_s: None,
@@ -2914,6 +2953,7 @@ def test_runtime_eef_pose_executes_with_configured_adapter_registry(
     published: list[dict[str, object]] = []
     moveit_adapter = MoveItServoRuntimeBackend(
         q_state=tuple(float(value) for value in session["q_hold"]),
+        current_eef_pose_6d=(0.30, 0.0, 0.20, 0.0, 0.0, 0.0),
         publisher=lambda message: published.append(message),
         monotonic=lambda: 10.0,
         sleep=lambda _duration_s: None,

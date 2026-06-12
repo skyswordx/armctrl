@@ -50,8 +50,8 @@ Release readiness: `simulation_safety_preview_nonhardware_verified`.
 - [ ] `sysid plan` 升级到 mesh/body collision model，覆盖连杆几何而不只检查 link frame。
 - [x] `sysid sdk-preflight` 只读检查 SDK 环境，不打开 CAN、不实例化硬件对象。
 - [x] `sysid sdk-handshake-plan` 只读固定实机采集前确认、hold/damping、记录时序和 Ctrl-C/fault 落态契约。
-- [x] `sysid run` 增加可注入 SDK runner 骨架，测试覆盖 hold/damping 后记录和完成/故障落 damping。
-- [ ] `sysid run` 接入真实 ARX5 SDK backend，在 n100d 采集 gravity、friction、Fourier profile。
+- [x] 移除 `sysid run --adapter sdk` 作为真实运动入口；`sysid run` 仅保留 offline/fake 数据链路。
+- [x] n100d 真实 SysID 采集改走 `sysid compile-runtime` + `motion submit joint-trajectory --compiled-command`，由长驻 `arx5_sdk` runtime 持有 SDK/CAN、owner lease、tracking evidence 和 landing behavior。
 - [x] `sysid solve` 接入可选 Pinocchio regressor，输出 rank 和条件数；缺依赖时结构化降级。
 - [x] `sysid solve` 用 Pinocchio regressor 做 least-squares 回代并输出 prediction RMSE；缺依赖时结构化降级。
 - [x] `sysid solve` 固定输出基础参数和物理一致性 gate 字段，缺外部证据时标为 `not_evaluated`。

@@ -25,6 +25,9 @@ class MoveItServoRuntimeBackend:
     """
 
     q_state: tuple[float, ...] = ()
+    current_eef_pose_6d: tuple[float, ...] | None = None
+    max_linear_step_m: float = 0.005
+    max_angular_step_rad: float = 0.05
     twist_topic: str = "/servo_node/delta_twist_cmds"
     publisher: MoveItPublisher | None = None
     monotonic: Callable[[], float] = time.monotonic
@@ -197,10 +200,7 @@ class MoveItServoRuntimeBackend:
                 "topic": "/servo_node/pose_target_cmds",
                 "frame_id": str(eef_command.get("frame", "base_link")),
                 "stamp_policy": "fresh_publish_time",
-                "pose": {
-                    "position_m": _triple(eef_command.get("position_m")),
-                    "rpy_rad": _triple(eef_command.get("rpy_rad")),
-                },
+                "pose": self._limited_pose_reference(command, eef_command),
                 "reference_limit_policy": "adapter_live_reference_limit",
             }
         else:
@@ -216,6 +216,79 @@ class MoveItServoRuntimeBackend:
                 "angular": angular,
             },
         }
+
+    def _limited_pose_reference(
+        self,
+        command: dict[str, object],
+        eef_command: dict[str, object],
+    ) -> dict[str, object]:
+        if eef_command.get("pose_reference_limiter") != "adapter_live_reference_limit":
+            raise ValueError(
+                "MoveIt Servo eef_pose requires adapter_live_reference_limit"
+            )
+        if self.current_eef_pose_6d is None:
+            raise ValueError(
+                "MoveIt Servo eef_pose requires current_eef_pose_6d live reference"
+            )
+        current = [float(value) for value in self.current_eef_pose_6d]
+        if len(current) != 6:
+            raise ValueError("current_eef_pose_6d must contain exactly 6 values")
+        target = _triple(eef_command.get("position_m")) + _triple(
+            eef_command.get("rpy_rad")
+        )
+        linear_step = [
+            target_value - current_value
+            for current_value, target_value in zip(current[:3], target[:3], strict=True)
+        ]
+        angular_step = [
+            target_value - current_value
+            for current_value, target_value in zip(current[3:], target[3:], strict=True)
+        ]
+        self._raise_if_reference_step_oversized(
+            linear_step=linear_step,
+            angular_step=angular_step,
+            command=command,
+        )
+        return {
+            "position_m": target[:3],
+            "rpy_rad": target[3:],
+            "live_reference_pose_6d": current,
+            "linear_step_m": linear_step,
+            "angular_step_rad": angular_step,
+        }
+
+    def _raise_if_reference_step_oversized(
+        self,
+        *,
+        linear_step: list[float],
+        angular_step: list[float],
+        command: dict[str, object],
+    ) -> None:
+        limit = command.get("eef_reference_limit")
+        max_linear = (
+            _positive_float_or_none(limit.get("max_linear_step_m"))
+            if isinstance(limit, dict)
+            else None
+        )
+        max_angular = (
+            _positive_float_or_none(limit.get("max_angular_step_rad"))
+            if isinstance(limit, dict)
+            else None
+        )
+        max_linear = self.max_linear_step_m if max_linear is None else max_linear
+        max_angular = self.max_angular_step_rad if max_angular is None else max_angular
+        linear_max_abs = max((abs(value) for value in linear_step), default=0.0)
+        angular_max_abs = max((abs(value) for value in angular_step), default=0.0)
+        failed_checks: list[str] = []
+        if linear_max_abs > max_linear:
+            failed_checks.append("linear_step_within_limit")
+        if angular_max_abs > max_angular:
+            failed_checks.append("angular_step_within_limit")
+        if failed_checks:
+            raise ValueError(
+                "MoveIt Servo EEF reference limit failed: "
+                + ", ".join(failed_checks)
+            )
 
 
 def _eef_result(
@@ -246,3 +319,11 @@ def _triple(values: object) -> list[float]:
     if not isinstance(values, (list, tuple)) or len(values) != 3:
         raise ValueError("MoveIt Servo EEF vector must contain exactly 3 values")
     return [float(value) for value in values]
+
+
+def _positive_float_or_none(value: object) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0.0 else None
