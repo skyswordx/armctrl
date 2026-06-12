@@ -17,7 +17,7 @@ fi
 STATE_FILE="${ARMCTRL_LAB_AGENT_STATE:-.lab_agent_runtime_smoke.env}"
 SMOKE_PROFILE_VERSION_CURRENT="10"
 BACKEND_DEFAULT="${ARMCTRL_BACKEND:-arx5_sdk}"
-AGENT_EEF_BACKEND_DEFAULT="${ARMCTRL_AGENT_EEF_BACKEND:-moveit_servo}"
+AGENT_EEF_BACKEND_DEFAULT="${ARMCTRL_AGENT_EEF_BACKEND:-sdk_cartesian}"
 SAFE_CENTER_DEFAULT="0.0 0.3 0.3 0.0 0.0 0.0"
 AGENT_Q_TARGET_DEFAULT="3.00 0.3 0.3 0.0 0.0 0.0"
 AGENT_DELTA_POSITION_DEFAULT="0.750 0.000 0.000"
@@ -292,6 +292,8 @@ case "$cmd" in
     if [[ "$ARMCTRL_BACKEND" == "fake" ]]; then
       start_args+=(--q-current $SAFE_CENTER)
       start_args+=(--eef-adapter moveit_servo)
+    elif [[ "$ARMCTRL_BACKEND" == "arx5_sdk" ]]; then
+      start_args+=(--eef-adapter "$AGENT_EEF_BACKEND")
     fi
     "$ARMCTRL_UV_BIN" run armctrl runtime start \
       --backend "$ARMCTRL_BACKEND" \

@@ -81,8 +81,9 @@ def eef_adapter_manager_payload(
                 )
                 for command_kind, capability in command_capabilities.items()
             },
-            "hardware_scope": (
-                "fake_rehearsal" if str(primary_backend) == "fake" else "runtime_adapter"
+            "hardware_scope": _eef_adapter_hardware_scope(
+                primary_backend=str(primary_backend),
+                adapter=adapter,
             ),
             "requires_bumpless_switch": True,
             "requires_prepare_hook": True,
@@ -114,6 +115,14 @@ def eef_adapter_manager_payload(
             "a silent fallback."
         ),
     }
+
+
+def _eef_adapter_hardware_scope(*, primary_backend: str, adapter: str) -> str:
+    if primary_backend == "fake":
+        return "fake_rehearsal"
+    if primary_backend == "arx5_sdk" and adapter == "sdk_cartesian":
+        return "in_runtime_arx5_sdk_servo_adapter"
+    return "runtime_adapter"
 
 
 def _eef_command_capabilities(

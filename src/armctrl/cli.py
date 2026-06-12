@@ -313,12 +313,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     runtime_start_parser.add_argument(
         "--eef-adapter",
         action="append",
-        choices=["moveit_servo"],
+        choices=["moveit_servo", "sdk_cartesian"],
         default=[],
         help=(
             "Register an in-runtime EEF adapter for runtime-owned EEF commands. "
-            "Currently implemented for fake/offline serve validation only; real "
-            "hardware EEF requires a mature configured servo backend."
+            "sdk_cartesian is allowed only as an in-runtime adapter under the "
+            "long-lived arx5_sdk runtime, not as disconnected takeover."
         ),
     )
     runtime_start_parser.add_argument(
@@ -2150,7 +2150,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 payload = _attach_eef_adapter_manager_from_args(
                     payload,
                     args,
-                    allow_configured_adapters=False,
+                    allow_configured_adapters=True,
                 )
                 _write_json_atomic(Path(args.output), payload)
                 _clear_runtime_stop_request(Path(args.output))
@@ -2164,6 +2164,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                     max_heartbeat_age_s=args.max_heartbeat_age_s,
                     backend=backend,
                     runtime=runtime,
+                    eef_backends=_runtime_eef_backends_from_args(
+                        args,
+                        q_state=tuple(
+                            float(value) for value in payload.get("q_hold") or ()
+                        ),
+                        primary_backend="arx5_sdk",
+                        model=args.model,
+                        interface=args.interface,
+                    ),
                     hold_tick=_arx5_active_hold_tick(
                         backend=backend,
                         hold_hz=args.hold_hz,
@@ -2410,6 +2419,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 eef_backends=_runtime_eef_backends_from_args(
                     args,
                     q_state=tuple(float(value) for value in payload.get("q_meas") or ()),
+                    primary_backend="fake",
                 ),
             )
         return _emit(payload, as_json=args.as_json)
@@ -6274,6 +6284,9 @@ def _runtime_eef_backends_from_args(
     args: argparse.Namespace,
     *,
     q_state: tuple[float, ...],
+    primary_backend: str,
+    model: str | None = None,
+    interface: str | None = None,
 ) -> dict[str, MotionBackend] | None:
     adapters = list(getattr(args, "eef_adapter", []) or [])
     if not adapters:
@@ -6285,6 +6298,16 @@ def _runtime_eef_backends_from_args(
             result[adapter] = MoveItServoRuntimeBackend(
                 q_state=q_state,
                 publisher=published_commands.append,
+            )
+        elif adapter == "sdk_cartesian":
+            if primary_backend != "arx5_sdk":
+                raise ValueError(
+                    "sdk_cartesian EEF adapter is only supported inside the "
+                    "long-lived arx5_sdk runtime"
+                )
+            result[adapter] = Arx5SdkCartesianRuntimeBackend(
+                model=model or getattr(args, "model", "X5"),
+                interface=interface or getattr(args, "interface", "can0"),
             )
         else:  # pragma: no cover - argparse choices keep this unreachable.
             raise ValueError(f"unsupported EEF adapter: {adapter}")

@@ -1,3 +1,4 @@
+import argparse
 import importlib.util
 import json
 import subprocess
@@ -21,6 +22,7 @@ from armctrl.cli import (
     _runtime_result_check_payload,
     _runtime_stop_request_path,
     _serve_runtime_session_until_stopped,
+    main,
 )
 from armctrl.runtime_session import heartbeat_runtime_session_payload
 from armctrl.runtime_session import ARX5_RUNTIME_START_CONFIRMATION
@@ -6883,6 +6885,166 @@ def test_cli_runtime_start_fake_serve_executes_eef_with_configured_adapter(
         if server.poll() is None:
             server.terminate()
             server.communicate(timeout=3.0)
+
+
+def test_cli_runtime_start_arx5_can_register_sdk_cartesian_eef_adapter(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+
+    class FakeJointBackend(FakeArx5RuntimeBackend):
+        def __init__(self, **_kwargs) -> None:
+            super().__init__(q_start=(0.0, 0.3, 0.3))
+
+    class FakeCartesianAdapter(MoveItServoRuntimeBackend):
+        def __init__(self, **_kwargs) -> None:
+            super().__init__(
+                q_state=(0.0, 0.3, 0.3),
+                current_eef_pose_6d=(0.30, 0.0, 0.20, 0.0, 0.0, 0.0),
+                publisher=lambda _message: None,
+            )
+
+    monkeypatch.setattr(
+        "armctrl.cli.arx5_runtime_start_preflight",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr("armctrl.cli.Arx5SdkJointRuntimeBackend", FakeJointBackend)
+    monkeypatch.setattr(
+        "armctrl.cli.Arx5SdkCartesianRuntimeBackend",
+        FakeCartesianAdapter,
+    )
+    monkeypatch.setattr(
+        "armctrl.cli._serve_runtime_session_until_stopped",
+        lambda *, session_artifact_path, **_kwargs: json.loads(
+            session_artifact_path.read_text(encoding="utf-8")
+        ),
+    )
+
+    result = main(
+        [
+            "runtime",
+            "start",
+            "--backend",
+            "arx5_sdk",
+            "--safe-center",
+            "0.0",
+            "0.3",
+            "0.3",
+            "--serve",
+            "--eef-adapter",
+            "sdk_cartesian",
+            "--heartbeat-period-s",
+            "0.02",
+            "--max-heartbeat-age-s",
+            "1.0",
+            "--confirm",
+            ARX5_RUNTIME_START_CONFIRMATION,
+            "--output",
+            str(session_artifact),
+            "--json",
+        ]
+    )
+
+    assert result == 3
+    served = json.loads(session_artifact.read_text(encoding="utf-8"))
+    assert served["backend"] == "arx5_sdk"
+    assert served["eef_adapter_manager"]["configured_adapters"] == ["sdk_cartesian"]
+    assert served["eef_adapter_manager"]["adapter_status"]["sdk_cartesian"][
+        "configured"
+    ] is True
+    assert served["eef_adapter_manager"]["adapter_status"]["sdk_cartesian"][
+        "hardware_scope"
+    ] == "in_runtime_arx5_sdk_servo_adapter"
+    assert served["eef_adapter_manager"]["eef_command_executable"] is True
+
+
+def test_runtime_eef_command_executes_sdk_cartesian_inside_arx5_runtime(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    payload = start_arx5_runtime_session(
+        backend=FakeArx5RuntimeBackend(q_start=(0.0, 0.3, 0.3)),
+        model="X5",
+        interface="can0",
+        safe_center=(0.0, 0.3, 0.3),
+        send_hz=50.0,
+        hold_hz=50.0,
+        max_joint_step_rad=0.01,
+        max_heartbeat_age_s=1.0,
+    )
+    payload = _attach_eef_adapter_manager_from_args(
+        payload,
+        argparse.Namespace(eef_adapter=["sdk_cartesian"]),
+    )
+    payload = record_runtime_hold_tick(
+        payload,
+        q_meas=(0.0, 0.3, 0.3),
+        fault_flags=(),
+        max_heartbeat_age_s=1.0,
+    )
+    session_artifact.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    primary_backend = FakeArx5RuntimeBackend(q_start=(0.0, 0.3, 0.3))
+    primary_backend.send_joint_command(
+        (0.0, 0.3, 0.3),
+        producer="runtime_serve_bootstrap",
+        mode=MotionMode.HOLD,
+        monotonic_s=0.0,
+    )
+    runtime = ArmRuntime(
+        backend=primary_backend,
+        safe_center=tuple(float(value) for value in payload["safe_center"]),
+        runtime_session_id=str(payload["runtime_session_id"]),
+    )
+    runtime.mark_hold_safe(q_hold=(0.0, 0.3, 0.3))
+    adapter = MoveItServoRuntimeBackend(
+        q_state=(0.0, 0.3, 0.3),
+        current_eef_pose_6d=(0.30, 0.0, 0.20, 0.0, 0.0, 0.0),
+        publisher=lambda _message: None,
+    )
+
+    submit_eef_command(
+        session_artifact_path=session_artifact,
+        owner="agent",
+        backend="sdk_cartesian",
+        kind="eef_pose_delta",
+        frame="eef_link",
+        expected_q_start=(0.0, 0.3, 0.3),
+        control_period_s=0.1,
+        send_hz=50.0,
+        max_start_error_rad=0.02,
+        heartbeat_timeout_s=0.5,
+        max_heartbeat_age_s=5.0,
+        delta_position_m=(0.001, 0.0, 0.0),
+        delta_rpy_rad=(0.0, 0.0, 0.0),
+    )
+
+    result = execute_pending_runtime_commands(
+        session_artifact_path=session_artifact,
+        backend=primary_backend,
+        runtime=runtime,
+        eef_backends={"sdk_cartesian": adapter},
+        max_heartbeat_age_s=5.0,
+    )
+
+    assert result is not None
+    assert result["status"] == "completed"
+    assert result["command_space"] == "eef"
+    assert result["motion"]["eef_command"]["runtime_backend"] == "arx5_sdk"
+    assert result["motion"]["eef_command"]["eef_adapter"] == "sdk_cartesian"
+    assert (
+        result["motion"]["eef_command"]["adapter_resolution"]
+        == "configured_adapter_registry"
+    )
+    assert result["eef_switch"]["status"] == "pass"
+    assert result["eef_switch"]["sdk_owner_released"] is False
+    assert result["eef_controller_manager"]["status"] == "ready"
+    assert result["eef_controller_manager"]["mode_switch_policy"] == (
+        "runtime_internal_controller_manager"
+    )
 
 
 def test_runtime_serve_loop_drains_ready_queue_before_sleep(
