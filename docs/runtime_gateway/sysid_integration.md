@@ -93,6 +93,12 @@ reviewed SysID artifact
 - solver / quality metrics / identification report。
 - SysID/OED agent 与仿真分析 agent 的上下文契约。
 
+通用 `armctrl motion preview joint-trajectory` 可以复用同一条 reviewed
+`execution_trajectory.csv` 做 URDF/FK/workspace/collision/mesh preview，并产出
+`armctrl.motion.preview.v1` 证据。它只是通用 motion review surface，不计算 SysID/OED
+rank、condition、optimizer convergence，也不决定 `sysid_dataset_ready`。SysID 专属判断仍由
+`sysid review-candidate` 和后续 SysID evidence manifest 承担。
+
 这些模块可以在 SysID/OED 专门任务中独立演进，但不能被 runtime gateway 重构顺手改动。
 特别禁止：
 

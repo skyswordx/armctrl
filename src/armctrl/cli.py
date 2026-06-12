@@ -1169,6 +1169,30 @@ def main(argv: Sequence[str] | None = None) -> int:
     motion_result_parser.add_argument("--output")
     motion_result_parser.add_argument("--json", action="store_true", dest="as_json")
 
+    motion_preview_parser = motion_subparsers.add_parser("preview")
+    motion_preview_subparsers = motion_preview_parser.add_subparsers(
+        dest="motion_kind",
+        required=True,
+    )
+    motion_preview_joint_trajectory_parser = motion_preview_subparsers.add_parser(
+        "joint-trajectory"
+    )
+    motion_preview_joint_trajectory_parser.add_argument("--trajectory", required=True)
+    motion_preview_joint_trajectory_parser.add_argument(
+        "--urdf-path",
+        default="configs/models/X5_camera.urdf",
+    )
+    motion_preview_joint_trajectory_parser.add_argument(
+        "--safe-config",
+        default="configs/x5.safe.yaml",
+    )
+    motion_preview_joint_trajectory_parser.add_argument("--backend", default="auto")
+    motion_preview_joint_trajectory_parser.add_argument("--render")
+    motion_preview_joint_trajectory_parser.add_argument("--output")
+    motion_preview_joint_trajectory_parser.add_argument(
+        "--json", action="store_true", dest="as_json"
+    )
+
     profile_parser = subparsers.add_parser("profile")
     profile_subparsers = profile_parser.add_subparsers(
         dest="profile_command",
@@ -2940,6 +2964,32 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "motion" and args.motion_command == "submit":
         return _handle_motion_submit(args)
+
+    if args.command == "motion" and args.motion_command == "preview":
+        if args.motion_kind != "joint-trajectory":
+            parser.error(f"unsupported motion preview kind: {args.motion_kind}")
+        result = TrajectoryPreviewer().preview(
+            trajectory_path=Path(args.trajectory),
+            urdf_path=Path(args.urdf_path),
+            safe_config_path=Path(args.safe_config),
+            backend=args.backend,
+            render_path=Path(args.render) if args.render else None,
+        )
+        payload = {
+            "status": "ok",
+            "command_surface": "armctrl.motion.preview.v1",
+            "entrypoint": "armctrl motion preview joint-trajectory",
+            "motion_kind": "joint-trajectory",
+            "movement_allowed": False,
+            **result,
+        }
+        payload = _attach_output_artifact(
+            payload,
+            args.output,
+            artifact_key="motion_preview",
+        )
+        _emit(payload, as_json=args.as_json)
+        return 0 if payload.get("safety", {}).get("allowed") is True else 3
 
     if args.command == "motion" and args.motion_command == "compile":
         return _handle_motion_compile(args)
@@ -5148,6 +5198,8 @@ def _motion_profile_catalog(*, include_description: bool) -> list[dict[str, obje
 def _motion_surface_catalog() -> dict[str, object]:
     return {
         "submit_schema": MOTION_COMMAND_SURFACE,
+        "preview_schema": "armctrl.motion.preview.v1",
+        "supported_preview_kinds": ["joint-trajectory"],
         "supported_submit_kinds": [
             "joint-trajectory",
             "joint-intent",
@@ -5190,6 +5242,7 @@ def _motion_surface_catalog() -> dict[str, object]:
         },
         "formal_cli": [
             "armctrl motion compile joint-trajectory",
+            "armctrl motion preview joint-trajectory",
             "armctrl motion submit joint-trajectory",
             "armctrl motion submit joint-trajectory --compiled-command",
             "armctrl motion submit joint-intent",
@@ -5210,6 +5263,7 @@ def _command_surface_classes() -> dict[str, object]:
         ],
         "compiler": [
             "armctrl motion compile joint-trajectory",
+            "armctrl motion preview joint-trajectory",
             "armctrl sysid compile-runtime",
         ],
         "experimental_review_export": [

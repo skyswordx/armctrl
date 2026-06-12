@@ -453,6 +453,60 @@ def test_cli_sim_preview_can_render_urdf_animation_html(tmp_path: Path) -> None:
     assert '"linkFrames"' in html
 
 
+def test_cli_motion_preview_joint_trajectory_reuses_urdf_animation_review(
+    tmp_path: Path,
+) -> None:
+    trajectory_path = tmp_path / "planned_trajectory.csv"
+    render_path = tmp_path / "motion_preview.html"
+    output_path = tmp_path / "motion_preview.json"
+    trajectory_path.write_text(
+        "time_s,q_cmd_1,q_cmd_2,q_cmd_3,q_cmd_4,q_cmd_5,q_cmd_6\n"
+        "0.000000,0,0.3,0.3,0,0,0\n"
+        "0.010000,0.02,0.31,0.29,0.01,0,0\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "motion",
+            "preview",
+            "joint-trajectory",
+            "--trajectory",
+            str(trajectory_path),
+            "--urdf-path",
+            "configs/models/X5_camera.urdf",
+            "--safe-config",
+            "configs/x5.safe.yaml",
+            "--render",
+            str(render_path),
+            "--output",
+            str(output_path),
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+    written = json.loads(output_path.read_text(encoding="utf-8"))
+    html = render_path.read_text(encoding="utf-8")
+
+    assert payload["command_surface"] == "armctrl.motion.preview.v1"
+    assert payload["entrypoint"] == "armctrl motion preview joint-trajectory"
+    assert payload["motion_kind"] == "joint-trajectory"
+    assert payload["movement_allowed"] is False
+    assert payload["schema"] == "armctrl.trajectory_preview.v1"
+    assert payload["render"]["format"] == "html"
+    assert payload["artifacts"]["motion_preview"] == str(output_path)
+    assert written["command_surface"] == "armctrl.motion.preview.v1"
+    assert "URDF kinematic animation" in html
+    assert "data:model/stl;base64," in html
+
+
 def test_cli_sim_preview_renders_unsafe_urdf_animation_warning_html(
     tmp_path: Path,
 ) -> None:

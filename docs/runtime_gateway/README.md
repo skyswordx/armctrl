@@ -162,9 +162,16 @@ operator 必须使用显式 compiler + motion surface。Fourier candidate、CSV�
 | 查看 live readiness/status | `armctrl console status --session-artifact <runtime_session.json> --json` |
 | 查看默认 profile | `armctrl profile show <profile> --json` |
 | 编译 Agent/Recipe/preposition joint trajectory | `armctrl motion compile joint-trajectory ...` |
+| 预览/评审通用 joint trajectory | `armctrl motion preview joint-trajectory --trajectory <execution_trajectory.csv> ...` |
 | 编译 reviewed SysID trajectory | `armctrl sysid compile-runtime ...` |
 | 提交 motion command | `armctrl motion submit <kind> ...` |
 | 检查 runtime result | `armctrl motion result --run-dir <run_dir> --json` |
+
+`motion preview joint-trajectory` 是通用轨迹预览入口：它读取 joint trajectory CSV，
+复用 URDF/FK/workspace/collision/mesh preview 能力，输出 `armctrl.motion.preview.v1`
+证据，且永远 `movement_allowed=false`。SysID/OED 专属的 rank、condition、optimizer
+状态和 dataset 语义仍属于 `sysid review-candidate` / SysID evidence，不应塞进通用
+motion preview。
 
 旧 runtime submit/result alias、旧 SysID SDK direct-motion command 和 diagnostic-only SDK
 bringup command 不再出现在 `console catalog` 或 lab 脚本文案中。需要排障时应查对应源码或
@@ -208,6 +215,7 @@ tracking、jitter、hold 稳定性仍必须在实验室长驻 `--serve` runtime 
 ## 当前非目标
 
 - 不重写 SysID/OED/Fourier 离线优化。
+- 不把通用 `motion preview joint-trajectory` 扩张成新的 OED/物理仿真器。
 - 不把 `armctrl` 扩张成 MoveIt、ros2_control、LeRobot 或 ARX5 SDK controller 的替代品。
 - 不做 EEF 真机执行、Teleop/Xbox streaming、LeRobot rollout 真机集成。
 - 不允许真实运动绕过长驻 ArmRuntime 直接打开 SDK/CAN。

@@ -1834,6 +1834,9 @@ def test_cli_console_catalog_exposes_profiles_without_runtime() -> None:
     assert payload["schema"] == "armctrl.runtime_console_catalog.v1"
     assert {"lab-sysid", "lab-agent-eef", "lab-agent-joint", "recipe", "teleop"} <= profile_names
     assert payload["motion_surface"]["submit_schema"] == "armctrl.motion.submit.v1"
+    assert payload["motion_surface"]["preview_schema"] == "armctrl.motion.preview.v1"
+    assert payload["motion_surface"]["supported_preview_kinds"] == ["joint-trajectory"]
+    assert "armctrl motion preview joint-trajectory" in payload["motion_surface"]["formal_cli"]
     assert "armctrl motion submit joint-intent" in payload["motion_surface"]["formal_cli"]
     assert payload["motion_surface"]["eef_control_policy"]["disconnected_takeover_allowed"] is False
     assert payload["motion_surface"]["eef_control_policy"]["bumpless_switch_required"] is True
@@ -1851,6 +1854,7 @@ def test_cli_console_catalog_exposes_profiles_without_runtime() -> None:
         "motion",
     ]
     assert "runtime" not in payload["command_classes"]["formal"]
+    assert "armctrl motion preview joint-trajectory" in payload["command_classes"]["compiler"]
     assert "armctrl sysid compile-runtime" in payload["command_classes"]["compiler"]
     assert "armctrl sysid run ... --adapter sdk" not in payload["command_classes"]["compiler"]
     assert "legacy_policy" not in payload
