@@ -30,6 +30,8 @@ armctrl motion result --run-dir "$RUN_DIR" --json
 
 ## 当前有效文档
 
+- [`teleop_teach_lab.md`](teleop_teach_lab.md): Teleop / zero-gravity drag teach-mode lab validation entrypoint. It documents the runtime-owned Xbox input, `teleop-profile`, and `zero_gravity_drag` smoke flow without restoring direct SDK/CAN control.
+
 - [`sysid_integration.md`](sysid_integration.md)：当前主规范。它描述 SysID 从离线轨迹、
   lab operator CLI、runtime submit、ARX5 SDK backend 到 result artifact 的完整链路。
 - [`agent_eef_control.md`](agent_eef_control.md)：Agent EEF 收束规范。它描述 EEF Servo Path / EEF Planned Path、禁止断 SDK owner 切换、以及等待真机验证前的 contract 要求。
