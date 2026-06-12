@@ -29,7 +29,11 @@ RUNTIME_COMMAND_SCHEMA = "armctrl.arm_runtime_command.v1"
 RUNTIME_COMMAND_RESULT_SCHEMA = "armctrl.arm_runtime_command_result.v1"
 START_POSE_POLICIES = {"live_hold", "safe_center", "explicit_q", "current_measured_pose"}
 EEF_COMMAND_KINDS = {"eef_pose_delta", "eef_twist", "eef_pose"}
+TELEOP_PROFILE_COMMAND_KIND = "teleop_profile"
+TELEOP_PROFILE_COMMAND_KINDS = {TELEOP_PROFILE_COMMAND_KIND}
 EEF_BACKENDS = {"moveit_servo", "sdk_cartesian"}
+TELEOP_PROFILE_BACKENDS = {"sdk_cartesian"}
+TELEOP_PROFILES = {"teleop", "zero_gravity_drag", "damping"}
 DEFAULT_EEF_MAX_LINEAR_STEP_M = 0.005
 DEFAULT_EEF_MAX_ANGULAR_STEP_RAD = 0.05
 DEFAULT_AGENT_MAX_JOINT_VELOCITY_RAD_S = 0.25
@@ -611,6 +615,125 @@ def submit_eef_command(
     return _write_optional_output(payload, output_path)
 
 
+def submit_teleop_profile_command(
+    *,
+    session_artifact_path: Path,
+    owner: str,
+    backend: str,
+    profile: str,
+    expected_q_start: Sequence[float],
+    max_start_error_rad: float,
+    heartbeat_timeout_s: float,
+    max_heartbeat_age_s: float,
+    output_path: Path | None = None,
+    start_pose_policy: str = "live_hold",
+) -> dict[str, object]:
+    if backend not in TELEOP_PROFILE_BACKENDS:
+        raise ValueError("teleop profile runtime supports backend=sdk_cartesian")
+    if profile not in TELEOP_PROFILES:
+        raise ValueError(
+            "unsupported teleop profile; expected one of "
+            + ", ".join(sorted(TELEOP_PROFILES))
+        )
+    q_start = _float_list(expected_q_start, name="expected_q_start")
+    session = _read_json_object(session_artifact_path)
+    start_pose_guard = _ensure_can_queue_command(
+        session,
+        owner=owner,
+        expected_q_start=q_start,
+        start_pose_policy=start_pose_policy,
+        max_start_error_rad=float(max_start_error_rad),
+        heartbeat_timeout_s=float(heartbeat_timeout_s),
+        max_heartbeat_age_s=float(max_heartbeat_age_s),
+    )
+    adapter_gate = _eef_submit_adapter_gate(
+        session=session,
+        requested_backend=backend,
+        command_kind=TELEOP_PROFILE_COMMAND_KIND,
+    )
+    if adapter_gate["status"] != "pass":
+        payload = {
+            "status": "blocked",
+            "schema": "armctrl.arm_runtime_submit.v1",
+            "owner": str(owner),
+            "mode": MotionMode.AGENT_SERVO.value,
+            "command_space": "teleop",
+            "backend": str(backend),
+            "profile": str(profile),
+            "movement_command_sent": False,
+            "hardware_executable_now": False,
+            "start_pose_policy": str(start_pose_policy),
+            "start_pose_guard": start_pose_guard,
+            "eef_adapter_manager": adapter_gate["eef_adapter_manager"],
+            "reason": adapter_gate["reason"],
+            "next_gate": (
+                "start the long-lived runtime with sdk_cartesian EEF adapter "
+                "before teleop/teach profile commands"
+            ),
+        }
+        return _write_optional_output(payload, output_path)
+    command_id = str(uuid4())
+    queue_dir = runtime_command_queue_dir(session_artifact_path)
+    pending_path = queue_dir / "pending" / f"{command_id}.json"
+    result_path = queue_dir / "results" / f"{command_id}.json"
+    command = {
+        "schema": RUNTIME_COMMAND_SCHEMA,
+        "command_id": command_id,
+        "kind": TELEOP_PROFILE_COMMAND_KIND,
+        "command_space": "teleop",
+        "source": str(owner),
+        "owner": str(owner),
+        "mode": MotionMode.AGENT_SERVO.value,
+        "backend": str(backend),
+        "profile": str(profile),
+        "start_pose_policy": str(start_pose_policy),
+        "expected_q_start": q_start,
+        "start_pose_guard": start_pose_guard,
+        "max_start_error_rad": float(max_start_error_rad),
+        "heartbeat_timeout_s": float(heartbeat_timeout_s),
+        "max_heartbeat_age_s": float(max_heartbeat_age_s),
+        "submitted_wall_time_s": time.time(),
+        "session_artifact": str(session_artifact_path),
+        "result_artifact": str(result_path),
+        "teleop_profile_policy": {
+            "schema": "armctrl.teleop_profile_policy.v1",
+            "sdk_can_singleton": True,
+            "runtime_owned_profile_switch": True,
+            "target_seeded_from_current_eef_before_gain_change": profile
+            in {"teleop", "zero_gravity_drag"},
+            "zero_gravity_drag_is_teach_mode_not_passive_droop": True,
+        },
+    }
+    pending_path.parent.mkdir(parents=True, exist_ok=True)
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_json_atomic(pending_path, command)
+    payload = {
+        "status": "queued",
+        "schema": "armctrl.arm_runtime_submit.v1",
+        "command_id": command_id,
+        "owner": str(owner),
+        "mode": MotionMode.AGENT_SERVO.value,
+        "command_space": "teleop",
+        "backend": str(backend),
+        "profile": str(profile),
+        "movement_command_sent": False,
+        "runtime_session_id": session.get("runtime_session_id"),
+        "start_pose_policy": str(start_pose_policy),
+        "start_pose_guard": start_pose_guard,
+        "runtime": {
+            "single_motion_owner": True,
+            "queue": str(queue_dir),
+            "session_artifact": str(session_artifact_path),
+        },
+        "artifacts": {
+            "command": str(pending_path),
+            "result": str(result_path),
+        },
+        "next_gate": "serve the runtime queue to apply the teleop/teach profile",
+    }
+    return _write_optional_output(payload, output_path)
+
+
 def runtime_command_queue_dir(session_artifact_path: Path) -> Path:
     return session_artifact_path.parent / f"{session_artifact_path.stem}_commands"
 
@@ -1059,7 +1182,13 @@ def execute_runtime_command(
             "owner": owner,
             "mode": mode,
             "command_space": (
-                "eef" if command.get("kind") in EEF_COMMAND_KINDS else None
+                "eef"
+                if command.get("kind") in EEF_COMMAND_KINDS
+                else (
+                    "teleop"
+                    if command.get("kind") in TELEOP_PROFILE_COMMAND_KINDS
+                    else None
+                )
             ),
             "kind": command.get("kind"),
             "start_pose_policy": str(command.get("start_pose_policy", "live_hold")),
@@ -1143,6 +1272,26 @@ def _execute_motion_command(
 ) -> MotionExecutionResult:
     kind = command.get("kind")
     send_hz = float(command.get("send_hz", 50.0))
+    if kind == TELEOP_PROFILE_COMMAND_KIND:
+        runtime._raise_if_not_owned(
+            owner=str(command.get("owner")),
+            mode=MotionMode.AGENT_SERVO,
+        )
+        executor = getattr(backend, "execute_teleop_profile_command", None)
+        if not callable(executor):
+            raise ValueError(
+                "teleop profile command requires the sdk_cartesian runtime adapter"
+            )
+        result = executor(
+            command,
+            owner=str(command.get("owner")),
+            watchdog=watchdog,
+            on_sample=on_sample,
+        )
+        return runtime._finish_owner_motion(
+            owner=str(command.get("owner")),
+            result=result,
+        )
     if kind == "joint_trajectory":
         q_points = command.get("q_points")
         if not isinstance(q_points, list):
@@ -1248,7 +1397,10 @@ def _resolve_command_execution_backend(
     eef_backends: Mapping[str, MotionBackend] | None,
 ) -> MotionBackend:
     command["_resolved_runtime_backend"] = str(session.get("backend") or "unknown")
-    if command.get("kind") not in EEF_COMMAND_KINDS:
+    if (
+        command.get("kind") not in EEF_COMMAND_KINDS
+        and command.get("kind") not in TELEOP_PROFILE_COMMAND_KINDS
+    ):
         return primary_backend
     adapter_name = str(command.get("backend") or "")
     if eef_backends is not None and adapter_name in eef_backends:
@@ -1459,13 +1611,23 @@ def _ensure_command_has_executable_backend(
     *,
     backend: MotionBackend,
 ) -> None:
-    if command.get("kind") not in EEF_COMMAND_KINDS:
+    if (
+        command.get("kind") not in EEF_COMMAND_KINDS
+        and command.get("kind") not in TELEOP_PROFILE_COMMAND_KINDS
+    ):
         return
     if command.get("_eef_adapter_resolution") != "configured_adapter_registry":
         raise ValueError(
-            "EEF runtime command requires a configured mature backend adapter "
+            "EEF/teleop runtime command requires a configured mature backend adapter "
             "inside the same long-lived runtime; primary backend fallback and "
             "heuristic joint fallback are forbidden"
+        )
+    if command.get("kind") == TELEOP_PROFILE_COMMAND_KIND:
+        executor = getattr(backend, "execute_teleop_profile_command", None)
+        if callable(executor):
+            return
+        raise ValueError(
+            "teleop profile command requires the sdk_cartesian runtime adapter"
         )
     executor = getattr(backend, "execute_eef_command", None)
     if callable(executor):
@@ -1718,9 +1880,7 @@ def _command_result_payload(
         "owner": command.get("owner"),
         "mode": command.get("mode"),
         "kind": command.get("kind"),
-        "command_space": (
-            "eef" if command.get("kind") in EEF_COMMAND_KINDS else "joint"
-        ),
+        "command_space": _command_space(command),
         "runtime_session_id": runtime_session_id,
         "movement_command_sent": bool(motion.samples),
         "start_pose_policy": str(command.get("start_pose_policy", "live_hold")),
@@ -1758,9 +1918,19 @@ def _command_result_payload(
                 phase="unknown",
             )
         )
+    if command.get("kind") == TELEOP_PROFILE_COMMAND_KIND:
+        payload["motion"]["teleop_profile"] = _teleop_profile_motion_contract(command)
     if watchdog is not None:
         payload["watchdog"] = watchdog
     return payload
+
+
+def _command_space(command: dict[str, object]) -> str:
+    if command.get("kind") in EEF_COMMAND_KINDS:
+        return "eef"
+    if command.get("kind") in TELEOP_PROFILE_COMMAND_KINDS:
+        return "teleop"
+    return "joint"
 
 
 def _eef_motion_contract(command: dict[str, object]) -> dict[str, object]:
@@ -1774,6 +1944,19 @@ def _eef_motion_contract(command: dict[str, object]) -> dict[str, object]:
         "eef_command": command.get("eef_command"),
         "eef_reference_limit": command.get("eef_reference_limit"),
         "mature_backend_policy": command.get("mature_backend_policy"),
+    }
+
+
+def _teleop_profile_motion_contract(command: dict[str, object]) -> dict[str, object]:
+    return {
+        "kind": command.get("kind"),
+        "profile": command.get("profile"),
+        "backend": command.get("backend"),
+        "runtime_backend": command.get("_resolved_runtime_backend"),
+        "eef_adapter": command.get("_resolved_eef_adapter"),
+        "adapter_resolution": command.get("_eef_adapter_resolution"),
+        "command_space": "teleop",
+        "teleop_profile_policy": command.get("teleop_profile_policy"),
     }
 
 
@@ -2188,6 +2371,8 @@ def _expected_runtime_sample_count(command: dict[str, object]) -> int | None:
         ):
             return None
         return max(1, int(round(control_period_s * send_hz))) + 1
+    if kind == TELEOP_PROFILE_COMMAND_KIND:
+        return 1
     return None
 
 

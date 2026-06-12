@@ -13,6 +13,7 @@ from armctrl.motion_runtime import (
     MotionExecutionResult,
     MotionMode,
 )
+from armctrl.teleop.profiles import RuntimeGainProfileRegistry
 
 
 @dataclass
@@ -35,6 +36,7 @@ class Arx5SdkCartesianRuntimeBackend:
     resume_gain_duration_s: float = 0.4
     max_linear_step_m: float = 0.005
     max_angular_step_rad: float = 0.05
+    gain_profiles: RuntimeGainProfileRegistry | None = None
     monotonic: Callable[[], float] = time.monotonic
     sleep: Callable[[float], None] = time.sleep
 
@@ -94,7 +96,7 @@ class Arx5SdkCartesianRuntimeBackend:
         controller = self._ensure_controller()
         before = self.read_joint_state()
         self._sync_eef_target_to_current_state(controller)
-        self._ensure_motion_gain(controller)
+        self._ensure_motion_gain(controller, profile_name="teleop")
         after = self.read_joint_state()
         return {
             "schema": "armctrl.eef_servo_switch.v1",
@@ -113,6 +115,77 @@ class Arx5SdkCartesianRuntimeBackend:
                 "fault_free_after_warmup": not bool(after.fault_flags),
             },
         }
+
+    def execute_teleop_profile_command(
+        self,
+        command: dict[str, object],
+        *,
+        owner: str,
+        watchdog=None,
+        on_sample=None,
+    ) -> MotionExecutionResult:
+        controller = self._ensure_controller()
+        watchdog_event = watchdog() if watchdog is not None else None
+        if watchdog_event is not None:
+            self.damping()
+            return _eef_result(
+                status="faulted",
+                owner=owner,
+                sent_times=[],
+                samples=[],
+                controller_dt_s=self.controller_dt_s,
+                landing_mode=MotionMode.DAMPING.value,
+                error={"type": "Watchdog", "message": str(watchdog_event)},
+            )
+        profile_name = str(command.get("profile"))
+        before_state = self.read_joint_state()
+        if profile_name == "damping":
+            self.damping()
+            return _eef_result(
+                status="completed",
+                owner=owner,
+                sent_times=[],
+                samples=[],
+                controller_dt_s=self.controller_dt_s,
+                landing_mode=MotionMode.DAMPING.value,
+            )
+        profile = self._gain_profile_registry().get(profile_name)
+        if profile.sync_eef_target:
+            self._sync_eef_target_to_current_state(controller)
+        self._ensure_motion_gain(controller, profile_name=profile_name)
+        sent_s = float(self.monotonic())
+        after_state = self.read_joint_state()
+        sample = MotionAuditSample(
+            sent_monotonic_s=sent_s,
+            q_cmd=before_state.q_meas,
+            dq_cmd=tuple(0.0 for _ in before_state.q_meas),
+            q_meas=after_state.q_meas,
+            dq_meas=after_state.dq_meas,
+            tau_meas=after_state.tau_meas,
+            fault_flags=after_state.fault_flags,
+            producer=owner,
+            mode=MotionMode.AGENT_SERVO.value,
+        )
+        if on_sample is not None:
+            on_sample(sample)
+        if after_state.fault_flags:
+            self.damping()
+            return _eef_result(
+                status="faulted",
+                owner=owner,
+                sent_times=[sent_s],
+                samples=[sample],
+                controller_dt_s=self.controller_dt_s,
+                landing_mode=MotionMode.DAMPING.value,
+            )
+        return _eef_result(
+            status="completed",
+            owner=owner,
+            sent_times=[sent_s],
+            samples=[sample],
+            controller_dt_s=self.controller_dt_s,
+            landing_mode=MotionMode.HOLD.value,
+        )
 
     def execute_eef_command(
         self,
@@ -404,7 +477,7 @@ class Arx5SdkCartesianRuntimeBackend:
 
     def _prepare_cartesian_takeover(self, controller) -> None:
         self._sync_eef_target_to_current_state(controller)
-        self._ensure_motion_gain(controller)
+        self._ensure_motion_gain(controller, profile_name="teleop")
 
     def _sync_eef_target_to_current_state(self, controller) -> None:
         current = self._current_eef_state(controller)
@@ -418,13 +491,13 @@ class Arx5SdkCartesianRuntimeBackend:
         controller.set_eef_cmd(cmd)
         self.sleep(max(controller_dt_s, 0.002))
 
-    def _ensure_motion_gain(self, controller) -> None:
+    def _ensure_motion_gain(self, controller, *, profile_name: str) -> None:
         get_gain = getattr(controller, "get_gain", None)
         set_gain = getattr(controller, "set_gain", None)
         get_controller_config = getattr(controller, "get_controller_config", None)
         if not callable(get_gain) or not callable(set_gain) or not callable(get_controller_config):
             return
-        target_gain = self._build_default_gain(get_controller_config())
+        target_gain = self._build_profile_gain(get_controller_config(), profile_name=profile_name)
         if target_gain is None:
             return
         current_gain = get_gain()
@@ -438,7 +511,7 @@ class Arx5SdkCartesianRuntimeBackend:
             if step_index < steps:
                 self.sleep(dt_s)
 
-    def _build_default_gain(self, controller_config):
+    def _build_profile_gain(self, controller_config, *, profile_name: str):
         arx5 = self._load_arx5()
         gain_cls = getattr(arx5, "Gain", None)
         if gain_cls is None:
@@ -451,7 +524,16 @@ class Arx5SdkCartesianRuntimeBackend:
         ]
         if any(value is None for value in values):
             return None
-        return gain_cls(*values)
+        return self._gain_profile_registry().build_gain(
+            arx5,
+            controller_config,
+            profile_name,
+        )
+
+    def _gain_profile_registry(self) -> RuntimeGainProfileRegistry:
+        if self.gain_profiles is None:
+            self.gain_profiles = RuntimeGainProfileRegistry.default()
+        return self.gain_profiles
 
     def _gain_matches(self, left_gain, right_gain) -> bool:
         return (

@@ -207,6 +207,57 @@ def test_cli_motion_submit_eef_delta_blocks_without_ready_adapter(
     assert not queue_dir.exists()
 
 
+def test_cli_motion_submit_teleop_profile_blocks_without_ready_adapter(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    output_artifact = tmp_path / "teleop_profile_submit.json"
+    _start_fake_hold_session(session_artifact)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "motion",
+            "submit",
+            "teleop-profile",
+            "--session-artifact",
+            str(session_artifact),
+            "--owner",
+            "teleop",
+            "--backend",
+            "sdk_cartesian",
+            "--profile",
+            "zero_gravity_drag",
+            "--expected-q-start",
+            "0.0",
+            "0.3",
+            "0.3",
+            "--output",
+            str(output_artifact),
+            "--max-heartbeat-age-s",
+            "5",
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(completed.stdout)
+    queue_dir = session_artifact.parent / "runtime_session_commands" / "pending"
+
+    assert completed.returncode == 3
+    assert payload["status"] == "blocked"
+    assert payload["motion_kind"] == "teleop-profile"
+    assert payload["command_space"] == "teleop"
+    assert payload["movement_command_sent"] is False
+    assert payload["hardware_executable_now"] is False
+    assert payload["eef_adapter_manager"]["status"] == "unconfigured"
+    assert "configured mature EEF backend adapter" in payload["reason"]
+    assert "adapter_not_configured" in payload["reason"]
+    assert not queue_dir.exists()
+
+
 def test_cli_motion_submit_joint_intent_queues_runtime_command(tmp_path: Path) -> None:
     session_artifact = tmp_path / "runtime_session.json"
     _start_fake_hold_session(session_artifact)

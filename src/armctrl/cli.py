@@ -64,6 +64,7 @@ from armctrl.runtime_ipc import (
     execute_pending_runtime_commands,
     submit_eef_command,
     submit_intent_command,
+    submit_teleop_profile_command,
     submit_trajectory_command,
 )
 from armctrl.release_status import release_notes, release_status
@@ -135,6 +136,7 @@ from armctrl.safety import SafetyGate
 from armctrl.simulation import SimulationDoctor, TrajectoryPreviewer
 from armctrl.sysid import SysIdPlanner, SysIdPlanRequest
 from armctrl.sysid_trajectory_backend import TrajectoryCommandError
+from armctrl.teleop.runtime_smoke import XboxRuntimeSmokeRequest, XboxRuntimeSmoker
 from armctrl.sysid_evidence import SysIdEvidenceImporter
 from armctrl.sysid_figaroh_adapter import FigarohEvidenceAdapter, FigarohHandoffWriter
 from armctrl.sysid_measured import MeasuredSysIdAnalyzeRequest, MeasuredSysIdAnalyzer
@@ -1078,6 +1080,52 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--json", action="store_true", dest="as_json"
     )
 
+    motion_teleop_profile_parser = motion_submit_subparsers.add_parser(
+        "teleop-profile"
+    )
+    motion_teleop_profile_parser.add_argument("--session-artifact", required=True)
+    motion_teleop_profile_parser.add_argument("--owner", default="teleop")
+    motion_teleop_profile_parser.add_argument(
+        "--backend",
+        choices=["sdk_cartesian"],
+        default="sdk_cartesian",
+    )
+    motion_teleop_profile_parser.add_argument(
+        "--profile",
+        choices=["teleop", "zero_gravity_drag", "damping"],
+        required=True,
+    )
+    motion_teleop_profile_parser.add_argument(
+        "--expected-q-start",
+        nargs="+",
+        type=float,
+        required=True,
+    )
+    motion_teleop_profile_parser.add_argument(
+        "--start-pose-policy",
+        choices=["live_hold", "safe_center", "explicit_q", "current_measured_pose"],
+        default="live_hold",
+    )
+    motion_teleop_profile_parser.add_argument(
+        "--max-start-error-rad",
+        type=float,
+        default=0.02,
+    )
+    motion_teleop_profile_parser.add_argument(
+        "--heartbeat-timeout-s",
+        type=float,
+        default=0.5,
+    )
+    motion_teleop_profile_parser.add_argument(
+        "--max-heartbeat-age-s",
+        type=float,
+        default=1.0,
+    )
+    motion_teleop_profile_parser.add_argument("--output")
+    motion_teleop_profile_parser.add_argument(
+        "--json", action="store_true", dest="as_json"
+    )
+
     motion_result_parser = motion_subparsers.add_parser("result")
     motion_result_source = motion_result_parser.add_mutually_exclusive_group(
         required=True
@@ -1104,6 +1152,71 @@ def main(argv: Sequence[str] | None = None) -> int:
     profile_show_parser = profile_subparsers.add_parser("show")
     profile_show_parser.add_argument("name")
     profile_show_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    teleop_parser = subparsers.add_parser("teleop")
+    teleop_subparsers = teleop_parser.add_subparsers(
+        dest="teleop_command",
+        required=True,
+    )
+    teleop_xbox_runtime_smoke_parser = teleop_subparsers.add_parser(
+        "xbox-runtime-smoke"
+    )
+    teleop_xbox_runtime_smoke_parser.add_argument("--session-artifact", required=True)
+    teleop_xbox_runtime_smoke_parser.add_argument("--owner", default="teleop")
+    teleop_xbox_runtime_smoke_parser.add_argument(
+        "--backend",
+        choices=["sdk_cartesian"],
+        default="sdk_cartesian",
+    )
+    teleop_xbox_runtime_smoke_parser.add_argument(
+        "--source-kind",
+        choices=["jsonl", "device"],
+        default="jsonl",
+    )
+    teleop_xbox_runtime_smoke_parser.add_argument("--source", required=True)
+    teleop_xbox_runtime_smoke_parser.add_argument(
+        "--expected-q-start",
+        nargs="+",
+        type=float,
+        required=True,
+    )
+    teleop_xbox_runtime_smoke_parser.add_argument("--frame", default="eef_link")
+    teleop_xbox_runtime_smoke_parser.add_argument("--send-hz", type=float, default=50.0)
+    teleop_xbox_runtime_smoke_parser.add_argument("--max-events", type=int)
+    teleop_xbox_runtime_smoke_parser.add_argument(
+        "--start-pose-policy",
+        choices=["live_hold", "safe_center", "explicit_q", "current_measured_pose"],
+        default="live_hold",
+    )
+    teleop_xbox_runtime_smoke_parser.add_argument(
+        "--max-start-error-rad",
+        type=float,
+        default=0.02,
+    )
+    teleop_xbox_runtime_smoke_parser.add_argument(
+        "--heartbeat-timeout-s",
+        type=float,
+        default=0.5,
+    )
+    teleop_xbox_runtime_smoke_parser.add_argument(
+        "--max-heartbeat-age-s",
+        type=float,
+        default=1.0,
+    )
+    teleop_xbox_runtime_smoke_parser.add_argument(
+        "--max-linear-step-m",
+        type=float,
+        default=DEFAULT_EEF_MAX_LINEAR_STEP_M,
+    )
+    teleop_xbox_runtime_smoke_parser.add_argument(
+        "--max-angular-step-rad",
+        type=float,
+        default=DEFAULT_EEF_MAX_ANGULAR_STEP_RAD,
+    )
+    teleop_xbox_runtime_smoke_parser.add_argument("--output")
+    teleop_xbox_runtime_smoke_parser.add_argument(
+        "--json", action="store_true", dest="as_json"
+    )
 
     console_parser = subparsers.add_parser("console")
     console_subparsers = console_parser.add_subparsers(
@@ -2141,12 +2254,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
                 _emit(payload, as_json=args.as_json)
                 return 3
-            payload = _attach_output_artifact(
-                payload,
-                args.output,
-                artifact_key="runtime_session",
-            )
             if args.serve:
+                payload = dict(payload)
+                artifacts = dict(payload.get("artifacts", {})) if isinstance(payload.get("artifacts"), dict) else {}
+                artifacts["runtime_session"] = str(Path(args.output))
+                payload["artifacts"] = artifacts
                 payload = _attach_eef_adapter_manager_from_args(
                     payload,
                     args,
@@ -2177,6 +2289,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                         backend=backend,
                         hold_hz=args.hold_hz,
                     ),
+                )
+            else:
+                payload = _attach_output_artifact(
+                    payload,
+                    args.output,
+                    artifact_key="runtime_session",
                 )
             _emit(payload, as_json=args.as_json)
             return 3
@@ -2390,12 +2508,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             max_joint_step_rad=args.max_joint_step_rad,
             max_heartbeat_age_s=args.max_heartbeat_age_s,
         )
-        payload = _attach_output_artifact(
-            payload,
-            args.output,
-            artifact_key="runtime_session",
-        )
         if args.serve:
+            payload = dict(payload)
+            artifacts = dict(payload.get("artifacts", {})) if isinstance(payload.get("artifacts"), dict) else {}
+            artifacts["runtime_session"] = str(Path(args.output))
+            payload["artifacts"] = artifacts
             payload = _attach_eef_adapter_manager_from_args(payload, args)
             _write_json_atomic(Path(args.output), payload)
             _clear_runtime_stop_request(Path(args.output))
@@ -2422,6 +2539,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     primary_backend="fake",
                 ),
             )
+        else:
+            payload = _attach_output_artifact(
+                payload,
+                args.output,
+                artifact_key="runtime_session",
+            )
         return _emit(payload, as_json=args.as_json)
 
     if args.command == "runtime" and args.runtime_command == "status":
@@ -2434,6 +2557,55 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.output,
             artifact_key="runtime_status",
         )
+        _emit(payload, as_json=args.as_json)
+        return 0 if payload.get("status") == "ok" else 3
+
+    if args.command == "teleop" and args.teleop_command == "xbox-runtime-smoke":
+        try:
+            payload = XboxRuntimeSmoker().run(
+                XboxRuntimeSmokeRequest(
+                    session_artifact_path=Path(args.session_artifact),
+                    owner=args.owner,
+                    backend=args.backend,
+                    source_kind=args.source_kind,
+                    source=Path(args.source),
+                    expected_q_start=tuple(args.expected_q_start),
+                    frame=args.frame,
+                    send_hz=args.send_hz,
+                    max_events=args.max_events,
+                    start_pose_policy=args.start_pose_policy,
+                    max_start_error_rad=args.max_start_error_rad,
+                    heartbeat_timeout_s=args.heartbeat_timeout_s,
+                    max_heartbeat_age_s=args.max_heartbeat_age_s,
+                    max_linear_step_m=args.max_linear_step_m,
+                    max_angular_step_rad=args.max_angular_step_rad,
+                    output_path=Path(args.output) if args.output else None,
+                )
+            )
+        except (RuntimeSessionError, ValueError, OSError) as error:
+            payload = {
+                "status": "rejected",
+                "schema": "armctrl.teleop_xbox_runtime_smoke.v1",
+                "owner": args.owner,
+                "backend": args.backend,
+                "source_kind": args.source_kind,
+                "source": args.source,
+                "reason": str(error),
+                "movement_command_sent": False,
+                "sdk_can_singleton": True,
+            }
+            if args.output:
+                output_path = Path(args.output)
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_text(
+                    json.dumps(payload, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+                payload["artifacts"] = {
+                    "teleop_xbox_runtime_smoke": str(output_path)
+                }
+            _emit(payload, as_json=args.as_json)
+            return 3
         _emit(payload, as_json=args.as_json)
         return 0 if payload.get("status") == "ok" else 3
 
@@ -5369,6 +5541,32 @@ def _handle_motion_submit(args: argparse.Namespace) -> int:
                 payload,
                 motion_kind="eef-pose",
                 legacy_equivalent="armctrl runtime submit-eef --kind eef_pose",
+            )
+            payload = _attach_output_artifact(
+                payload,
+                args.output,
+                artifact_key="motion_submit",
+            )
+            _emit(payload, as_json=args.as_json)
+            return _motion_submit_exit_code(payload)
+
+        if args.motion_kind == "teleop-profile":
+            payload = submit_teleop_profile_command(
+                session_artifact_path=Path(args.session_artifact),
+                owner=args.owner,
+                backend=args.backend,
+                profile=args.profile,
+                expected_q_start=tuple(args.expected_q_start),
+                start_pose_policy=args.start_pose_policy,
+                max_start_error_rad=args.max_start_error_rad,
+                heartbeat_timeout_s=args.heartbeat_timeout_s,
+                max_heartbeat_age_s=args.max_heartbeat_age_s,
+                output_path=None,
+            )
+            payload = _annotate_motion_submit_payload(
+                payload,
+                motion_kind="teleop-profile",
+                legacy_equivalent="runtime-owned teleop/teach profile command",
             )
             payload = _attach_output_artifact(
                 payload,

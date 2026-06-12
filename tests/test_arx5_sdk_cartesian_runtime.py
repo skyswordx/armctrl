@@ -9,6 +9,7 @@ import pytest
 from armctrl.arx5_sdk_cartesian_runtime import Arx5SdkCartesianRuntimeBackend
 from armctrl.motion_runtime import ArmRuntime, FakeMotionBackend
 from armctrl.runtime_ipc import execute_pending_runtime_commands, submit_eef_command
+from armctrl.runtime_ipc import submit_teleop_profile_command
 from armctrl.runtime_session import (
     eef_adapter_manager_payload,
     runtime_controller_manager_payload,
@@ -229,6 +230,36 @@ def test_sdk_cartesian_twist_converts_to_bounded_pose_delta_without_joint_fallba
     assert not hasattr(controller, "set_joint_cmd")
 
 
+def test_zero_gravity_drag_profile_seeds_eef_target_before_low_gain() -> None:
+    controller = _FakeCartesianController()
+    backend = Arx5SdkCartesianRuntimeBackend(
+        arx5_module=_FakeSDK,
+        controller=controller,
+        sleep=lambda _duration_s: None,
+        monotonic=lambda: 123.0,
+        resume_gain_duration_s=0.002,
+    )
+
+    result = backend.execute_teleop_profile_command(
+        {
+            "kind": "teleop_profile",
+            "profile": "zero_gravity_drag",
+        },
+        owner="teleop",
+    )
+
+    assert result.status == "completed"
+    assert result.landing_mode == "hold"
+    assert controller.commands[0].pose_6d() == pytest.approx([0.4, 0.0, 0.2, 0.0, 0.0, 0.0])
+    assert controller.gain_calls == 1
+    assert controller.gain.kp() == pytest.approx([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+    assert controller.gain.kd() == pytest.approx(
+        [0.000015, 0.000015, 0.000015, 0.000015, 0.00001, 0.00001]
+    )
+    assert controller.gain.gripper_kp == pytest.approx(0.0)
+    assert controller.gain.gripper_kd == pytest.approx(0.0)
+
+
 def test_runtime_queue_executes_sdk_cartesian_eef_command(tmp_path) -> None:
     session_artifact = tmp_path / "runtime_session.json"
     payload = start_fake_runtime_session(
@@ -300,6 +331,71 @@ def test_runtime_queue_executes_sdk_cartesian_eef_command(tmp_path) -> None:
     assert result["eef_switch"]["checks"]["zero_command_warmup_completed"] is True
     assert len(controller.commands) >= 2
     assert controller.commands[-1].pose_6d() == pytest.approx([0.401, 0.0, 0.2, 0.0, 0.0, 0.0])
+
+
+def test_runtime_queue_executes_sdk_cartesian_teleop_profile(tmp_path) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    payload = start_fake_runtime_session(
+        q_current=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
+        safe_center=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
+        send_hz=50.0,
+        hold_hz=50.0,
+        max_joint_step_rad=0.01,
+        max_heartbeat_age_s=5.0,
+    )
+    payload["hold_fresh"] = True
+    payload["last_hold_wall_time_s"] = time.time()
+    payload["hold_age_s"] = 0.0
+    payload["readiness"] = {"agent_sysid_smoke_allowed": True, "failed_checks": []}
+    payload["eef_adapter_manager"] = eef_adapter_manager_payload(
+        primary_backend="fake",
+        configured_adapters=["sdk_cartesian"],
+    )
+    payload["runtime_controller_manager"] = runtime_controller_manager_payload(
+        backend="fake",
+        eef_adapter_manager=payload["eef_adapter_manager"],
+    )
+    session_artifact.write_text(json.dumps(payload), encoding="utf-8")
+    controller = _FakeCartesianController()
+    backend = Arx5SdkCartesianRuntimeBackend(
+        arx5_module=_FakeSDK,
+        controller=controller,
+        sleep=lambda _duration_s: None,
+        monotonic=lambda: 123.0,
+        resume_gain_duration_s=0.002,
+    )
+    runtime = ArmRuntime(
+        backend=backend,
+        safe_center=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
+        runtime_session_id=str(payload["runtime_session_id"]),
+    )
+    runtime.mark_hold_safe(q_hold=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0))
+    queued = submit_teleop_profile_command(
+        session_artifact_path=session_artifact,
+        owner="teleop",
+        backend="sdk_cartesian",
+        profile="zero_gravity_drag",
+        expected_q_start=(0.0, 0.3, 0.3, 0.0, 0.0, 0.0),
+        max_start_error_rad=0.02,
+        heartbeat_timeout_s=0.5,
+        max_heartbeat_age_s=5.0,
+    )
+
+    result = execute_pending_runtime_commands(
+        session_artifact_path=session_artifact,
+        backend=FakeMotionBackend(),
+        runtime=runtime,
+        eef_backends={"sdk_cartesian": backend},
+        max_heartbeat_age_s=5.0,
+    )
+
+    assert queued["status"] == "queued"
+    assert result is not None
+    assert result["status"] == "completed"
+    assert result["kind"] == "teleop_profile"
+    assert result["command_space"] == "teleop"
+    assert result["motion"]["landing_mode"] == "hold"
+    assert controller.commands[0].pose_6d() == pytest.approx([0.4, 0.0, 0.2, 0.0, 0.0, 0.0])
 
 
 def test_start_arx5_cartesian_runtime_takes_over_safe_center_pose() -> None:

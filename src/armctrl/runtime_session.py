@@ -183,6 +183,18 @@ def _eef_command_capabilities(
                 ),
             },
         },
+        "teleop_profile": {
+            "requires_live_reference": False,
+            "adapters": {
+                "moveit_servo": {
+                    "configured": "moveit_servo" in configured,
+                    "live_reference": "moveit_servo" in live_reference,
+                    "executable": False,
+                    "reason": "teleop_profile_requires_sdk_cartesian_gain_control",
+                },
+                "sdk_cartesian": adapter_capability("sdk_cartesian"),
+            },
+        },
     }
     for command_kind, capability in capabilities.items():
         adapters = capability["adapters"]
