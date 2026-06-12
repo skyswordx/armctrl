@@ -40,7 +40,7 @@ Notes:
   - status and result checks use the formal armctrl console/motion surface.
   - compile-* uses the SysID compiler surface and sends no hardware command.
   - run-* submits the compiled joint trajectory through armctrl motion submit.
-  - armctrl sysid run --adapter sdk is intentionally not used by this lab script.
+  - Removed SysID SDK direct-motion entrypoints are intentionally not used here.
   - Do not run full until slow and reduced have completed smoothly.
 EOF
 }

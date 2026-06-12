@@ -94,16 +94,15 @@ def test_cli_runtime_submit_eef_pose_delta_blocks_without_ready_adapter(
             sys.executable,
             "-m",
             "armctrl.cli",
-            "runtime",
-            "submit-eef",
+            "motion",
+            "submit",
+            "eef-delta",
             "--session-artifact",
             str(session_artifact),
             "--owner",
             "agent",
             "--backend",
             "moveit_servo",
-            "--kind",
-            "eef_pose_delta",
             "--frame",
             "eef_link",
             "--expected-q-start",
@@ -300,10 +299,13 @@ def test_cli_motion_submit_joint_intent_queues_runtime_command(tmp_path: Path) -
     assert payload["status"] == "queued"
     assert payload["command_surface"] == "armctrl.motion.submit.v1"
     assert payload["motion_kind"] == "joint-intent"
-    assert payload["legacy_equivalent"] == "armctrl runtime submit-intent"
+    assert payload["entrypoint"] == "armctrl motion submit joint-intent"
+    assert "legacy_equivalent" not in payload
     assert command["kind"] == "joint_intent"
     assert command["command_surface"] == "armctrl.motion.submit.v1"
     assert command["motion_kind"] == "joint-intent"
+    assert command["entrypoint"] == "armctrl motion submit joint-intent"
+    assert "legacy_equivalent" not in command
     assert command["max_joint_velocity_rad_s"] == pytest.approx(0.25)
     assert command["joint_intent_safety"]["status"] == "pass"
     assert command["intent_trajectory_contract"]["schema"] == (
@@ -544,10 +546,13 @@ def test_cli_motion_submit_joint_trajectory_queues_runtime_command(
     assert payload["status"] == "queued"
     assert payload["command_surface"] == "armctrl.motion.submit.v1"
     assert payload["motion_kind"] == "joint-trajectory"
-    assert payload["legacy_equivalent"] == "armctrl runtime submit-trajectory"
+    assert payload["entrypoint"] == "armctrl motion submit joint-trajectory"
+    assert "legacy_equivalent" not in payload
     assert command["kind"] == "joint_trajectory"
     assert command["command_surface"] == "armctrl.motion.submit.v1"
     assert command["motion_kind"] == "joint-trajectory"
+    assert command["entrypoint"] == "armctrl motion submit joint-trajectory"
+    assert "legacy_equivalent" not in command
 
 
 def test_cli_motion_submit_agent_joint_trajectory_rejects_overfast_waypoints(
@@ -1840,40 +1845,175 @@ def test_cli_console_catalog_exposes_profiles_without_runtime() -> None:
         "enforced_at": ["submit", "execute"],
     }
     assert payload["operator_surfaces"]["submit_motion"] == "armctrl motion submit <kind> ..."
-    assert payload["legacy_policy"]["formal_control_surface"] == "motion/profile/console"
-    assert payload["legacy_policy"]["sysid_run_sdk"] == (
-        "parser-level removed; sysid run only accepts --adapter {fake}; "
-        "use sysid compile-runtime plus motion submit joint-trajectory"
-    )
     assert payload["command_classes"]["formal"] == [
         "console",
         "profile",
-        "runtime",
         "motion",
     ]
+    assert "runtime" not in payload["command_classes"]["formal"]
     assert "armctrl sysid compile-runtime" in payload["command_classes"]["compiler"]
     assert "armctrl sysid run ... --adapter sdk" not in payload["command_classes"]["compiler"]
-    assert "armctrl sysid run ... --adapter sdk" in payload["command_classes"]["removed"]
-    assert "armctrl sysid sdk-doctor" in payload["command_classes"]["read_only_diagnostic"]
-    assert "armctrl sysid sdk-jog-real" in payload["command_classes"]["hardware_diagnostic_only"]
-    assert (
-        "armctrl sysid sdk-tiny-motion-execute-real"
-        in payload["command_classes"]["hardware_diagnostic_only"]
+    assert "legacy_policy" not in payload
+    assert "removed" not in payload["command_classes"]
+    assert "legacy_alias" not in payload["command_classes"]
+    assert "legacy_compatibility_wrapper" not in payload["command_classes"]
+    assert "read_only_diagnostic" not in payload["command_classes"]
+    assert "hardware_diagnostic_only" not in payload["command_classes"]
+    assert "diagnostic" not in payload["command_classes"]
+    serialized = json.dumps(payload, ensure_ascii=False)
+    assert "armctrl runtime submit-" not in serialized
+    assert "armctrl runtime result-check" not in serialized
+    assert "armctrl sysid run ... --adapter sdk" not in serialized
+    assert "armctrl sysid sdk-jog-real" not in serialized
+    assert "sdk-agent-sysid-smoke-readiness" not in serialized
+
+
+def test_cli_help_hides_legacy_operator_entrypoints() -> None:
+    runtime_help = subprocess.run(
+        [sys.executable, "-m", "armctrl.cli", "runtime", "--help"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    sysid_help = subprocess.run(
+        [sys.executable, "-m", "armctrl.cli", "sysid", "--help"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+
+    assert "submit-trajectory" not in runtime_help
+    assert "submit-intent" not in runtime_help
+    assert "submit-eef" not in runtime_help
+    assert "result-check" not in runtime_help
+    assert "sdk-jog-real" not in sysid_help
+    assert "sdk-recover-startup-real" not in sysid_help
+    assert "sdk-tiny-motion-execute-real" not in sysid_help
+    assert "sdk-agent-sysid-smoke-readiness" not in sysid_help
+    assert "compile-runtime" in sysid_help
+
+
+def test_cli_runtime_result_check_alias_rejected_in_favor_of_motion_result(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    from armctrl import cli
+
+    result_artifact = tmp_path / "runtime-result.json"
+    result_artifact.write_text(
+        json.dumps(
+            {
+                "schema": "armctrl.arm_runtime_command_result.v1",
+                "status": "completed",
+                "owner": "sysid",
+                "mode": "trajectory_replay",
+                "motion": {"status": "completed", "sample_count": 1},
+            }
+        ),
+        encoding="utf-8",
     )
-    assert "armctrl sysid sdk-jog-real" not in payload["command_classes"]["formal"]
-    assert "armctrl runtime submit-trajectory" in payload["command_classes"]["legacy_alias"]
-    assert (
-        "armctrl sysid sdk-agent-sysid-smoke-readiness "
-        "--runtime-status-artifact <live_runtime_status.json>"
-        in payload["command_classes"]["legacy_compatibility_wrapper"]
+
+    exit_code = cli.main(
+        [
+            "runtime",
+            "result-check",
+            "--result-artifact",
+            str(result_artifact),
+            "--json",
+        ]
     )
-    assert (
-        "armctrl sysid sdk-agent-sysid-smoke-readiness"
-        not in payload["command_classes"]["read_only_diagnostic"]
-    )
-    assert payload["command_classes"]["diagnostic"] == [
-        "see read_only_diagnostic and hardware_diagnostic_only"
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 3
+    assert payload["status"] == "rejected"
+    assert payload["schema"] == "armctrl.legacy_cli_rejected.v1"
+    assert payload["replacement"] == "armctrl motion result"
+    assert payload["movement_command_sent"] is False
+
+
+def test_cli_runtime_submit_aliases_rejected_in_favor_of_motion_submit(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    from armctrl import cli
+
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    cases = [
+        (
+            [
+                "runtime",
+                "submit-trajectory",
+                "--session-artifact",
+                str(session_artifact),
+                "--owner",
+                "sysid",
+                "--expected-q-start",
+                "0.0",
+                "0.3",
+                "0.3",
+                "--q-point",
+                "0.0",
+                "0.3",
+                "0.3",
+                "--json",
+            ],
+            "armctrl motion submit joint-trajectory",
+        ),
+        (
+            [
+                "runtime",
+                "submit-intent",
+                "--session-artifact",
+                str(session_artifact),
+                "--expected-q-start",
+                "0.0",
+                "0.3",
+                "0.3",
+                "--q-target",
+                "0.001",
+                "0.3",
+                "0.3",
+                "--json",
+            ],
+            "armctrl motion submit joint-intent",
+        ),
+        (
+            [
+                "runtime",
+                "submit-eef",
+                "--session-artifact",
+                str(session_artifact),
+                "--backend",
+                "moveit_servo",
+                "--kind",
+                "eef_pose_delta",
+                "--expected-q-start",
+                "0.0",
+                "0.3",
+                "0.3",
+                "--delta-position",
+                "0.001",
+                "0.0",
+                "0.0",
+                "--delta-rpy",
+                "0.0",
+                "0.0",
+                "0.0",
+                "--json",
+            ],
+            "armctrl motion submit eef-delta",
+        ),
     ]
+
+    for argv, replacement in cases:
+        exit_code = cli.main(argv)
+        payload = json.loads(capsys.readouterr().out)
+        assert exit_code == 3
+        assert payload["status"] == "rejected"
+        assert payload["schema"] == "armctrl.legacy_cli_rejected.v1"
+        assert payload["replacement"] == replacement
+        assert payload["movement_command_sent"] is False
 
 
 def test_cli_runtime_submit_eef_accepts_sdk_cartesian_backend(tmp_path: Path) -> None:
@@ -4580,8 +4720,8 @@ def test_cli_runtime_result_check_summarizes_passing_owner_result(
 
     exit_code = cli.main(
         [
-            "runtime",
-            "result-check",
+            "motion",
+            "result",
             "--result-artifact",
             str(result_artifact),
             "--expect-owner",
@@ -4687,8 +4827,8 @@ def test_cli_runtime_result_check_can_find_latest_result_from_run_dir(
 
     exit_code = cli.main(
         [
-            "runtime",
-            "result-check",
+            "motion",
+            "result",
             "--run-dir",
             str(run_dir),
             "--expect-owner",
@@ -4755,8 +4895,8 @@ def test_cli_runtime_result_check_all_summarizes_run_dir_results(
 
     exit_code = cli.main(
         [
-            "runtime",
-            "result-check",
+            "motion",
+            "result",
             "--run-dir",
             str(run_dir),
             "--all",
@@ -4823,8 +4963,8 @@ def test_cli_runtime_result_check_all_requires_expected_owners(
 
     exit_code = cli.main(
         [
-            "runtime",
-            "result-check",
+            "motion",
+            "result",
             "--run-dir",
             str(run_dir),
             "--all",
@@ -4890,8 +5030,8 @@ def test_cli_runtime_result_check_rejects_failed_timing_gate(
 
     exit_code = cli.main(
         [
-            "runtime",
-            "result-check",
+            "motion",
+            "result",
             "--result-artifact",
             str(result_artifact),
             "--expect-owner",
@@ -4958,8 +5098,8 @@ def test_cli_runtime_result_check_rejects_tracking_error_over_limit(
 
     exit_code = cli.main(
         [
-            "runtime",
-            "result-check",
+            "motion",
+            "result",
             "--result-artifact",
             str(result_artifact),
             "--expect-owner",
@@ -6709,8 +6849,9 @@ def test_cli_runtime_serve_executes_queued_trajectory_and_returns_to_hold(
                 sys.executable,
                 "-m",
                 "armctrl.cli",
-                "runtime",
-                "submit-trajectory",
+                "motion",
+                "submit",
+                "joint-trajectory",
                 "--session-artifact",
                 str(session_artifact),
                 "--owner",
@@ -7191,8 +7332,9 @@ def test_cli_runtime_submit_trajectory_rejects_busy_owner(tmp_path: Path) -> Non
             sys.executable,
             "-m",
             "armctrl.cli",
-            "runtime",
-            "submit-trajectory",
+            "motion",
+            "submit",
+            "joint-trajectory",
             "--session-artifact",
             str(session_artifact),
             "--owner",
@@ -7227,8 +7369,9 @@ def test_cli_runtime_submit_trajectory_records_tracking_limit(tmp_path: Path) ->
             sys.executable,
             "-m",
             "armctrl.cli",
-            "runtime",
-            "submit-trajectory",
+            "motion",
+            "submit",
+            "joint-trajectory",
             "--session-artifact",
             str(session_artifact),
             "--owner",
@@ -7315,8 +7458,9 @@ def test_cli_runtime_submit_intent_queues_agent_servo_command(tmp_path: Path) ->
             sys.executable,
             "-m",
             "armctrl.cli",
-            "runtime",
-            "submit-intent",
+            "motion",
+            "submit",
+            "joint-intent",
             "--session-artifact",
             str(session_artifact),
             "--owner",

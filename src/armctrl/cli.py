@@ -183,7 +183,6 @@ MOTION_PROFILES: dict[str, dict[str, object]] = {
         "start_pose_policy": "safe_center",
         "supported_motion_kinds": ["joint-trajectory"],
         "readiness": "live runtime status with safe_center hold",
-        "removed_entrypoints": ["armctrl sysid run ... --adapter sdk"],
         "preferred_entrypoints": [
             "armctrl sysid compile-runtime",
             "armctrl motion submit joint-trajectory --compiled-command",
@@ -207,8 +206,11 @@ MOTION_PROFILES: dict[str, dict[str, object]] = {
             "live runtime status with controlled hold at SAFE_CENTER or "
             "AGENT_EEF_HOME; backend switch must be bumpless inside the runtime"
         ),
-        "legacy_entrypoints": ["armctrl runtime submit-eef", "scripts/lab_agent_runtime_smoke.sh start-eef"],
-        "diagnostic_only_entrypoints": ["scripts/lab_agent_runtime_smoke.sh start-eef"],
+        "preferred_entrypoints": [
+            "armctrl motion submit eef-delta",
+            "armctrl motion submit eef-twist",
+            "armctrl motion submit eef-pose",
+        ],
     },
     "lab-agent-joint": {
         "profile": "lab-agent-joint",
@@ -220,7 +222,11 @@ MOTION_PROFILES: dict[str, dict[str, object]] = {
         "start_pose_policy": "live_hold",
         "supported_motion_kinds": ["joint-intent", "joint-trajectory"],
         "readiness": "live runtime status with hold_safe",
-        "legacy_entrypoints": ["armctrl runtime submit-intent", "armctrl runtime submit-trajectory"],
+        "preferred_entrypoints": [
+            "armctrl motion submit joint-intent",
+            "armctrl motion compile joint-trajectory",
+            "armctrl motion submit joint-trajectory --compiled-command",
+        ],
     },
     "recipe": {
         "profile": "recipe",
@@ -232,7 +238,10 @@ MOTION_PROFILES: dict[str, dict[str, object]] = {
         "start_pose_policy": "live_hold",
         "supported_motion_kinds": ["joint-trajectory", "joint-intent"],
         "readiness": "live runtime status with hold_safe",
-        "legacy_entrypoints": ["armctrl recipe runtime-submit"],
+        "preferred_entrypoints": [
+            "armctrl motion compile joint-trajectory",
+            "armctrl motion submit joint-trajectory --compiled-command",
+        ],
     },
     "teleop": {
         "profile": "teleop",
@@ -257,6 +266,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     runtime_subparsers = runtime_parser.add_subparsers(
         dest="runtime_command",
         required=True,
+        metavar=(
+            "{start,status,recover,stop,acquire-owner,release-owner,"
+            "owner-heartbeat,watchdog-tick,preposition}"
+        ),
     )
 
     runtime_start_parser = runtime_subparsers.add_parser("start")
@@ -441,7 +454,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     runtime_watchdog_parser.add_argument("--output")
     runtime_watchdog_parser.add_argument("--json", action="store_true", dest="as_json")
 
-    runtime_result_check_parser = runtime_subparsers.add_parser("result-check")
+    runtime_result_check_parser = runtime_subparsers.add_parser(
+        "result-check",
+        help=argparse.SUPPRESS,
+    )
+    _hide_subparser_choice(runtime_subparsers, "result-check")
     runtime_result_source = runtime_result_check_parser.add_mutually_exclusive_group(
         required=True
     )
@@ -497,8 +514,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     runtime_submit_trajectory_parser = runtime_subparsers.add_parser(
-        "submit-trajectory"
+        "submit-trajectory",
+        help=argparse.SUPPRESS,
     )
+    _hide_subparser_choice(runtime_subparsers, "submit-trajectory")
     runtime_submit_trajectory_parser.add_argument("--session-artifact", required=True)
     runtime_submit_trajectory_parser.add_argument("--owner", required=True)
     runtime_submit_trajectory_parser.add_argument(
@@ -555,7 +574,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--json", action="store_true", dest="as_json"
     )
 
-    runtime_submit_intent_parser = runtime_subparsers.add_parser("submit-intent")
+    runtime_submit_intent_parser = runtime_subparsers.add_parser(
+        "submit-intent",
+        help=argparse.SUPPRESS,
+    )
+    _hide_subparser_choice(runtime_subparsers, "submit-intent")
     runtime_submit_intent_parser.add_argument("--session-artifact", required=True)
     runtime_submit_intent_parser.add_argument("--owner", default="agent")
     runtime_submit_intent_parser.add_argument(
@@ -618,7 +641,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--json", action="store_true", dest="as_json"
     )
 
-    runtime_submit_eef_parser = runtime_subparsers.add_parser("submit-eef")
+    runtime_submit_eef_parser = runtime_subparsers.add_parser(
+        "submit-eef",
+        help=argparse.SUPPRESS,
+    )
+    _hide_subparser_choice(runtime_subparsers, "submit-eef")
     runtime_submit_eef_parser.add_argument("--session-artifact", required=True)
     runtime_submit_eef_parser.add_argument("--owner", default="agent")
     runtime_submit_eef_parser.add_argument(
@@ -1560,7 +1587,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     sysid_parser = subparsers.add_parser("sysid")
-    sysid_subparsers = sysid_parser.add_subparsers(dest="sysid_command", required=True)
+    sysid_subparsers = sysid_parser.add_subparsers(
+        dest="sysid_command",
+        required=True,
+        metavar=(
+            "{plan,run,compile-runtime,postprocess,solve,analyze-measured,"
+            "review-candidate,package,import-evidence,adapt-figaroh-evidence,"
+            "figaroh-handoff}"
+        ),
+    )
 
     eef_parser = subparsers.add_parser("eef")
     eef_subparsers = eef_parser.add_subparsers(dest="eef_command", required=True)
@@ -1949,7 +1984,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         dest="as_json",
     )
 
-    sysid_sdk_jog_real_parser = sysid_subparsers.add_parser("sdk-jog-real")
+    sysid_sdk_jog_real_parser = sysid_subparsers.add_parser(
+        "sdk-jog-real",
+        help=argparse.SUPPRESS,
+    )
+    _hide_subparser_choice(sysid_subparsers, "sdk-jog-real")
     sysid_sdk_jog_real_parser.add_argument("--session-artifact", required=True)
     sysid_sdk_jog_real_parser.add_argument("--joint-index", type=int, required=True)
     sysid_sdk_jog_real_parser.add_argument("--delta-rad", type=float, required=True)
@@ -1973,8 +2012,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     sysid_sdk_recover_startup_parser = sysid_subparsers.add_parser(
-        "sdk-recover-startup-real"
+        "sdk-recover-startup-real",
+        help=argparse.SUPPRESS,
     )
+    _hide_subparser_choice(sysid_subparsers, "sdk-recover-startup-real")
     sysid_sdk_recover_startup_parser.add_argument("--session-artifact", required=True)
     sysid_sdk_recover_startup_parser.add_argument(
         "--q-target",
@@ -2069,8 +2110,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     sysid_sdk_tiny_motion_execute_real_parser = sysid_subparsers.add_parser(
-        "sdk-tiny-motion-execute-real"
+        "sdk-tiny-motion-execute-real",
+        help=argparse.SUPPRESS,
     )
+    _hide_subparser_choice(sysid_subparsers, "sdk-tiny-motion-execute-real")
     sysid_sdk_tiny_motion_execute_real_parser.add_argument(
         "--plan-artifact",
         required=True,
@@ -2122,8 +2165,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     sysid_agent_sysid_smoke_readiness_parser = sysid_subparsers.add_parser(
-        "sdk-agent-sysid-smoke-readiness"
+        "sdk-agent-sysid-smoke-readiness",
+        help=argparse.SUPPRESS,
     )
+    _hide_subparser_choice(sysid_subparsers, "sdk-agent-sysid-smoke-readiness")
     sysid_agent_sysid_smoke_readiness_parser.add_argument(
         "--doctor-artifact",
         required=True,
@@ -2738,42 +2783,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0 if payload.get("status") == "ok" else 3
 
     if args.command == "runtime" and args.runtime_command == "result-check":
-        try:
-            if args.all:
-                payload = _runtime_result_check_all_payload(
-                    run_dir=Path(args.run_dir) if args.run_dir is not None else None,
-                    max_jitter_p99_ms=args.max_jitter_p99_ms,
-                    max_tracking_error_rad=args.max_tracking_error_rad,
-                    required_owners=args.require_owner,
-                )
-            else:
-                payload = _runtime_result_check_payload(
-                    result_artifact_path=_runtime_result_artifact_path_from_args(
-                        result_artifact=args.result_artifact,
-                        run_dir=args.run_dir,
-                    ),
-                    expect_owner=args.expect_owner,
-                    expect_mode=args.expect_mode,
-                    expect_sample_count=args.expect_sample_count,
-                    max_jitter_p99_ms=args.max_jitter_p99_ms,
-                    max_tracking_error_rad=args.max_tracking_error_rad,
-                )
-        except (OSError, ValueError) as error:
-            payload = {
-                "status": "fail",
-                "schema": "armctrl.runtime_result_check.v1",
-                "reason": str(error),
-                "result_artifact": args.result_artifact,
-                "run_dir": args.run_dir,
-                "next_gate": "wait for live runtime command result artifact",
-            }
-        payload = _attach_output_artifact(
-            payload,
-            args.output,
-            artifact_key="runtime_result_check",
+        payload = _legacy_cli_rejected_payload(
+            legacy_entrypoint="armctrl runtime result-check",
+            replacement="armctrl motion result",
         )
+        payload = _attach_output_artifact(payload, args.output, artifact_key="legacy_cli")
         _emit(payload, as_json=args.as_json)
-        return 0 if payload.get("status") == "pass" else 3
+        return 3
 
     if args.command == "motion" and args.motion_command == "result":
         try:
@@ -2807,7 +2823,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             }
         payload = dict(payload)
         payload["command_surface"] = "armctrl.motion.result.v1"
-        payload["legacy_equivalent"] = "armctrl runtime result-check"
+        payload["entrypoint"] = "armctrl motion result"
         payload = _attach_output_artifact(
             payload,
             args.output,
@@ -2894,131 +2910,33 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command == "runtime" and args.runtime_command == "submit-trajectory":
-        try:
-            payload = submit_trajectory_command(
-                session_artifact_path=Path(args.session_artifact),
-                owner=args.owner,
-                expected_q_start=tuple(args.expected_q_start),
-                q_points=tuple(tuple(point) for point in args.q_point),
-                send_hz=args.send_hz,
-                max_start_error_rad=args.max_start_error_rad,
-                heartbeat_timeout_s=args.heartbeat_timeout_s,
-                max_heartbeat_age_s=args.max_heartbeat_age_s,
-                output_path=Path(args.output) if args.output else None,
-                max_tracking_error_rad=args.max_tracking_error_rad,
-                max_tau_abs=args.max_tau_abs,
-                max_joint_segment_delta_rad=args.max_joint_segment_delta_rad,
-                max_joint_velocity_rad_s=_agent_default_joint_velocity_limit(
-                    owner=args.owner,
-                    requested_limit=args.max_joint_velocity_rad_s,
-                ),
-                max_joint_acceleration_rad_s2=args.max_joint_acceleration_rad_s2,
-            )
-        except (RuntimeSessionError, ValueError) as error:
-            error_payload = error.payload if isinstance(error, RuntimeSessionError) else {}
-            payload = {
-                **error_payload,
-                "status": "rejected",
-                "schema": "armctrl.arm_runtime_submit.v1",
-                "reason": str(error),
-                "movement_command_sent": False,
-            }
-            _emit(payload, as_json=args.as_json)
-            return 3
+        payload = _legacy_cli_rejected_payload(
+            legacy_entrypoint="armctrl runtime submit-trajectory",
+            replacement="armctrl motion submit joint-trajectory",
+        )
         _emit(payload, as_json=args.as_json)
-        return 0
+        return 3
 
     if args.command == "runtime" and args.runtime_command == "submit-intent":
-        try:
-            payload = submit_intent_command(
-                session_artifact_path=Path(args.session_artifact),
-                owner=args.owner,
-                expected_q_start=tuple(args.expected_q_start),
-                q_target=tuple(args.q_target),
-                control_period_s=args.control_period_s,
-                send_hz=args.send_hz,
-                max_joint_delta_rad=args.max_joint_delta_rad,
-                max_joint_velocity_rad_s=args.max_joint_velocity_rad_s,
-                max_joint_acceleration_rad_s2=args.max_joint_acceleration_rad_s2,
-                max_start_error_rad=args.max_start_error_rad,
-                heartbeat_timeout_s=args.heartbeat_timeout_s,
-                max_heartbeat_age_s=args.max_heartbeat_age_s,
-                output_path=Path(args.output) if args.output else None,
-                max_tracking_error_rad=args.max_tracking_error_rad,
-                max_tau_abs=args.max_tau_abs,
-            )
-        except (RuntimeSessionError, ValueError) as error:
-            error_payload = error.payload if isinstance(error, RuntimeSessionError) else {}
-            payload = {
-                **error_payload,
-                "status": "rejected",
-                "schema": "armctrl.arm_runtime_submit.v1",
-                "reason": str(error),
-                "movement_command_sent": False,
-            }
-            _emit(payload, as_json=args.as_json)
-            return 3
+        payload = _legacy_cli_rejected_payload(
+            legacy_entrypoint="armctrl runtime submit-intent",
+            replacement="armctrl motion submit joint-intent",
+        )
         _emit(payload, as_json=args.as_json)
-        return 0
+        return 3
 
     if args.command == "runtime" and args.runtime_command == "submit-eef":
-        try:
-            payload = submit_eef_command(
-                session_artifact_path=Path(args.session_artifact),
-                owner=args.owner,
-                backend=args.backend,
-                kind=args.kind,
-                frame=args.frame,
-                expected_q_start=tuple(args.expected_q_start),
-                control_period_s=args.control_period_s,
-                send_hz=args.send_hz,
-                start_pose_policy=args.start_pose_policy,
-                max_start_error_rad=args.max_start_error_rad,
-                heartbeat_timeout_s=args.heartbeat_timeout_s,
-                max_heartbeat_age_s=args.max_heartbeat_age_s,
-                delta_position_m=(
-                    tuple(args.delta_position)
-                    if args.delta_position is not None
-                    else None
-                ),
-                delta_rpy_rad=(
-                    tuple(args.delta_rpy) if args.delta_rpy is not None else None
-                ),
-                linear_mps=tuple(args.linear) if args.linear is not None else None,
-                angular_rps=(
-                    tuple(args.angular) if args.angular is not None else None
-                ),
-                max_linear_step_m=args.max_linear_step_m,
-                max_angular_step_rad=args.max_angular_step_rad,
-                output_path=Path(args.output) if args.output else None,
-            )
-        except RuntimeSessionError as error:
-            payload = {
-                **error.payload,
-                "status": "rejected",
-                "schema": "armctrl.arm_runtime_submit.v1",
-                "command_space": "eef",
-                "reason": str(error),
-                "movement_command_sent": False,
-            }
-            _emit(payload, as_json=args.as_json)
-            return 3
-        except ValueError as error:
-            payload = {
-                "status": "rejected",
-                "schema": "armctrl.arm_runtime_submit.v1",
-                "command_space": "eef",
-                "owner": args.owner,
-                "mode": MotionMode.AGENT_SERVO.value,
-                "backend": args.backend,
-                "reason": str(error),
-                "movement_command_sent": False,
-            }
-            payload = _attach_output_artifact(payload, args.output)
-            _emit(payload, as_json=args.as_json)
-            return 3
+        replacement = (
+            "armctrl motion submit eef-twist"
+            if args.kind == "eef_twist"
+            else "armctrl motion submit eef-delta"
+        )
+        payload = _legacy_cli_rejected_payload(
+            legacy_entrypoint="armctrl runtime submit-eef",
+            replacement=replacement,
+        )
         _emit(payload, as_json=args.as_json)
-        return _motion_submit_exit_code(payload)
+        return 3
 
     if args.command == "motion" and args.motion_command == "submit":
         return _handle_motion_submit(args)
@@ -3088,14 +3006,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "submit_motion": "armctrl motion submit <kind> ...",
                 "check_result": "armctrl motion result --run-dir <run_dir>",
                 "show_profile": "armctrl profile show <name>",
-            },
-            "legacy_policy": {
-                "formal_control_surface": "motion/profile/console",
-                "sysid_run_sdk": (
-                    "parser-level removed; sysid run only accepts --adapter {fake}; "
-                    "use sysid compile-runtime plus motion submit joint-trajectory"
-                ),
-                "runtime_submit_legacy": "compatibility/diagnostic surface; prefer armctrl motion submit",
             },
             "command_classes": _command_surface_classes(),
         }
@@ -5187,6 +5097,35 @@ def _repo_default_path(path_text: str) -> str:
     return path_text
 
 
+def _hide_subparser_choice(
+    subparsers: argparse._SubParsersAction,
+    command_name: str,
+) -> None:
+    # argparse.SUPPRESS hides option help, but subcommands still appear in the
+    # choice table. Keep legacy parsers callable while removing them from menus.
+    subparsers._choices_actions = [
+        action
+        for action in subparsers._choices_actions
+        if getattr(action, "dest", None) != command_name
+    ]
+
+
+def _legacy_cli_rejected_payload(
+    *,
+    legacy_entrypoint: str,
+    replacement: str,
+) -> dict[str, object]:
+    return {
+        "status": "rejected",
+        "schema": "armctrl.legacy_cli_rejected.v1",
+        "legacy_entrypoint": legacy_entrypoint,
+        "replacement": replacement,
+        "reason": "legacy CLI entrypoint removed from the formal control surface",
+        "movement_command_sent": False,
+        "next_gate": f"use {replacement}",
+    }
+
+
 def _motion_profile_catalog(*, include_description: bool) -> list[dict[str, object]]:
     profiles: list[dict[str, object]] = []
     for name, profile in sorted(MOTION_PROFILES.items()):
@@ -5201,8 +5140,6 @@ def _motion_profile_catalog(*, include_description: bool) -> list[dict[str, obje
         if include_description:
             item["description"] = str(profile.get("description"))
             item["readiness"] = profile.get("readiness")
-            item["legacy_entrypoints"] = profile.get("legacy_entrypoints", [])
-            item["removed_entrypoints"] = profile.get("removed_entrypoints", [])
             item["preferred_entrypoints"] = profile.get("preferred_entrypoints", [])
         profiles.append(item)
     return profiles
@@ -5269,44 +5206,11 @@ def _command_surface_classes() -> dict[str, object]:
         "formal": [
             "console",
             "profile",
-            "runtime",
             "motion",
         ],
         "compiler": [
             "armctrl motion compile joint-trajectory",
             "armctrl sysid compile-runtime",
-        ],
-        "removed": [
-            "armctrl sysid run ... --adapter sdk",
-        ],
-        "read_only_diagnostic": [
-            "armctrl sysid sdk-preflight",
-            "armctrl sysid sdk-doctor",
-            "armctrl sysid sdk-hold-damping-check",
-            "armctrl sysid sdk-arm-session",
-            "armctrl sysid sdk-tiny-motion-plan",
-            "armctrl sysid sdk-tiny-motion-execute-fake",
-            "armctrl sysid sdk-handshake-plan",
-        ],
-        "legacy_compatibility_wrapper": [
-            (
-                "armctrl sysid sdk-agent-sysid-smoke-readiness "
-                "--runtime-status-artifact <live_runtime_status.json>"
-            ),
-        ],
-        "hardware_diagnostic_only": [
-            "armctrl sysid sdk-jog-real",
-            "armctrl sysid sdk-recover-startup-real",
-            "armctrl sysid sdk-tiny-motion-execute-real",
-        ],
-        "diagnostic": [
-            "see read_only_diagnostic and hardware_diagnostic_only",
-        ],
-        "legacy_alias": [
-            "armctrl runtime submit-trajectory",
-            "armctrl runtime submit-intent",
-            "armctrl runtime submit-eef",
-            "armctrl runtime result-check",
         ],
         "experimental_review_export": [
             "armctrl agent-flow",
@@ -5407,7 +5311,7 @@ def _handle_motion_submit(args: argparse.Namespace) -> int:
             payload = _annotate_motion_submit_payload(
                 payload,
                 motion_kind="joint-trajectory",
-                legacy_equivalent="armctrl runtime submit-trajectory",
+                entrypoint="armctrl motion submit joint-trajectory",
             )
             payload = _attach_output_artifact(
                 payload,
@@ -5443,7 +5347,7 @@ def _handle_motion_submit(args: argparse.Namespace) -> int:
             payload = _annotate_motion_submit_payload(
                 payload,
                 motion_kind="joint-intent",
-                legacy_equivalent="armctrl runtime submit-intent",
+                entrypoint="armctrl motion submit joint-intent",
             )
             payload = _attach_output_artifact(
                 payload,
@@ -5476,7 +5380,7 @@ def _handle_motion_submit(args: argparse.Namespace) -> int:
             payload = _annotate_motion_submit_payload(
                 payload,
                 motion_kind="eef-delta",
-                legacy_equivalent="armctrl runtime submit-eef --kind eef_pose_delta",
+                entrypoint="armctrl motion submit eef-delta",
             )
             payload = _attach_output_artifact(
                 payload,
@@ -5509,7 +5413,7 @@ def _handle_motion_submit(args: argparse.Namespace) -> int:
             payload = _annotate_motion_submit_payload(
                 payload,
                 motion_kind="eef-twist",
-                legacy_equivalent="armctrl runtime submit-eef --kind eef_twist",
+                entrypoint="armctrl motion submit eef-twist",
             )
             payload = _attach_output_artifact(
                 payload,
@@ -5540,7 +5444,7 @@ def _handle_motion_submit(args: argparse.Namespace) -> int:
             payload = _annotate_motion_submit_payload(
                 payload,
                 motion_kind="eef-pose",
-                legacy_equivalent="armctrl runtime submit-eef --kind eef_pose",
+                entrypoint="armctrl motion submit eef-pose",
             )
             payload = _attach_output_artifact(
                 payload,
@@ -5566,7 +5470,7 @@ def _handle_motion_submit(args: argparse.Namespace) -> int:
             payload = _annotate_motion_submit_payload(
                 payload,
                 motion_kind="teleop-profile",
-                legacy_equivalent="runtime-owned teleop/teach profile command",
+                entrypoint="armctrl motion submit teleop-profile",
             )
             payload = _attach_output_artifact(
                 payload,
@@ -5626,16 +5530,16 @@ def _annotate_motion_submit_payload(
     payload: dict[str, object],
     *,
     motion_kind: str,
-    legacy_equivalent: str,
+    entrypoint: str,
 ) -> dict[str, object]:
     annotated = dict(payload)
     annotated["command_surface"] = MOTION_COMMAND_SURFACE
     annotated["motion_kind"] = motion_kind
-    annotated["legacy_equivalent"] = legacy_equivalent
+    annotated["entrypoint"] = entrypoint
     _annotate_motion_command_artifact(
         annotated,
         motion_kind=motion_kind,
-        legacy_equivalent=legacy_equivalent,
+        entrypoint=entrypoint,
     )
     return annotated
 
@@ -5648,7 +5552,7 @@ def _annotate_motion_command_artifact(
     payload: dict[str, object],
     *,
     motion_kind: str,
-    legacy_equivalent: str,
+    entrypoint: str,
 ) -> None:
     artifacts = payload.get("artifacts")
     if not isinstance(artifacts, dict):
@@ -5665,8 +5569,13 @@ def _annotate_motion_command_artifact(
         return
     command["command_surface"] = MOTION_COMMAND_SURFACE
     command["motion_kind"] = motion_kind
-    command["legacy_equivalent"] = legacy_equivalent
-    _write_json_atomic(command_path, command)
+    command["entrypoint"] = entrypoint
+    try:
+        _write_json_atomic(command_path, command)
+    except OSError:
+        # A live --serve runtime may consume and move pending commands between
+        # submit and best-effort CLI annotation. The queued payload remains valid.
+        return
 
 
 def _unsupported_motion_submit_payload(args: argparse.Namespace) -> dict[str, object]:
@@ -5801,7 +5710,7 @@ def _submit_compiled_joint_trajectory_command(
     payload = _annotate_motion_submit_payload(
         payload,
         motion_kind="joint-trajectory",
-        legacy_equivalent="armctrl motion submit joint-trajectory --compiled-command",
+        entrypoint="armctrl motion submit joint-trajectory --compiled-command",
     )
     payload["compiled_command_artifact"] = str(compiled_path)
     _annotate_compiled_source_artifact(payload, compiled_command_artifact=str(compiled_path))

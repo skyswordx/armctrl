@@ -116,8 +116,8 @@ hold-capable 的受控状态降级成 passive/damping 掉臂。只有 fault flag
 
 正式 Agent/SysID runtime gateway 的 readiness 只接受 live runtime status 证据。operator 可以使用
 `armctrl console status`，内部会解包为 `armctrl.arm_runtime_status.v1`；也可以直接使用
-`armctrl runtime status`。旧的
-`sdk-agent-sysid-smoke-readiness` 只能作为 bringup diagnostic 参考，不能作为正式运动准入凭证。
+`armctrl runtime status`。历史 smoke-readiness artifact 只能作为 bringup diagnostic 参考，
+不能作为正式运动准入凭证。
 
 SysID 交付证据必须显式分三层质量标签：
 
@@ -154,17 +154,21 @@ absolute `eef_pose` 只能作为 mature adapter 的 pose reference handoff；必
 operator 必须使用显式 compiler + motion surface。Fourier candidate、CSV、OED evidence 和 manifest
 串联必须由 `sysid compile-runtime` 与正式 `motion submit` 链路承担。
 
-CLI 迁移表：
+正式入口表：
 
-| 旧入口 | 新入口 | 状态 |
-| --- | --- | --- |
-| `armctrl sysid run ... --adapter sdk` | `armctrl sysid compile-runtime` + `armctrl motion submit joint-trajectory --compiled-command ...` | removed from parser；`sysid run` 只接受 `--adapter {fake}` |
-| `armctrl runtime submit-trajectory` | `armctrl motion submit joint-trajectory` | legacy alias |
-| `armctrl runtime submit-intent` | `armctrl motion submit joint-intent` | legacy alias |
-| `armctrl runtime submit-eef` | `armctrl motion submit eef-delta/eef-twist` | legacy alias |
-| `armctrl runtime result-check` | `armctrl motion result` | legacy alias |
-| `armctrl sysid sdk-preflight/doctor/hold-damping/arm-session` | `armctrl console status` / diagnostic checklist | read-only diagnostic only |
-| `armctrl sysid sdk-jog-real/recover-startup-real/tiny-motion-execute-real` | `armctrl runtime start` / `armctrl motion submit ...` | hardware diagnostic only; may open SDK/CAN directly and is not a formal control path |
+| 场景 | 入口 |
+| --- | --- |
+| 查看人类中控 catalog | `armctrl console catalog --json` |
+| 查看 live readiness/status | `armctrl console status --session-artifact <runtime_session.json> --json` |
+| 查看默认 profile | `armctrl profile show <profile> --json` |
+| 编译 Agent/Recipe/preposition joint trajectory | `armctrl motion compile joint-trajectory ...` |
+| 编译 reviewed SysID trajectory | `armctrl sysid compile-runtime ...` |
+| 提交 motion command | `armctrl motion submit <kind> ...` |
+| 检查 runtime result | `armctrl motion result --run-dir <run_dir> --json` |
+
+旧 runtime submit/result alias、旧 SysID SDK direct-motion command 和 diagnostic-only SDK
+bringup command 不再出现在 `console catalog` 或 lab 脚本文案中。需要排障时应查对应源码或
+专门 checklist，不能把这些入口当作正式控制路径。
 
 Agent 明天实验室前的最小预演入口：
 

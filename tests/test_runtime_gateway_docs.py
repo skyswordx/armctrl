@@ -4,7 +4,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_runtime_gateway_docs_describe_removed_sysid_sdk_parser_entrypoint() -> None:
+def test_runtime_gateway_docs_publish_formal_motion_surface_not_old_entrypoints() -> None:
     current_docs = [
         ROOT / "docs" / "runtime_gateway" / "README.md",
         ROOT / "docs" / "runtime_gateway" / "sysid_integration.md",
@@ -12,14 +12,33 @@ def test_runtime_gateway_docs_describe_removed_sysid_sdk_parser_entrypoint() -> 
 
     combined = "\n".join(path.read_text(encoding="utf-8") for path in current_docs)
 
-    assert "sysid run --adapter sdk" in combined
     assert "sysid compile-runtime" in combined
     assert "motion submit joint-trajectory" in combined
+    assert "motion result" in combined
+    assert "console status" in combined
     assert "migration/rejected payload" not in combined
     assert "返回迁移拒绝" not in combined
     assert "仅返回迁移拒绝" not in combined
-    assert "parser" in combined
-    assert "--adapter {fake}" in combined
+
+
+def test_runtime_gateway_readme_and_scripts_do_not_publish_legacy_operator_commands() -> None:
+    current_operator_surfaces = [
+        ROOT / "docs" / "runtime_gateway" / "README.md",
+        ROOT / "scripts" / "lab_fourier_sysid.sh",
+        ROOT / "scripts" / "lab_agent_runtime_smoke.sh",
+        ROOT / "scripts" / "lab_teleop_teach_smoke.sh",
+    ]
+
+    for path in current_operator_surfaces:
+        text = path.read_text(encoding="utf-8")
+        assert "armctrl runtime submit-" not in text
+        assert "armctrl runtime result-check" not in text
+        assert "armctrl sysid run --adapter sdk" not in text
+        assert "armctrl sysid run ... --adapter sdk" not in text
+        assert "sdk-agent-sysid-smoke-readiness" not in text
+        assert "armctrl sysid sdk-jog-real" not in text
+        assert "armctrl sysid sdk-recover-startup-real" not in text
+        assert "armctrl sysid sdk-tiny-motion-execute-real" not in text
 
 
 def test_runtime_gateway_docs_describe_fake_agent_eef_adapter_rehearsal() -> None:

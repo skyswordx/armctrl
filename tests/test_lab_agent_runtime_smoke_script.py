@@ -35,7 +35,7 @@ def test_lab_agent_runtime_smoke_script_documents_runtime_agent_flow() -> None:
     assert 'SMOKE_PROFILE_VERSION_CURRENT="10"' in text
     assert 'AGENT_Q_TARGET_DEFAULT="3.00 0.3 0.3 0.0 0.0 0.0"' in text
     assert 'AGENT_DELTA_POSITION_DEFAULT="0.750 0.000 0.000"' in text
-    assert 'AGENT_EEF_BACKEND_DEFAULT="${ARMCTRL_AGENT_EEF_BACKEND:-moveit_servo}"' in text
+    assert 'AGENT_EEF_BACKEND_DEFAULT="${ARMCTRL_AGENT_EEF_BACKEND:-sdk_cartesian}"' in text
     assert "start_args+=(--eef-adapter moveit_servo)" in text
     assert "fake rehearsal registers the MoveIt Servo-style adapter" in text
     assert "require_eef_adapter_ready" in text
@@ -82,7 +82,7 @@ def test_lab_fourier_sysid_script_uses_formal_status_and_result_surface() -> Non
     assert "--compiled-command" in text
     assert "armctrl sysid compile-runtime" in text
     assert "compile-* uses the SysID compiler surface" in text
-    assert "armctrl sysid run --adapter sdk is intentionally not used" in text
+    assert "Removed SysID SDK direct-motion entrypoints are intentionally not used here" in text
     assert "armctrl sysid run fourier_multisine" not in text
     assert "console_status_${label}.json" in text
 
