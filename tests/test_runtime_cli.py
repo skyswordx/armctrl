@@ -40,6 +40,7 @@ from armctrl.runtime_ipc import (
     submit_intent_command,
     submit_trajectory_command,
 )
+from armctrl.arx5_sdk_cartesian_runtime import Arx5SdkCartesianRuntimeBackend
 from armctrl.moveit_servo_runtime import MoveItServoRuntimeBackend
 
 
@@ -2566,6 +2567,88 @@ def test_moveit_servo_runtime_backend_builds_pose_reference() -> None:
     assert published[0]["pose"]["position_m"] == [0.3, 0.0, 0.2]
     assert published[0]["pose"]["rpy_rad"] == [0.0, 0.0, 0.0]
     assert published[0]["reference_limit_policy"] == "adapter_live_reference_limit"
+
+
+class FakeSdkEefState:
+    def __init__(self, pose: list[float] | None = None) -> None:
+        self._pose = list(pose or [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        self.gripper_pos = 0.0
+        self.gripper_vel = 0.0
+        self.gripper_torque = 0.0
+        self.timestamp = 0.0
+
+    def pose_6d(self) -> list[float]:
+        return self._pose
+
+
+class FakeSdkJointState:
+    def pos(self) -> list[float]:
+        return [0.0, 0.3, 0.3, 0.0, 0.0, 0.0]
+
+    def vel(self) -> list[float]:
+        return [0.0] * 6
+
+    def torque(self) -> list[float]:
+        return [0.0] * 6
+
+
+class FakeSdkCartesianController:
+    def __init__(self) -> None:
+        self.current_pose = [0.20, 0.0, 0.20, 0.0, 0.0, 0.0]
+        self.commands: list[list[float]] = []
+
+    def get_eef_state(self) -> FakeSdkEefState:
+        return FakeSdkEefState(self.current_pose)
+
+    def set_eef_cmd(self, command: FakeSdkEefState) -> None:
+        self.commands.append(list(command.pose_6d()))
+        self.current_pose = list(command.pose_6d())
+
+    def get_joint_state(self) -> FakeSdkJointState:
+        return FakeSdkJointState()
+
+    def get_timestamp(self) -> float:
+        return 10.0
+
+    def get_controller_config(self):
+        return type("ControllerConfig", (), {"default_preview_time": 0.04})()
+
+
+class FakeSdkCartesianModule:
+    EEFState = FakeSdkEefState
+
+
+def test_arx5_sdk_cartesian_backend_executes_limited_absolute_eef_pose() -> None:
+    controller = FakeSdkCartesianController()
+    clock = ManualClock()
+    backend = Arx5SdkCartesianRuntimeBackend(
+        arx5_module=FakeSdkCartesianModule(),
+        controller=controller,
+        controller_dt_s=0.002,
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+
+    result = backend.execute_eef_command(
+        {
+            "kind": "eef_pose",
+            "send_hz": 50.0,
+            "eef_command": {
+                "frame": "base_link",
+                "position_m": [0.205, 0.0, 0.20],
+                "rpy_rad": [0.0, 0.0, 0.0],
+                "pose_reference_limiter": "adapter_live_reference_limit",
+                "control_period_s": 0.1,
+            },
+        },
+        owner="agent",
+    )
+
+    assert result.status == "completed"
+    assert len(controller.commands) == 6
+    assert controller.commands[0] == pytest.approx([0.20, 0.0, 0.20, 0.0, 0.0, 0.0])
+    assert controller.commands[-1] == pytest.approx([0.205, 0.0, 0.20, 0.0, 0.0, 0.0])
+    assert result.landing_mode == "hold"
 
 
 def test_runtime_eef_command_executes_with_configured_moveit_backend(

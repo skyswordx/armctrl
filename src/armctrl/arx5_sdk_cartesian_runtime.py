@@ -325,6 +325,14 @@ class Arx5SdkCartesianRuntimeBackend:
                     + _triple(eef_command.get("angular_rps"))
                 )
             ]
+        elif kind == "eef_pose":
+            if eef_command.get("pose_reference_limiter") != "adapter_live_reference_limit":
+                raise ValueError(
+                    "SDK Cartesian eef_pose requires adapter_live_reference_limit"
+                )
+            return _triple(eef_command.get("position_m")) + _triple(
+                eef_command.get("rpy_rad")
+            )
         else:
             raise ValueError(f"unsupported ARX5 SDK Cartesian EEF command kind: {kind}")
         return [pose + step for pose, step in zip(current_pose, delta, strict=True)]
