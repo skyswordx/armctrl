@@ -2616,8 +2616,20 @@ def test_runtime_eef_command_rejects_backend_that_releases_owner_during_switch(
     assert result is not None
     assert result["status"] == "rejected"
     assert result["movement_command_sent"] is False
+    assert result["landing_mode"] == "hold"
     assert "EEF servo switch warmup failed" in result["reason"]
+    assert result["eef_switch"]["status"] == "fail"
+    assert result["eef_switch"]["fallback_controller"] == "joint_hold"
+    assert result["eef_switch"]["fallback_landing_mode"] == "hold"
+    assert result["eef_switch"]["checks"]["fallback_hold_commanded"] is True
+    assert result["eef_controller_manager"]["fallback_controller"] == "joint_hold"
+    assert result["eef_controller_manager"]["fallback_landing_mode"] == "hold"
     assert eef_adapter.executed is False
+    updated_session = json.loads(session_artifact.read_text(encoding="utf-8"))
+    assert updated_session["mode"] == "hold_safe"
+    assert updated_session["owner"] is None
+    assert primary_backend.damping_count == 0
+    assert primary_backend.hold_count >= 1
 
 
 def test_moveit_servo_runtime_backend_builds_twist_from_pose_delta() -> None:

@@ -1003,20 +1003,14 @@ def execute_runtime_command(
     except (ArmRuntimeError, RuntimeSessionError, ValueError) as error:
         rejected_wall_time_s = time.time()
         eef_switch_error = error if isinstance(error, _EefServoSwitchError) else None
+        eef_switch_fallback = None
         if "live_runtime" in locals() and isinstance(live_runtime, ArmRuntime):
-            try:
-                live_runtime.release_owner(owner=owner)
-            except Exception:
-                try:
-                    live_runtime.mark_hold_safe(
-                        q_hold=tuple(
-                            float(value)
-                            for value in backend.read_joint_state().q_meas
-                        )
-                    )
-                    backend.hold()
-                except Exception:
-                    pass
+            eef_switch_fallback = _fallback_eef_switch_failure_to_hold(
+                runtime=live_runtime,
+                backend=backend,
+                owner=owner,
+                enabled=eef_switch_error is not None,
+            )
             try:
                 session = _session_from_runtime_status(
                     session,
@@ -1045,6 +1039,19 @@ def execute_runtime_command(
                 else None
             )
         )
+        if isinstance(rejected_eef_switch, dict) and isinstance(eef_switch_fallback, dict):
+            rejected_eef_switch = {
+                **rejected_eef_switch,
+                **eef_switch_fallback,
+            }
+            checks = rejected_eef_switch.get("checks")
+            if isinstance(checks, dict):
+                rejected_eef_switch["checks"] = {
+                    **checks,
+                    "fallback_hold_commanded": bool(
+                        eef_switch_fallback.get("fallback_hold_commanded")
+                    ),
+                }
         return {
             "status": "rejected",
             "schema": RUNTIME_COMMAND_RESULT_SCHEMA,
@@ -1059,7 +1066,13 @@ def execute_runtime_command(
             "movement_command_sent": False,
             "reason": str(error),
             "start_pose_guard": _error_start_pose_guard(error),
-            "landing_mode": None,
+            "landing_mode": (
+                MotionMode.HOLD.value
+                if eef_switch_error is not None
+                and isinstance(eef_switch_fallback, dict)
+                and eef_switch_fallback.get("fallback_hold_commanded") is True
+                else None
+            ),
             "eef_command": (
                 _eef_motion_contract(command)
                 if command.get("kind") in EEF_COMMAND_KINDS
@@ -1389,6 +1402,43 @@ def _prepare_eef_servo_switch(
             payload=payload,
         )
     return payload
+
+
+def _fallback_eef_switch_failure_to_hold(
+    *,
+    runtime: ArmRuntime,
+    backend: MotionBackend,
+    owner: str,
+    enabled: bool,
+) -> dict[str, object] | None:
+    if not enabled:
+        try:
+            runtime.release_owner(owner=owner)
+        except Exception:
+            pass
+        return None
+    fallback = {
+        "fallback_controller": "joint_hold",
+        "fallback_landing_mode": MotionMode.HOLD.value,
+        "fallback_policy": "switch_failure_stays_in_joint_hold",
+        "fallback_hold_commanded": False,
+        "fallback_error": None,
+    }
+    try:
+        runtime.release_owner(owner=owner)
+    except Exception:
+        try:
+            runtime.mark_hold_safe(
+                q_hold=tuple(float(value) for value in backend.read_joint_state().q_meas)
+            )
+        except Exception as error:  # pragma: no cover - defensive artifact path.
+            fallback["fallback_error"] = str(error)
+    try:
+        backend.hold()
+        fallback["fallback_hold_commanded"] = True
+    except Exception as error:  # pragma: no cover - defensive artifact path.
+        fallback["fallback_error"] = str(error)
+    return fallback
 
 
 def _owner_expected_q_start(
@@ -1818,6 +1868,16 @@ def _eef_controller_manager_contract(
     )
     safe_center_reference = _object_float_list_or_none(session.get("safe_center"))
     safe_center_required = start_pose_policy in {"live_hold", "safe_center"}
+    fallback_controller = (
+        eef_switch.get("fallback_controller")
+        if isinstance(eef_switch, dict)
+        else None
+    )
+    fallback_landing_mode = (
+        eef_switch.get("fallback_landing_mode")
+        if isinstance(eef_switch, dict)
+        else None
+    )
     return {
         "schema": "armctrl.eef_controller_manager.v1",
         "status": "ready" if ready else ("rejected" if phase == "rejected" else "pending"),
@@ -1870,6 +1930,8 @@ def _eef_controller_manager_contract(
         "primary_backend_fallback_allowed": False,
         "disconnected_takeover_allowed": False,
         "no_heuristic_joint_fallback": True,
+        "fallback_controller": fallback_controller,
+        "fallback_landing_mode": fallback_landing_mode,
         "warmup_gate": eef_switch or _eef_switch_rejected_contract(command),
         "rejection_reason": rejection_reason,
     }
