@@ -763,8 +763,20 @@ def test_cli_motion_compile_agent_waypoints_derives_missing_dq_ddq_with_policy(
     assert command["dq_points"][1] == pytest.approx([0.2, 0.0, 0.0])
     assert command["ddq_points"][1] == pytest.approx([0.0, 0.0, 0.0])
     assert command["artifact_policy"]["q_cmd"] == "preserved_waypoints"
-    assert command["artifact_policy"]["dq_cmd"] == "derived_finite_difference"
-    assert command["artifact_policy"]["ddq_cmd"] == "derived_finite_difference"
+    assert command["artifact_policy"]["dq_cmd"] == (
+        "derived_finite_difference_for_cubic_hermite_runtime"
+    )
+    assert command["artifact_policy"]["ddq_cmd"] == (
+        "derived_finite_difference_for_safety_evidence"
+    )
+    assert command["interpolation_policy"] == "cubic_hermite_joint_waypoints"
+    assert command["resampling_policy"] == "compiled_joint_waypoints_to_runtime_send_hz"
+    assert command["runtime_trajectory_contract"]["schema"] == (
+        "armctrl.joint_trajectory_contract.v1"
+    )
+    assert command["runtime_trajectory_contract"]["runtime_interpolator"] == (
+        "cubic_hermite_joint_position_velocity"
+    )
 
 
 def test_cli_motion_compile_agent_waypoints_rejects_high_acceleration(
@@ -4844,6 +4856,41 @@ def test_runtime_command_result_records_tracking_error_summary(
     assert tracking["per_joint_max_abs_rad"] == [0.01, 0.0, 0.0]
     assert tracking["final_error_rad"] == [-0.01, 0.0, 0.0]
     assert result_artifact["motion"]["tracking_error"] == tracking
+
+
+def test_direct_agent_trajectory_submit_writes_shared_contract(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+
+    submitted = submit_trajectory_command(
+        session_artifact_path=session_artifact,
+        owner="agent",
+        expected_q_start=(0.0, 0.3, 0.3),
+        q_points=[(0.0, 0.3, 0.3), (0.01, 0.3, 0.3)],
+        send_hz=50.0,
+        max_start_error_rad=0.02,
+        heartbeat_timeout_s=0.5,
+        max_heartbeat_age_s=1.0,
+        max_joint_velocity_rad_s=1.0,
+    )
+    command = json.loads(Path(submitted["artifacts"]["command"]).read_text())
+
+    assert command["artifact_policy"]["schema"] == (
+        "armctrl.joint_trajectory_compiler_policy.v1"
+    )
+    assert command["artifact_policy"]["source"] == "agent"
+    assert command["artifact_policy"]["dq_cmd"] == (
+        "runtime_finite_difference_for_cubic_hermite_runtime"
+    )
+    assert command["runtime_trajectory_contract"]["schema"] == (
+        "armctrl.joint_trajectory_contract.v1"
+    )
+    assert command["runtime_trajectory_contract"]["runtime_interpolator"] == (
+        "cubic_hermite_joint_position_velocity"
+    )
+    assert command["runtime_trajectory_contract"]["runtime_revalidation_required"] is True
 
 
 def test_runtime_command_tracking_error_limit_records_quality_without_online_abort(

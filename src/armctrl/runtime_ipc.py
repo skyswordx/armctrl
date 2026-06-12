@@ -174,8 +174,23 @@ def submit_trajectory_command(
         command["dq_points"] = velocities
     if accelerations is not None:
         command["ddq_points"] = accelerations
-    if artifact_policy is not None:
-        command["artifact_policy"] = dict(artifact_policy)
+    command["artifact_policy"] = _joint_trajectory_artifact_policy(
+        owner=owner,
+        artifact_policy=artifact_policy,
+        dq_points=velocities,
+        ddq_points=accelerations,
+        trajectory_sample_hz=float(trajectory_sample_hz),
+        send_hz=float(send_hz),
+    )
+    command["runtime_trajectory_contract"] = _joint_trajectory_runtime_contract(
+        owner=owner,
+        artifact_policy=command["artifact_policy"],
+        q_points=points,
+        dq_points=velocities,
+        ddq_points=accelerations,
+        trajectory_sample_hz=float(trajectory_sample_hz),
+        send_hz=float(send_hz),
+    )
     if max_tracking_error_rad is not None:
         command["max_tracking_error_rad"] = float(max_tracking_error_rad)
         command["tracking_error_grace_samples"] = int(
@@ -1199,6 +1214,81 @@ def _resolve_command_execution_backend(
     command["_resolved_eef_adapter"] = None
     command["_eef_adapter_resolution"] = "missing_adapter_registry"
     return primary_backend
+
+
+def _joint_trajectory_artifact_policy(
+    *,
+    owner: str,
+    artifact_policy: dict[str, object] | None,
+    dq_points: Sequence[Sequence[float]] | None,
+    ddq_points: Sequence[Sequence[float]] | None,
+    trajectory_sample_hz: float,
+    send_hz: float,
+) -> dict[str, object]:
+    if artifact_policy is not None:
+        return dict(artifact_policy)
+    return {
+        "schema": "armctrl.joint_trajectory_compiler_policy.v1",
+        "source": str(owner),
+        "source_mode": "direct_runtime_submit_joint_waypoints",
+        "q_cmd": "preserved_runtime_submit_waypoints",
+        "dq_cmd": (
+            "preserved_dq_points_for_cubic_hermite_runtime"
+            if dq_points is not None
+            else "runtime_finite_difference_for_cubic_hermite_runtime"
+        ),
+        "ddq_cmd": (
+            "preserved_ddq_points_for_safety_evidence"
+            if ddq_points is not None
+            else "missing_ddq_points_runtime_revalidates_q_dq_safety"
+        ),
+        "sample_hz": float(trajectory_sample_hz),
+        "send_hz": float(send_hz),
+        "preferred_entrypoint": "armctrl motion compile joint-trajectory",
+        "direct_submit_policy": (
+            "allowed_but_normalized_to_shared_joint_trajectory_contract"
+        ),
+    }
+
+
+def _joint_trajectory_runtime_contract(
+    *,
+    owner: str,
+    artifact_policy: dict[str, object],
+    q_points: Sequence[Sequence[float]],
+    dq_points: Sequence[Sequence[float]] | None,
+    ddq_points: Sequence[Sequence[float]] | None,
+    trajectory_sample_hz: float,
+    send_hz: float,
+) -> dict[str, object]:
+    return {
+        "schema": "armctrl.joint_trajectory_contract.v1",
+        "command_space": "joint",
+        "source": str(owner),
+        "source_mode": artifact_policy.get("source_mode"),
+        "q_policy": artifact_policy.get("q_cmd"),
+        "dq_policy": artifact_policy.get("dq_cmd"),
+        "ddq_policy": artifact_policy.get("ddq_cmd"),
+        "sample_hz": float(trajectory_sample_hz),
+        "send_hz": float(send_hz),
+        "q_points_count": len(q_points),
+        "dq_points_count": 0 if dq_points is None else len(dq_points),
+        "ddq_points_count": 0 if ddq_points is None else len(ddq_points),
+        "interpolation_policy": "cubic_hermite_joint_waypoints",
+        "resampling_policy": "runtime_joint_waypoints_to_send_hz",
+        "runtime_interpolator": "cubic_hermite_joint_position_velocity",
+        "runtime_velocity_source": (
+            "preserved_or_compiled_dq_points"
+            if dq_points is not None
+            else "runtime_finite_difference_dq_points"
+        ),
+        "runtime_revalidation_required": True,
+        "safety_evidence": {
+            "velocity_checked": True,
+            "acceleration_checked": ddq_points is not None,
+            "joint_trajectory_safety": "recomputed_before_execute",
+        },
+    }
 
 
 def _prepare_eef_servo_switch(

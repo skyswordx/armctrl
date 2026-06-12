@@ -100,6 +100,12 @@ Runtime 执行前必须重新计算 Agent `joint_intent` 和 `joint_trajectory` 
 的 pending command 缺失 safety artifact，runtime 会回退到默认 Agent 速度阈值并在执行前
 拒绝过快 intent/trajectory。这个复核不替代 SysID compiler/review/result-check 证据链。
 
+Agent `joint_trajectory` 的推荐入口是 `motion compile joint-trajectory` 后再
+`motion submit joint-trajectory --compiled-command`。如果为了 smoke 或程序化调用直接
+`motion submit joint-trajectory --q-point ...`，submit 层也必须补齐同一份
+`armctrl.joint_trajectory_contract.v1`、`artifact_policy`、runtime cubic Hermite
+resampling policy 和 execute-time safety revalidation 证据；它不能退回裸 q-point replay。
+
 `max_tracking_error_rad` 是执行质量和数据可用性 gate，不是在线急停阈值。普通 tracking lag
 必须记录到 result artifact，并由 `armctrl motion result` / `runtime result-check` 判定
 `runtime_quality_pass` 或 `sysid_dataset_ready` 是否失败；它不能默认在运动中途触发 damping，也不能把

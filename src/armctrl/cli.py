@@ -5675,10 +5675,15 @@ def _compile_joint_trajectory_command(
             sample_hz=float(sample_hz),
         )
         q_policy = "preserved_waypoints"
-        dq_policy = "derived_finite_difference"
-        ddq_policy = "derived_finite_difference"
-        interpolation_policy = "waypoint_finite_difference"
+        dq_policy = "derived_finite_difference_for_cubic_hermite_runtime"
+        ddq_policy = "derived_finite_difference_for_safety_evidence"
+        interpolation_policy = "cubic_hermite_joint_waypoints"
         source_mode = "joint_waypoints"
+    resampling_policy = (
+        "compiled_joint_waypoints_to_runtime_send_hz"
+        if source_mode == "joint_waypoints"
+        else "compiled_joint_trajectory_to_runtime_send_hz"
+    )
 
     joint_trajectory_safety = _compiled_joint_trajectory_safety(
         owner=owner,
@@ -5722,7 +5727,21 @@ def _compile_joint_trajectory_command(
         "artifact_policy": artifact_policy,
         "joint_trajectory_safety": joint_trajectory_safety,
         "interpolation_policy": interpolation_policy,
-        "resampling_policy": "compiled_joint_trajectory_to_runtime_send_hz",
+        "resampling_policy": resampling_policy,
+        "runtime_trajectory_contract": _runtime_joint_trajectory_contract(
+            source=str(source),
+            source_mode=source_mode,
+            q_policy=q_policy,
+            dq_policy=dq_policy,
+            ddq_policy=ddq_policy,
+            interpolation_policy=interpolation_policy,
+            resampling_policy=resampling_policy,
+            sample_hz=float(sample_hz),
+            send_hz=effective_send_hz,
+            q_points=compiled_q,
+            dq_points=compiled_dq,
+            ddq_points=compiled_ddq,
+        ),
     }
     if max_joint_segment_delta_rad is not None:
         command["max_joint_segment_delta_rad"] = float(max_joint_segment_delta_rad)
@@ -5769,6 +5788,50 @@ def _compile_joint_trajectory_command(
     }
     _write_json_atomic(manifest_path, payload)
     return payload
+
+
+def _runtime_joint_trajectory_contract(
+    *,
+    source: str,
+    source_mode: str,
+    q_policy: str,
+    dq_policy: str,
+    ddq_policy: str,
+    interpolation_policy: str,
+    resampling_policy: str,
+    sample_hz: float,
+    send_hz: float,
+    q_points: Sequence[Sequence[float]],
+    dq_points: Sequence[Sequence[float]],
+    ddq_points: Sequence[Sequence[float]],
+) -> dict[str, object]:
+    return {
+        "schema": "armctrl.joint_trajectory_contract.v1",
+        "command_space": "joint",
+        "source": str(source),
+        "source_mode": str(source_mode),
+        "q_policy": str(q_policy),
+        "dq_policy": str(dq_policy),
+        "ddq_policy": str(ddq_policy),
+        "sample_hz": float(sample_hz),
+        "send_hz": float(send_hz),
+        "q_points_count": len(q_points),
+        "dq_points_count": len(dq_points),
+        "ddq_points_count": len(ddq_points),
+        "interpolation_policy": str(interpolation_policy),
+        "resampling_policy": str(resampling_policy),
+        "runtime_interpolator": "cubic_hermite_joint_position_velocity",
+        "runtime_velocity_source": (
+            "compiled_dq_points"
+            if dq_points
+            else "runtime_finite_difference_dq_points"
+        ),
+        "safety_evidence": {
+            "velocity_checked": bool(dq_points),
+            "acceleration_checked": bool(ddq_points),
+            "runtime_revalidation_required": True,
+        },
+    }
 
 
 def _smoothstep_joint_target_points(
