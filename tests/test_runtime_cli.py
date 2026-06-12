@@ -1455,7 +1455,11 @@ def test_cli_motion_submit_eef_twist_queues_moveit_servo_command(
 ) -> None:
     session_artifact = tmp_path / "runtime_session.json"
     _start_fake_hold_session(session_artifact)
-    _configure_eef_adapter_manager(session_artifact, adapter="moveit_servo")
+    _configure_eef_adapter_manager(
+        session_artifact,
+        adapter="moveit_servo",
+        live_reference=True,
+    )
 
     completed = subprocess.run(
         [
@@ -1508,7 +1512,11 @@ def test_cli_motion_submit_eef_pose_queues_runtime_command(
 ) -> None:
     session_artifact = tmp_path / "runtime_session.json"
     _start_fake_hold_session(session_artifact)
-    _configure_eef_adapter_manager(session_artifact, adapter="moveit_servo")
+    _configure_eef_adapter_manager(
+        session_artifact,
+        adapter="moveit_servo",
+        live_reference=True,
+    )
 
     completed = subprocess.run(
         [
@@ -1561,6 +1569,59 @@ def test_cli_motion_submit_eef_pose_queues_runtime_command(
     )
     assert payload["mature_backend_policy"]["disconnected_takeover_allowed"] is False
     assert command["mature_backend_policy"]["no_heuristic_joint_fallback"] is True
+
+
+def test_cli_motion_submit_eef_pose_blocks_without_adapter_live_reference(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    _configure_eef_adapter_manager(session_artifact, adapter="moveit_servo")
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "armctrl.cli",
+            "motion",
+            "submit",
+            "eef-pose",
+            "--session-artifact",
+            str(session_artifact),
+            "--owner",
+            "agent",
+            "--expected-q-start",
+            "0.0",
+            "0.3",
+            "0.3",
+            "--frame",
+            "base_link",
+            "--position",
+            "0.30",
+            "0.00",
+            "0.20",
+            "--rpy",
+            "0.0",
+            "0.0",
+            "0.0",
+            "--max-heartbeat-age-s",
+            "5",
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(completed.stdout)
+
+    assert completed.returncode == 3
+    assert payload["status"] == "blocked"
+    assert payload["movement_command_sent"] is False
+    assert payload["hardware_executable_now"] is False
+    assert payload["eef_adapter_manager"]["eef_command_capabilities"]["eef_pose"][
+        "executable"
+    ] is False
+    assert "requires_live_reference" in payload["reason"]
+    assert not (session_artifact.parent / "runtime_session_commands" / "pending").exists()
 
 
 def test_cli_motion_submit_joint_jog_rejects_until_deadman_backend_exists(
@@ -2218,6 +2279,9 @@ def test_runtime_status_exposes_unconfigured_eef_adapter_manager() -> None:
     assert manager["disconnected_takeover_allowed"] is False
     assert manager["no_heuristic_joint_fallback"] is True
     assert manager["eef_command_executable"] is False
+    assert manager["eef_command_capabilities"]["eef_pose_delta"]["executable"] is False
+    assert manager["eef_command_capabilities"]["eef_twist"]["executable"] is False
+    assert manager["eef_command_capabilities"]["eef_pose"]["executable"] is False
     assert manager["adapter_status"]["moveit_servo"]["configured"] is False
     assert manager["adapter_status"]["moveit_servo"]["executable"] is False
     assert manager["adapter_status"]["moveit_servo"]["requires_bumpless_switch"] is True
@@ -2253,6 +2317,9 @@ def test_runtime_eef_adapter_manager_ignores_fake_adapter_on_real_backend() -> N
     assert manager["configured_adapters"] == []
     assert manager["ignored_requested_adapters"] == ["moveit_servo"]
     assert manager["eef_command_executable"] is False
+    assert manager["eef_command_capabilities"]["eef_pose_delta"]["executable"] is False
+    assert manager["eef_command_capabilities"]["eef_twist"]["executable"] is False
+    assert manager["eef_command_capabilities"]["eef_pose"]["executable"] is False
     assert manager["adapter_status"]["moveit_servo"]["configured"] is False
     assert manager["adapter_status"]["moveit_servo"]["executable"] is False
     assert manager["adapter_status"]["moveit_servo"]["hardware_scope"] == (
@@ -2266,12 +2333,44 @@ def test_runtime_eef_adapter_manager_ignores_fake_adapter_on_real_backend() -> N
     assert controllers["eef_servo"]["configured_adapters"] == []
 
 
+def test_runtime_eef_adapter_manager_reports_pose_capability_separately(
+    tmp_path: Path,
+) -> None:
+    session_artifact = tmp_path / "runtime_session.json"
+    _start_fake_hold_session(session_artifact)
+    session = _configure_eef_adapter_manager(session_artifact, adapter="moveit_servo")
+
+    manager = session["eef_adapter_manager"]
+
+    assert manager["status"] == "ready"
+    assert manager["eef_command_executable"] is True
+    assert manager["eef_command_capabilities"]["eef_pose_delta"]["executable"] is True
+    assert manager["eef_command_capabilities"]["eef_twist"]["executable"] is True
+    assert manager["eef_command_capabilities"]["eef_pose"]["executable"] is False
+    assert manager["eef_command_capabilities"]["eef_pose"]["reason"] == (
+        "requires_live_reference"
+    )
+    assert manager["adapter_status"]["moveit_servo"]["command_capabilities"][
+        "eef_pose"
+    ]["executable"] is False
+    assert (
+        session["runtime_controller_manager"]["controllers"]["eef_servo"][
+            "command_capabilities"
+        ]["eef_pose"]["executable"]
+        is False
+    )
+
+
 def test_runtime_eef_command_revalidates_reference_limit_before_execute(
     tmp_path: Path,
 ) -> None:
     session_artifact = tmp_path / "runtime_session.json"
     _start_fake_hold_session(session_artifact)
-    _configure_eef_adapter_manager(session_artifact, adapter="moveit_servo")
+    _configure_eef_adapter_manager(
+        session_artifact,
+        adapter="moveit_servo",
+        live_reference=True,
+    )
     session = json.loads(session_artifact.read_text(encoding="utf-8"))
     primary_backend = FakeMotionBackend()
     primary_backend.send_joint_command(
@@ -2327,7 +2426,11 @@ def test_runtime_eef_pose_requires_adapter_reference_limiter_before_execute(
 ) -> None:
     session_artifact = tmp_path / "runtime_session.json"
     _start_fake_hold_session(session_artifact)
-    _configure_eef_adapter_manager(session_artifact, adapter="moveit_servo")
+    _configure_eef_adapter_manager(
+        session_artifact,
+        adapter="moveit_servo",
+        live_reference=True,
+    )
     session = json.loads(session_artifact.read_text(encoding="utf-8"))
     published: list[dict[str, object]] = []
     primary_backend = FakeMotionBackend()
@@ -2947,7 +3050,11 @@ def test_runtime_eef_pose_executes_with_configured_adapter_registry(
 ) -> None:
     session_artifact = tmp_path / "runtime_session.json"
     _start_fake_hold_session(session_artifact)
-    _configure_eef_adapter_manager(session_artifact, adapter="moveit_servo")
+    _configure_eef_adapter_manager(
+        session_artifact,
+        adapter="moveit_servo",
+        live_reference=True,
+    )
     session = json.loads(session_artifact.read_text(encoding="utf-8"))
     primary_backend = FakeMotionBackend()
     primary_backend.send_joint_command(
@@ -7071,11 +7178,13 @@ def _configure_eef_adapter_manager(
     *,
     adapter: str,
     primary_backend: str = "fake",
+    live_reference: bool = False,
 ) -> dict[str, object]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     manager = eef_adapter_manager_payload(
         primary_backend=primary_backend,
         configured_adapters=[adapter],
+        live_reference_adapters=[adapter] if live_reference else [],
     )
     payload["eef_adapter_manager"] = manager
     payload["runtime_controller_manager"] = runtime_controller_manager_payload(

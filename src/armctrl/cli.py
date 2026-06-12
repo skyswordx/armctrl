@@ -5335,7 +5335,7 @@ def _handle_motion_submit(args: argparse.Namespace) -> int:
                 artifact_key="motion_submit",
             )
             _emit(payload, as_json=args.as_json)
-            return 0
+            return _motion_submit_exit_code(payload)
 
         if args.motion_kind == "eef-pose":
             payload = submit_eef_command(
@@ -5366,7 +5366,7 @@ def _handle_motion_submit(args: argparse.Namespace) -> int:
                 artifact_key="motion_submit",
             )
             _emit(payload, as_json=args.as_json)
-            return 0
+            return _motion_submit_exit_code(payload)
 
         if args.motion_kind == "joint-jog":
             payload = _unsupported_motion_submit_payload(args)
@@ -6312,6 +6312,37 @@ def _attach_eef_adapter_manager_from_args(
         manager["ignored_requested_adapters"] = list(getattr(args, "eef_adapter", []) or [])
         manager["status"] = "unconfigured"
         manager["eef_command_executable"] = False
+        command_capabilities = manager.get("eef_command_capabilities")
+        if isinstance(command_capabilities, dict):
+            disabled_capabilities = {}
+            for command_kind, capability in command_capabilities.items():
+                capability_payload = (
+                    dict(capability) if isinstance(capability, dict) else {}
+                )
+                adapter_capabilities = {}
+                adapters = capability_payload.get("adapters")
+                if isinstance(adapters, dict):
+                    for adapter_name, adapter_capability in adapters.items():
+                        adapter_capabilities[str(adapter_name)] = {
+                            **(
+                                dict(adapter_capability)
+                                if isinstance(adapter_capability, dict)
+                                else {}
+                            ),
+                            "configured": False,
+                            "executable": False,
+                            "reason": "not_configured_for_real_runtime",
+                        }
+                capability_payload.update(
+                    {
+                        "executable": False,
+                        "executable_adapters": [],
+                        "reason": "not_configured_for_real_runtime",
+                        "adapters": adapter_capabilities,
+                    }
+                )
+                disabled_capabilities[str(command_kind)] = capability_payload
+            manager["eef_command_capabilities"] = disabled_capabilities
         adapter_status = manager.get("adapter_status")
         if isinstance(adapter_status, dict):
             manager["adapter_status"] = {

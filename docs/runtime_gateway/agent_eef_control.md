@@ -42,7 +42,7 @@ Agent/Teleop -> eef_twist / eef_delta / eef_pose
 
 当前实现已经补上 runtime 内部 adapter manager seam：`execute_pending_runtime_commands` 可以接收 primary runtime backend 与 `eef_backends` registry。primary backend 仍负责 live readiness、owner lease、hold/release、watchdog 和 SDK/CAN singleton；EEF command 只按 command 中声明的 mature adapter 名称分发给 `moveit_servo` 或 `sdk_cartesian` 这类 adapter。artifact 必须同时记录 `runtime_backend` 与 `eef_adapter`，用于审计是否仍是同一个 runtime 在持有运动所有权。
 
-如果 EEF command 声明了 adapter，但长驻 runtime status 没有证明对应 adapter 已配置且 `eef_command_executable=true`，submit 端必须 `blocked`，并且不能写入 pending queue。serve 端仍保留二次 rejected 防线，允许的失败形态是“缺少 mature backend adapter”；不允许退化为 heuristic joint fallback，也不允许为了执行 EEF command 自动关闭/重开 SDK/CAN。
+如果 EEF command 声明了 adapter，但长驻 runtime status 没有证明对应 adapter 已配置且该 command kind 在 `eef_command_capabilities` 中可执行，submit 端必须 `blocked`，并且不能写入 pending queue。`eef_command_executable=true` 只表示“至少一种 EEF command 可走 adapter”，不能代表 `eef_pose_delta`、`eef_twist`、`eef_pose` 全部可真机执行。尤其 `eef_pose` 必须要求 adapter 具备 live reference/FK/SDK EEF state，不能因为 fake publisher 或 adapter 名称存在就放行。serve 端仍保留二次 rejected 防线，允许的失败形态是“缺少 mature backend adapter 或缺少该 command kind 的 capability”；不允许退化为 heuristic joint fallback，也不允许为了执行 EEF command 自动关闭/重开 SDK/CAN。
 
 ### EEF Planned Path
 

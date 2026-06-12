@@ -41,6 +41,7 @@ def eef_adapter_manager_payload(
     *,
     primary_backend: str,
     configured_adapters: Sequence[str] | None = None,
+    live_reference_adapters: Sequence[str] | None = None,
 ) -> dict[str, object]:
     """Describe the in-runtime EEF adapter registry for status/artifact audit."""
 
@@ -49,15 +50,37 @@ def eef_adapter_manager_payload(
         adapter_name = str(adapter)
         if adapter_name not in configured:
             configured.append(adapter_name)
+    live_reference = []
+    for adapter in live_reference_adapters or ():
+        adapter_name = str(adapter)
+        if adapter_name in configured and adapter_name not in live_reference:
+            live_reference.append(adapter_name)
+    if "sdk_cartesian" in configured and "sdk_cartesian" not in live_reference:
+        live_reference.append("sdk_cartesian")
     missing = [
         adapter
         for adapter in SUPPORTED_EEF_RUNTIME_ADAPTERS
         if adapter not in configured
     ]
+    command_capabilities = _eef_command_capabilities(
+        configured_adapters=configured,
+        live_reference_adapters=live_reference,
+    )
     adapter_status = {
         adapter: {
             "configured": adapter in configured,
-            "executable": adapter in configured,
+            "executable": _adapter_has_any_executable_eef_capability(
+                adapter=adapter,
+                command_capabilities=command_capabilities,
+            ),
+            "command_capabilities": {
+                command_kind: dict(
+                    capability.get("adapters", {}).get(adapter, {})
+                    if isinstance(capability.get("adapters"), dict)
+                    else {}
+                )
+                for command_kind, capability in command_capabilities.items()
+            },
             "hardware_scope": (
                 "fake_rehearsal" if str(primary_backend) == "fake" else "runtime_adapter"
             ),
@@ -72,6 +95,7 @@ def eef_adapter_manager_payload(
         "primary_runtime_backend": str(primary_backend),
         "supported_adapters": list(SUPPORTED_EEF_RUNTIME_ADAPTERS),
         "configured_adapters": configured,
+        "live_reference_adapters": live_reference,
         "missing_adapters": missing,
         "adapter_status": adapter_status,
         "adapter_registry_required": True,
@@ -79,13 +103,116 @@ def eef_adapter_manager_payload(
         "disconnected_takeover_allowed": False,
         "no_heuristic_joint_fallback": True,
         "bumpless_switch_required": True,
-        "eef_command_executable": bool(configured),
+        "eef_command_capabilities": command_capabilities,
+        "eef_command_executable": any(
+            bool(capability.get("executable"))
+            for capability in command_capabilities.values()
+        ),
         "policy": (
             "EEF commands must resolve through an explicit in-runtime mature "
             "adapter registry; the primary runtime backend may not be used as "
             "a silent fallback."
         ),
     }
+
+
+def _eef_command_capabilities(
+    *,
+    configured_adapters: Sequence[str],
+    live_reference_adapters: Sequence[str],
+) -> dict[str, dict[str, object]]:
+    configured = set(str(adapter) for adapter in configured_adapters)
+    live_reference = set(str(adapter) for adapter in live_reference_adapters)
+
+    def adapter_capability(
+        adapter: str,
+        *,
+        requires_live_reference: bool = False,
+    ) -> dict[str, object]:
+        configured_now = adapter in configured
+        live_reference_ready = adapter in live_reference
+        executable = configured_now and (
+            live_reference_ready if requires_live_reference else True
+        )
+        reason = "ready"
+        if not configured_now:
+            reason = "adapter_not_configured"
+        elif requires_live_reference and not live_reference_ready:
+            reason = "requires_live_reference"
+        return {
+            "configured": configured_now,
+            "live_reference": live_reference_ready,
+            "executable": executable,
+            "reason": reason,
+        }
+
+    capabilities = {
+        "eef_pose_delta": {
+            "requires_live_reference": False,
+            "adapters": {
+                "moveit_servo": adapter_capability("moveit_servo"),
+                "sdk_cartesian": adapter_capability("sdk_cartesian"),
+            },
+        },
+        "eef_twist": {
+            "requires_live_reference": False,
+            "adapters": {
+                "moveit_servo": adapter_capability("moveit_servo"),
+                "sdk_cartesian": adapter_capability("sdk_cartesian"),
+            },
+        },
+        "eef_pose": {
+            "requires_live_reference": True,
+            "adapters": {
+                "moveit_servo": adapter_capability(
+                    "moveit_servo",
+                    requires_live_reference=True,
+                ),
+                "sdk_cartesian": adapter_capability(
+                    "sdk_cartesian",
+                    requires_live_reference=True,
+                ),
+            },
+        },
+    }
+    for command_kind, capability in capabilities.items():
+        adapters = capability["adapters"]
+        executable_adapters = [
+            adapter
+            for adapter, adapter_capability_payload in adapters.items()
+            if adapter_capability_payload["executable"] is True
+        ]
+        reason = "ready" if executable_adapters else _first_adapter_block_reason(adapters)
+        capability["executable"] = bool(executable_adapters)
+        capability["executable_adapters"] = executable_adapters
+        capability["reason"] = reason
+    return capabilities
+
+
+def _first_adapter_block_reason(adapters: dict[str, dict[str, object]]) -> str:
+    reasons = [
+        str(payload.get("reason"))
+        for payload in adapters.values()
+        if payload.get("configured") is True
+    ]
+    if reasons:
+        return reasons[0]
+    return "adapter_not_configured"
+
+
+def _adapter_has_any_executable_eef_capability(
+    *,
+    adapter: str,
+    command_capabilities: dict[str, dict[str, object]],
+) -> bool:
+    for capability in command_capabilities.values():
+        adapters = capability.get("adapters")
+        if not isinstance(adapters, dict):
+            continue
+        adapter_payload = adapters.get(adapter)
+        if isinstance(adapter_payload, dict) and adapter_payload.get("executable") is True:
+            return True
+    return False
 
 
 def runtime_controller_manager_payload(
@@ -102,6 +229,11 @@ def runtime_controller_manager_payload(
     )
     eef_ready = bool(eef_manager.get("eef_command_executable"))
     eef_status = "available" if eef_ready else "needs_mature_adapter"
+    eef_capabilities = (
+        eef_manager.get("eef_command_capabilities")
+        if isinstance(eef_manager.get("eef_command_capabilities"), dict)
+        else {}
+    )
     return {
         "schema": "armctrl.runtime_controller_manager.v1",
         "status": "ok",
@@ -136,6 +268,7 @@ def runtime_controller_manager_payload(
                 "adapter_registry_required": True,
                 "configured_adapters": list(eef_manager.get("configured_adapters") or []),
                 "missing_adapters": list(eef_manager.get("missing_adapters") or []),
+                "command_capabilities": eef_capabilities,
                 "bumpless_switch_required": True,
                 "start_pose_policy": "live runtime hold; passive/droop is not a controlled Agent EEF start",
                 "safe_position_policy": "SAFE_CENTER is maintained by joint_hold before EEF target is seeded from current FK",

@@ -515,6 +515,7 @@ def submit_eef_command(
     adapter_gate = _eef_submit_adapter_gate(
         session=session,
         requested_backend=str(backend),
+        command_kind=str(kind),
     )
     if adapter_gate["status"] != "pass":
         payload = {
@@ -641,6 +642,7 @@ def _eef_submit_adapter_gate(
     *,
     session: dict[str, object],
     requested_backend: str,
+    command_kind: str,
 ) -> dict[str, object]:
     manager = session.get("eef_adapter_manager")
     if not isinstance(manager, dict):
@@ -664,16 +666,42 @@ def _eef_submit_adapter_gate(
         if isinstance(adapter_status, dict)
         else None
     )
+    command_capabilities = manager.get("eef_command_capabilities")
+    command_capability = (
+        command_capabilities.get(str(command_kind))
+        if isinstance(command_capabilities, dict)
+        else None
+    )
+    requested_capability = None
+    if isinstance(command_capability, dict):
+        adapters = command_capability.get("adapters")
+        if isinstance(adapters, dict):
+            requested_capability = adapters.get(str(requested_backend))
+    command_executable = (
+        bool(requested_capability.get("executable"))
+        if isinstance(requested_capability, dict)
+        else bool(manager.get("eef_command_executable"))
+    )
+    command_block_reason = (
+        str(requested_capability.get("reason"))
+        if isinstance(requested_capability, dict)
+        else "missing_command_capability"
+    )
     adapter_executable = (
         bool(requested_status.get("executable"))
         if isinstance(requested_status, dict)
         else bool(manager.get("eef_command_executable"))
     )
-    executable = bool(manager.get("eef_command_executable")) and adapter_executable
+    executable = (
+        bool(manager.get("eef_command_executable"))
+        and adapter_executable
+        and command_executable
+    )
     if executable and str(requested_backend) in configured:
         return {
             "status": "pass",
             "eef_adapter_manager": manager,
+            "command_capability": command_capability,
             "reason": (
                 "requested EEF backend is executable in the live runtime "
                 "adapter registry"
@@ -686,7 +714,10 @@ def _eef_submit_adapter_gate(
             "EEF command requires a configured mature EEF backend adapter inside "
             "the live runtime before it can be queued; requested_backend="
             f"{requested_backend!s}, configured_adapters={configured!r}, "
-            f"adapter_executable={adapter_executable!r}"
+            f"adapter_executable={adapter_executable!r}, "
+            f"command_kind={command_kind!s}, "
+            f"command_executable={command_executable!r}, "
+            f"command_block_reason={command_block_reason!s}"
         ),
     }
 
