@@ -1,0 +1,82 @@
+[
+  {
+    "label": "ident-fourier-reduced-0p25-slow4x",
+    "command_id": "b9973ba1-921d-450f-b7d2-fbcb029b481a",
+    "samples_csv": "D:\\repo\\Roboclaw\\references\\projects\\armctrl-clean\\runs\\remote_lab_artifacts\\lab-fourier-sysid-20260608-154946\\derived_sysid_csv\\ident-fourier-reduced-0p25-slow4x_b9973ba1_samples.csv",
+    "sample_count": 881,
+    "actual_send_hz": 100.00308399267652,
+    "jitter_p99_ms": 2.0437490218319,
+    "tracking_max_abs_rad": 0.024172959228515645,
+    "tracking_final_abs_rad": 0.016235179809570288,
+    "per_joint_max_abs_rad": [
+      0.00923597705078125,
+      0.008372814758300762,
+      0.024172959228515645,
+      0.01937436962890625,
+      0.006794854003906253,
+      0.010058127441406248
+    ],
+    "tau_max_abs": 8.285131683349608,
+    "result_json": "D:\\repo\\Roboclaw\\references\\projects\\armctrl-clean\\runs\\remote_lab_artifacts\\lab-fourier-sysid-20260608-154946\\runs\\lab-fourier-sysid-20260608-154946\\runtime_session_commands\\results\\b9973ba1-921d-450f-b7d2-fbcb029b481a.json"
+  },
+  {
+    "label": "ident-fourier-reduced-0p25-normal",
+    "command_id": "72c1056b-7b3c-4dec-bac5-2aa9d004fd63",
+    "samples_csv": "D:\\repo\\Roboclaw\\references\\projects\\armctrl-clean\\runs\\remote_lab_artifacts\\lab-fourier-sysid-20260608-154946\\derived_sysid_csv\\ident-fourier-reduced-0p25-normal_72c1056b_samples.csv",
+    "sample_count": 196,
+    "actual_send_hz": 100.00906851560057,
+    "jitter_p99_ms": 0.1254159817472098,
+    "tracking_max_abs_rad": 0.02809244403076172,
+    "tracking_final_abs_rad": 0.017379588989257788,
+    "per_joint_max_abs_rad": [
+      0.012167202636718749,
+      0.009571480773925778,
+      0.02809244403076172,
+      0.027939043029785157,
+      0.011822791931152335,
+      0.015582764160156248
+    ],
+    "tau_max_abs": 8.285131683349608,
+    "result_json": "D:\\repo\\Roboclaw\\references\\projects\\armctrl-clean\\runs\\remote_lab_artifacts\\lab-fourier-sysid-20260608-154946\\runs\\lab-fourier-sysid-20260608-154946\\runtime_session_commands\\results\\72c1056b-7b3c-4dec-bac5-2aa9d004fd63.json"
+  },
+  {
+    "label": "4e6e1eaa-02ba-4dd9-a5d3-1c1221501372",
+    "command_id": "4e6e1eaa-02ba-4dd9-a5d3-1c1221501372",
+    "samples_csv": "D:\\repo\\Roboclaw\\references\\projects\\armctrl-clean\\runs\\remote_lab_artifacts\\lab-fourier-sysid-20260608-154946\\derived_sysid_csv\\4e6e1eaa-02ba-4dd9-a5d3-1c1221501372_4e6e1eaa_samples.csv",
+    "sample_count": 196,
+    "actual_send_hz": 100.00800889852479,
+    "jitter_p99_ms": 0.050545951817184895,
+    "tracking_max_abs_rad": 0.07118622393798829,
+    "tracking_final_abs_rad": 0.032604010070800826,
+    "per_joint_max_abs_rad": [
+      0.02146418920898438,
+      0.02397545324707029,
+      0.055956368408203117,
+      0.07118622393798829,
+      0.03870809887695309,
+      0.03848924505615234
+    ],
+    "tau_max_abs": 10.927180938720701,
+    "result_json": "D:\\repo\\Roboclaw\\references\\projects\\armctrl-clean\\runs\\remote_lab_artifacts\\lab-fourier-sysid-20260608-154946\\runs\\lab-fourier-sysid-20260608-154946\\runtime_session_commands\\results\\4e6e1eaa-02ba-4dd9-a5d3-1c1221501372.json"
+  },
+  {
+    "label": "ident-fourier-full",
+    "command_id": "385f291a-c1df-4689-a14b-624c0e224bd1",
+    "samples_csv": "D:\\repo\\Roboclaw\\references\\projects\\armctrl-clean\\runs\\remote_lab_artifacts\\lab-fourier-sysid-20260608-154946\\derived_sysid_csv\\ident-fourier-full_385f291a_samples.csv",
+    "sample_count": 196,
+    "actual_send_hz": 100.00821267629999,
+    "jitter_p99_ms": 2.6635349984280765,
+    "tracking_max_abs_rad": 0.0722850862426758,
+    "tracking_final_abs_rad": 0.031841070617675826,
+    "per_joint_max_abs_rad": [
+      0.0248065921630857,
+      0.024829959411621083,
+      0.056337838134765617,
+      0.0722850862426758,
+      0.03756368969726559,
+      0.03839547106933594
+    ],
+    "tau_max_abs": 10.898462524414061,
+    "result_json": "D:\\repo\\Roboclaw\\references\\projects\\armctrl-clean\\runs\\remote_lab_artifacts\\lab-fourier-sysid-20260608-154946\\runs\\lab-fourier-sysid-20260608-154946\\runtime_session_commands\\results\\385f291a-c1df-4689-a14b-624c0e224bd1.json"
+  }
+]

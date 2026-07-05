@@ -1,0 +1,47 @@
+{
+  "schema": "armctrl.sysid_oed_scan_attempts.v1",
+  "attempt_count": 1,
+  "attempts": [
+    {
+      "attempt_id": "attempt-001",
+      "status": "ok",
+      "safety_allowed": true,
+      "safety_reason": "plan-only sysid preview",
+      "oed_gate_status": "fail",
+      "oed_gate_reasons": [
+        "optimizer_not_converged"
+      ],
+      "failure_kind": "optimizer_dual_infeasible",
+      "condition_metric": "figaroh_base_regressor",
+      "condition_number": 68.43362806845255,
+      "figaroh_base_condition_number": 68.43362806845255,
+      "pinocchio_effective_condition_number": 77.56547530743994,
+      "max_joint_step_rad": 0.01847600000000002,
+      "max_velocity_rad_s": 1.8427499999999999,
+      "max_acceleration_rad_s2": 17.812499999999975,
+      "optimizer_status": "fail",
+      "optimizer_reason": "max_iterations_exceeded",
+      "rank": 36,
+      "parameters": {
+        "duration_s": 2.0,
+        "amplitude_rad": 0.45,
+        "n_wps": 7,
+        "stack_reps": 1,
+        "random_seed": 2,
+        "ipopt_max_iterations": 60,
+        "ipopt_print_level": 5,
+        "condition_number_threshold": 500.0,
+        "attempt_timeout_s": 240.0
+      },
+      "optimizer_iterations": 60,
+      "optimizer_objective_unscaled": 68.4342885401802,
+      "optimizer_constraint_violation_unscaled": 0.0,
+      "optimizer_dual_infeasibility_unscaled": 48.41978264612851,
+      "output_dir": "runs/oed-structural-metric-contract-20260606/attempt-001",
+      "optimizer_last_iter": 60,
+      "optimizer_last_iter_objective": 68.434289,
+      "optimizer_last_iter_inf_pr": 0.0,
+      "optimizer_last_iter_inf_du": 0.426
+    }
+  ]
+}

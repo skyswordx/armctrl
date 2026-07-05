@@ -1,0 +1,761 @@
+                 U abort@GLIBC_2.2.5
+00000000000f2fb0 B __bss_start
+                 U chdir@GLIBC_2.2.5
+                 U close@GLIBC_2.2.5
+                 U closedir@GLIBC_2.2.5
+                 U __cxa_allocate_exception@CXXABI_1.3
+                 U __cxa_atexit@GLIBC_2.2.5
+                 U __cxa_begin_catch@CXXABI_1.3
+000000000002d9b9 T __cxa_call_terminate
+                 U __cxa_demangle@CXXABI_1.3
+                 U __cxa_end_catch@CXXABI_1.3
+                 w __cxa_finalize@GLIBC_2.2.5
+                 U __cxa_free_exception@CXXABI_1.3
+                 U __cxa_guard_abort@CXXABI_1.3
+                 U __cxa_guard_acquire@CXXABI_1.3
+                 U __cxa_guard_release@CXXABI_1.3
+                 w __cxa_pure_virtual@CXXABI_1.3
+                 U __cxa_rethrow@CXXABI_1.3
+                 U __cxa_throw@CXXABI_1.3
+                 U dirfd@GLIBC_2.2.5
+                 U dladdr
+                 U __dynamic_cast@CXXABI_1.3
+00000000000f2fb0 D _edata
+00000000000f3ac0 B _end
+                 U __errno_location@GLIBC_2.2.5
+                 U fchmod@GLIBC_2.2.5
+                 U fchmodat@GLIBC_2.4
+                 U fdopendir@GLIBC_2.4
+                 U fprintf@GLIBC_2.2.5
+                 U free@GLIBC_2.2.5
+                 U __gcc_personality_v0@GCC_3.3.1
+                 U getcwd@GLIBC_2.2.5
+                 U gettext@GLIBC_2.2.5
+                 w __gmon_start__
+                 U __gxx_personality_v0@CXXABI_1.3
+                 w _ITM_deregisterTMCloneTable
+                 w _ITM_registerTMCloneTable
+                 U link@GLIBC_2.2.5
+                 U lseek@GLIBC_2.2.5
+                 U __lxstat@GLIBC_2.2.5
+                 U malloc@GLIBC_2.2.5
+                 U memchr@GLIBC_2.2.5
+                 U memcmp@GLIBC_2.2.5
+                 U memcpy@GLIBC_2.14
+                 U memmove@GLIBC_2.2.5
+                 U memset@GLIBC_2.2.5
+                 U mkdir@GLIBC_2.2.5
+                 U nanosleep@GLIBC_2.2.5
+                 U __once_proxy@GLIBCXX_3.4.11
+                 U open@GLIBC_2.2.5
+                 U openat@GLIBC_2.4
+                 U printf@GLIBC_2.2.5
+                 U pthread_create@GLIBC_2.2.5
+                 U pthread_join@GLIBC_2.2.5
+                 w __pthread_key_create@GLIBC_2.2.5
+                 w pthread_mutex_lock@GLIBC_2.2.5
+                 w pthread_mutex_unlock@GLIBC_2.2.5
+                 w pthread_once@GLIBC_2.2.5
+                 U puts@GLIBC_2.2.5
+                 U PyBaseObject_Type
+                 U PyBuffer_IsContiguous
+                 U PyBuffer_Release
+                 U PyByteArray_AsString
+                 U PyByteArray_Size
+                 U PyByteArray_Type
+                 U PyBytes_AsString
+                 U PyBytes_AsStringAndSize
+                 U PyBytes_FromString
+                 U PyBytes_Size
+                 U PyCallable_Check
+                 U PyCapsule_GetContext
+                 U PyCapsule_GetName
+                 U PyCapsule_GetPointer
+                 U PyCapsule_New
+                 U PyCapsule_SetContext
+                 U PyCapsule_SetDestructor
+                 U PyCapsule_Type
+                 U PyCFunction_Type
+                 U PyCMethod_New
+                 U _Py_Dealloc
+                 U PyDict_Contains
+                 U PyDict_GetItemWithError
+                 U PyDict_New
+                 U PyDict_Next
+                 U PyDict_SetDefault
+                 U PyDict_Type
+                 U PyErr_Clear
+                 U PyErr_Fetch
+                 U PyErr_Format
+                 U PyErr_NormalizeException
+                 U PyErr_Occurred
+                 U PyErr_Restore
+                 U PyErr_SetObject
+                 U PyErr_SetString
+                 U PyErr_WriteUnraisable
+                 U PyEval_AcquireThread
+                 U PyEval_GetBuiltins
+                 U PyEval_RestoreThread
+                 U PyEval_SaveThread
+                 U PyExc_BufferError
+                 U PyException_SetCause
+                 U PyException_SetContext
+                 U PyException_SetTraceback
+                 U PyExc_ImportError
+                 U PyExc_IndexError
+                 U PyExc_MemoryError
+                 U PyExc_OverflowError
+                 U PyExc_RuntimeError
+                 U PyExc_SystemError
+                 U PyExc_TypeError
+                 U PyExc_ValueError
+                 U _Py_FalseStruct
+                 U PyFloat_AsDouble
+                 U PyFloat_FromDouble
+                 U PyFloat_Type
+                 U PyFrame_GetBack
+                 U PyFrame_GetCode
+                 U PyFrame_GetLineNumber
+                 U PyFrozenSet_Type
+                 U PyGen_Type
+                 U Py_GetVersion
+                 U PyGILState_Ensure
+                 U PyGILState_GetThisThreadState
+                 U PyGILState_Release
+                 U PyImport_ImportModule
+                 U PyIndex_Check
+0000000000037b00 T PyInit_arx5_interface
+                 U PyInstanceMethod_New
+                 U PyInstanceMethod_Type
+                 U PyInterpreterState_Get
+                 U PyInterpreterState_GetDict
+                 U PyInterpreterState_Main
+                 U PyIter_Next
+                 U PyList_GetItem
+                 U PyList_New
+                 U PyList_Size
+                 U PyLong_AsLong
+                 U PyLong_AsUnsignedLong
+                 U PyLong_FromLong
+                 U PyLong_FromSize_t
+                 U PyLong_FromSsize_t
+                 U PyMem_Calloc
+                 U PyMem_Free
+                 U PyMethod_Type
+                 U PyModuleDef_Init
+                 U PyModule_NewObject
+                 U PyModule_Type
+                 U _Py_NoneStruct
+                 U _Py_NotImplementedStruct
+                 U PyNumber_Add
+                 U PyNumber_And
+                 U PyNumber_Check
+                 U PyNumber_Float
+                 U PyNumber_Invert
+                 U PyNumber_Long
+                 U PyNumber_Or
+                 U PyNumber_Xor
+                 U PyObject_CallFunctionObjArgs
+                 U PyObject_ClearWeakRefs
+                 U PyObject_GC_UnTrack
+                 U PyObject_GenericGetDict
+                 U PyObject_GenericSetDict
+                 U PyObject_GetAttr
+                 U PyObject_GetAttrString
+                 U _PyObject_GetDictPtr
+                 U PyObject_GetItem
+                 U PyObject_GetIter
+                 U PyObject_HasAttrString
+                 U PyObject_IsInstance
+                 U PyObject_Malloc
+                 U _PyObject_New
+                 U PyObject_Repr
+                 U PyObject_RichCompareBool
+                 U PyObject_SetAttr
+                 U PyObject_SetAttrString
+                 U PyObject_SetItem
+                 U PyObject_Str
+                 U PyObject_Vectorcall
+                 U PyProperty_Type
+                 U PySequence_Check
+                 U PySequence_Size
+                 U PySequence_Tuple
+                 U PySet_Type
+                 U PyStaticMethod_New
+                 U PyStaticMethod_Type
+                 U PyThreadState_Clear
+                 U PyThreadState_DeleteCurrent
+                 U PyThreadState_New
+                 U _PyThreadState_UncheckedGet
+                 U PyThread_tss_create
+                 U PyThread_tss_delete
+                 U PyThread_tss_get
+                 U PyThread_tss_set
+                 U _Py_TrueStruct
+                 U PyTuple_GetItem
+                 U PyTuple_New
+                 U PyTuple_SetItem
+                 U PyTuple_Size
+                 U PyType_FromSpec
+                 U PyType_IsSubtype
+                 U _PyType_Lookup
+                 U PyType_Ready
+                 U PyType_Type
+                 U PyUnicode_AsEncodedString
+                 U PyUnicode_AsUTF8AndSize
+                 U PyUnicode_AsUTF8String
+                 U PyUnicode_Compare
+                 U PyUnicode_DecodeUTF8
+                 U PyUnicode_FromFormat
+                 U PyUnicode_FromString
+                 U PyUnicode_InternFromString
+                 U PyWeakref_NewRef
+                 U rand@GLIBC_2.2.5
+                 U readdir@GLIBC_2.2.5
+                 U readlink@GLIBC_2.2.5
+                 U realpath@GLIBC_2.3
+                 U remove@GLIBC_2.2.5
+                 U rename@GLIBC_2.2.5
+                 w sched_yield@GLIBC_2.2.5
+                 U secure_getenv@GLIBC_2.17
+                 U sendfile@GLIBC_2.2.5
+                 U sprintf@GLIBC_2.2.5
+                 U __stack_chk_fail@GLIBC_2.4
+                 U statvfs@GLIBC_2.2.5
+                 U stderr@GLIBC_2.2.5
+                 U strchr@GLIBC_2.2.5
+                 U strcmp@GLIBC_2.2.5
+                 U strdup@GLIBC_2.2.5
+                 U strlen@GLIBC_2.2.5
+                 U strncmp@GLIBC_2.2.5
+                 U symlink@GLIBC_2.2.5
+                 U syscall@GLIBC_2.2.5
+                 U __tls_get_addr@GLIBC_2.3
+                 U truncate@GLIBC_2.2.5
+                 U __udivti3@GCC_3.0
+                 U unlinkat@GLIBC_2.4
+                 U _Unwind_Resume@GCC_3.0
+                 U usleep@GLIBC_2.2.5
+                 U utimensat@GLIBC_2.6
+                 U wmemcpy@GLIBC_2.2.5
+                 U wmemmove@GLIBC_2.2.5
+                 U wmemset@GLIBC_2.2.5
+                 U __xstat@GLIBC_2.2.5
+                 U operator delete[](void*)@GLIBCXX_3.4
+                 U operator delete(void*)@GLIBCXX_3.4
+                 U operator delete(void*, unsigned long)@CXXABI_1.3.9
+                 U __cxxabiv1::__si_class_type_info::~__si_class_type_info()@CXXABI_1.3
+00000000000ae280 T __gnu_debug::_Safe_local_iterator_base::_M_attach_single(__gnu_debug::_Safe_sequence_base*, bool)
+                 U arx::Arx5Solver::multi_trial_ik(Eigen::Matrix<double, 6, 1, 0, 6, 1>, Eigen::Matrix<double, -1, 1, 0, -1, 1>, int)
+                 U arx::Arx5Solver::inverse_dynamics(Eigen::Matrix<double, -1, 1, 0, -1, 1>, Eigen::Matrix<double, -1, 1, 0, -1, 1>, Eigen::Matrix<double, -1, 1, 0, -1, 1>)
+                 U arx::Arx5Solver::forward_kinematics(Eigen::Matrix<double, -1, 1, 0, -1, 1>)
+                 U arx::Arx5Solver::get_ik_status_name[abi:cxx11](int)
+                 U arx::Arx5Solver::inverse_kinematics(Eigen::Matrix<double, 6, 1, 0, 6, 1>, Eigen::Matrix<double, -1, 1, 0, -1, 1>)
+                 U arx::Arx5Solver::Arx5Solver(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, int, Eigen::Matrix<double, -1, 1, 0, -1, 1>, Eigen::Matrix<double, -1, 1, 0, -1, 1>)
+                 U arx::Arx5Solver::Arx5Solver(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, int, Eigen::Matrix<double, -1, 1, 0, -1, 1>, Eigen::Matrix<double, -1, 1, 0, -1, 1>, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, Eigen::Matrix<double, 3, 1, 0, 3, 1>)
+                 U fmt::v6::format_error::~format_error()
+                 U fmt::v6::internal::basic_data<void>::hex_digits
+                 U fmt::v6::internal::basic_data<void>::zero_or_powers_of_10_32
+                 U fmt::v6::internal::basic_data<void>::zero_or_powers_of_10_64
+                 U fmt::v6::internal::basic_data<void>::signs
+                 U fmt::v6::internal::basic_data<void>::digits
+                 U int fmt::v6::internal::format_float<double>(double, int, fmt::v6::internal::float_specs, fmt::v6::internal::buffer<char>&)
+                 U int fmt::v6::internal::format_float<long double>(long double, int, fmt::v6::internal::float_specs, fmt::v6::internal::buffer<char>&)
+                 U fmt::v6::internal::error_handler::on_error(char const*)
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > fmt::v6::internal::grouping_impl<char>(fmt::v6::internal::locale_ref)
+                 U int fmt::v6::internal::snprintf_float<double>(double, int, fmt::v6::internal::float_specs, fmt::v6::internal::buffer<char>&)
+                 U int fmt::v6::internal::snprintf_float<long double>(long double, int, fmt::v6::internal::float_specs, fmt::v6::internal::buffer<char>&)
+                 U char fmt::v6::internal::decimal_point_impl<char>(fmt::v6::internal::locale_ref)
+                 U char fmt::v6::internal::thousands_sep_impl<char>(fmt::v6::internal::locale_ref)
+                 U KDL::Chain::~Chain()
+                 U KDL::Segment::~Segment()
+                 U ArxCan::can_cmd_init(unsigned short, unsigned char)
+                 U ArxCan::get_motor_msg()
+                 U ArxCan::enable_DM_motor(unsigned short)
+                 U ArxCan::send_DM_motor_cmd(unsigned short, float, float, float, float, float)
+                 U ArxCan::send_EC_motor_cmd(unsigned short, float, float, float, float, float)
+                 U ArxCan::reset_zero_readout(unsigned short)
+                 U ArxCan::clear(unsigned short)
+                 U ArxCan::ArxCan(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >)
+                 U ArxCan::~ArxCan()
+                 U std::shared_ptr<spdlog::logger> spdlog::stdout_color_mt<spdlog::synchronous_factory>(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, spdlog::color_mode)
+                 U spdlog::drop(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+                 U spdlog::logger::set_pattern(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, spdlog::pattern_time_type)
+                 U spdlog::logger::err_handler_(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+                 U spdlog::logger::log_it_(spdlog::details::log_msg const&, bool, bool)
+                 U spdlog::logger::set_level(spdlog::level::level_enum)
+                 U spdlog::details::log_msg::log_msg(spdlog::source_loc, fmt::v6::basic_string_view<char>, spdlog::level::level_enum, fmt::v6::basic_string_view<char>)
+                 w __gnu_cxx::zoneinfo_dir_override()
+                 U operator new[](unsigned long)@GLIBCXX_3.4
+                 U __cxxabiv1::__class_type_info::__do_catch(std::type_info const*, void**, unsigned int) const@CXXABI_1.3
+                 U __cxxabiv1::__class_type_info::__do_upcast(__cxxabiv1::__class_type_info const*, void**) const@CXXABI_1.3
+                 U __cxxabiv1::__si_class_type_info::__do_upcast(__cxxabiv1::__class_type_info const*, void const*, __cxxabiv1::__class_type_info::__upcast_result&) const@CXXABI_1.3
+                 U __cxxabiv1::__si_class_type_info::__do_dyncast(long, __cxxabiv1::__class_type_info::__sub_kind, __cxxabiv1::__class_type_info const*, void const*, __cxxabiv1::__class_type_info const*, void const*, __cxxabiv1::__class_type_info::__dyncast_result&) const@CXXABI_1.3
+                 U __cxxabiv1::__si_class_type_info::__do_find_public_src(long, void const*, __cxxabiv1::__class_type_info const*, void const*) const@CXXABI_1.3
+                 U spdlog::logger::name[abi:cxx11]() const
+                 U spdlog::details::backtracer::enabled() const
+00000000000bf230 W std::__cxx11::basic_stringbuf<char, std::char_traits<char>, std::allocator<char> >::str() const &
+00000000000bf550 W std::__cxx11::basic_stringbuf<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::str() const &
+00000000000bf500 W std::__cxx11::basic_stringstream<char, std::char_traits<char>, std::allocator<char> >::str() const &
+00000000000bf870 W std::__cxx11::basic_stringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::str() const &
+00000000000bf460 W std::__cxx11::basic_istringstream<char, std::char_traits<char>, std::allocator<char> >::str() const &
+00000000000bf7d0 W std::__cxx11::basic_istringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::str() const &
+00000000000bf4b0 W std::__cxx11::basic_ostringstream<char, std::char_traits<char>, std::allocator<char> >::str() const &
+00000000000bf820 W std::__cxx11::basic_ostringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::str() const &
+0000000000094070 T std::filesystem::__cxx11::filesystem_error::what() const
+00000000000957f0 T std::filesystem::__cxx11::filesystem_error::path1() const
+0000000000095800 T std::filesystem::__cxx11::filesystem_error::path2() const
+00000000000c0360 T std::filesystem::__cxx11::directory_iterator::operator*() const
+00000000000c03e0 T std::filesystem::__cxx11::recursive_directory_iterator::recursion_pending() const
+00000000000c0380 T std::filesystem::__cxx11::recursive_directory_iterator::depth() const
+00000000000c0370 T std::filesystem::__cxx11::recursive_directory_iterator::options() const
+00000000000c03f0 T std::filesystem::__cxx11::recursive_directory_iterator::operator*() const
+0000000000096ea0 T std::filesystem::__cxx11::path::parent_path() const
+0000000000095380 T std::filesystem::__cxx11::path::has_filename() const
+00000000000947e0 T std::filesystem::__cxx11::path::has_root_name() const
+0000000000095250 T std::filesystem::__cxx11::path::has_root_path() const
+0000000000096b20 T std::filesystem::__cxx11::path::relative_path() const
+0000000000097a30 T std::filesystem::__cxx11::path::root_directory() const
+0000000000095340 T std::filesystem::__cxx11::path::has_parent_path() const
+00000000000981d0 T std::filesystem::__cxx11::path::lexically_normal() const
+0000000000095290 T std::filesystem::__cxx11::path::has_relative_path() const
+00000000000953e0 T std::filesystem::__cxx11::path::_M_find_extension() const
+0000000000094830 T std::filesystem::__cxx11::path::has_root_directory() const
+0000000000098d70 T std::filesystem::__cxx11::path::lexically_relative(std::filesystem::__cxx11::path const&) const
+0000000000099600 T std::filesystem::__cxx11::path::lexically_proximate(std::filesystem::__cxx11::path const&) const
+0000000000094410 T std::filesystem::__cxx11::path::_List::_Impl_deleter::operator()(std::filesystem::__cxx11::path::_List::_Impl*) const
+0000000000094700 T std::filesystem::__cxx11::path::_List::end() const
+00000000000946b0 T std::filesystem::__cxx11::path::_List::begin() const
+00000000000948c0 T std::filesystem::__cxx11::path::compare(std::filesystem::__cxx11::path const&) const
+0000000000094de0 T std::filesystem::__cxx11::path::compare(std::basic_string_view<char, std::char_traits<char> >) const
+0000000000096a70 T std::filesystem::__cxx11::path::root_name() const
+0000000000098060 T std::filesystem::__cxx11::path::root_path() const
+                 U std::__basic_file<char>::is_open() const@GLIBCXX_3.4
+00000000000c0100 W std::__shared_ptr<std::filesystem::__cxx11::recursive_directory_iterator::_Dir_stack, (__gnu_cxx::_Lock_policy)2>::operator bool() const
+00000000000bffd0 W std::__shared_ptr<std::filesystem::__cxx11::_Dir, (__gnu_cxx::_Lock_policy)2>::operator bool() const
+                 U std::runtime_error::what() const@GLIBCXX_3.4
+                 U std::__codecvt_utf8_base<wchar_t>::do_unshift(__mbstate_t&, char*, char*, char*&) const@GLIBCXX_3.4.21
+                 U std::__codecvt_utf8_base<wchar_t>::do_encoding() const@GLIBCXX_3.4.21
+                 U std::__codecvt_utf8_base<wchar_t>::do_max_length() const@GLIBCXX_3.4.21
+                 U std::__codecvt_utf8_base<wchar_t>::do_always_noconv() const@GLIBCXX_3.4.21
+                 U std::__codecvt_utf8_base<wchar_t>::do_in(__mbstate_t&, char const*, char const*, char const*&, wchar_t*, wchar_t*, wchar_t*&) const@GLIBCXX_3.4.21
+                 U std::__codecvt_utf8_base<wchar_t>::do_out(__mbstate_t&, wchar_t const*, wchar_t const*, wchar_t const*&, char*, char*, char*&) const@GLIBCXX_3.4.21
+                 U std::__codecvt_utf8_base<wchar_t>::do_length(__mbstate_t&, char const*, char const*, unsigned long) const@GLIBCXX_3.4.21
+                 U std::ctype<char>::_M_widen_init() const@GLIBCXX_3.4.11
+000000000005ced0 T std::ctype<char>::do_widen(char) const
+00000000000a3b60 T std::chrono::tzdb::locate_zone(std::basic_string_view<char, std::char_traits<char> >) const
+00000000000a2e70 T std::chrono::tzdb::current_zone() const
+00000000000a5e20 T std::chrono::time_zone::_M_get_sys_info(std::chrono::time_point<std::chrono::_V2::system_clock, std::chrono::duration<long, std::ratio<1l, 1l> > >) const
+00000000000a7b50 T std::chrono::time_zone::_M_get_local_info(std::chrono::time_point<std::chrono::local_t, std::chrono::duration<long, std::ratio<1l, 1l> > >) const
+000000000009f5b0 T std::chrono::tzdb_list::const_iterator::operator*() const
+000000000009f6d0 T std::chrono::tzdb_list::begin() const
+000000000009f590 T std::chrono::tzdb_list::front() const
+                 U std::locale::id::_M_id() const@GLIBCXX_3.4
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::find_last_not_of(char const*, unsigned long, unsigned long) const@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::find_first_not_of(char const*, unsigned long, unsigned long) const@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::find(char, unsigned long) const@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::find(char const*, unsigned long, unsigned long) const@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::rfind(char, unsigned long) const@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::rfind(char const*, unsigned long, unsigned long) const@GLIBCXX_3.4.21
+00000000000ba6a0 W std::__cxx11::basic_stringbuf<char, std::char_traits<char>, std::allocator<char> >::get_allocator() const
+00000000000ba6b0 W std::__cxx11::basic_stringbuf<char, std::char_traits<char>, std::allocator<char> >::view() const
+00000000000bad60 W std::__cxx11::basic_stringbuf<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::get_allocator() const
+00000000000bad70 W std::__cxx11::basic_stringbuf<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::view() const
+00000000000baa70 W std::__cxx11::basic_stringstream<char, std::char_traits<char>, std::allocator<char> >::view() const
+00000000000bb160 W std::__cxx11::basic_stringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::view() const
+00000000000ba7f0 W std::__cxx11::basic_istringstream<char, std::char_traits<char>, std::allocator<char> >::view() const
+00000000000baec0 W std::__cxx11::basic_istringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::view() const
+00000000000ba930 W std::__cxx11::basic_ostringstream<char, std::char_traits<char>, std::allocator<char> >::view() const
+00000000000bb010 W std::__cxx11::basic_ostringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::view() const
+                 U std::__detail::_Prime_rehash_policy::_M_need_rehash(unsigned long, unsigned long, unsigned long) const@GLIBCXX_3.4.18
+                 U std::type_info::__is_pointer_p() const@GLIBCXX_3.4
+                 U std::type_info::__is_function_p() const@GLIBCXX_3.4
+00000000000bcba0 W std::__cxx11::basic_stringbuf<char, std::char_traits<char>, std::allocator<char> >::str() &&
+00000000000be1d0 W std::__cxx11::basic_stringbuf<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::str() &&
+00000000000bcfb0 W std::__cxx11::basic_stringstream<char, std::char_traits<char>, std::allocator<char> >::str() &&
+00000000000be4c0 W std::__cxx11::basic_stringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::str() &&
+00000000000bccf0 W std::__cxx11::basic_istringstream<char, std::char_traits<char>, std::allocator<char> >::str() &&
+00000000000be2c0 W std::__cxx11::basic_istringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::str() &&
+00000000000bce50 W std::__cxx11::basic_ostringstream<char, std::char_traits<char>, std::allocator<char> >::str() &&
+00000000000be3c0 W std::__cxx11::basic_ostringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::str() &&
+                 U std::basic_iostream<char, std::char_traits<char> >::~basic_iostream()@GLIBCXX_3.4
+                 U std::istream& std::istream::_M_extract<double>(double&)@GLIBCXX_3.4.9
+                 U std::istream& std::istream::_M_extract<unsigned int>(unsigned int&)@GLIBCXX_3.4.9
+                 U std::istream::get()@GLIBCXX_3.4
+                 U std::istream::peek()@GLIBCXX_3.4
+                 U std::istream::unget()@GLIBCXX_3.4
+                 U std::istream::ignore(long)@GLIBCXX_3.4.5
+                 U std::istream::ignore(long, int)@GLIBCXX_3.4
+                 U std::istream::operator>>(int&)@GLIBCXX_3.4
+                 U std::ostream::put(char)@GLIBCXX_3.4
+                 U std::ostream::flush()@GLIBCXX_3.4
+                 U std::ostream& std::ostream::_M_insert<double>(double)@GLIBCXX_3.4.9
+                 U std::ostream::operator<<(int)@GLIBCXX_3.4
+                 U std::ostream::operator<<(std::basic_streambuf<char, std::char_traits<char> >*)@GLIBCXX_3.4
+                 U std::string::_Rep::_S_empty_rep_storage@GLIBCXX_3.4
+00000000000b0dc0 T std::filesystem::equivalent(std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&)
+00000000000aea60 T std::filesystem::equivalent(std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&, std::error_code&)
+00000000000b1140 T std::filesystem::remove_all(std::filesystem::__cxx11::path const&)
+00000000000af090 T std::filesystem::remove_all(std::filesystem::__cxx11::path const&, std::error_code&)
+00000000000b1060 T std::filesystem::permissions(std::filesystem::__cxx11::path const&, std::filesystem::perms, std::filesystem::perm_options)
+00000000000af6e0 T std::filesystem::permissions(std::filesystem::__cxx11::path const&, std::filesystem::perms, std::filesystem::perm_options, std::error_code&)
+00000000000b12c0 T std::filesystem::resize_file(std::filesystem::__cxx11::path const&, unsigned long)
+00000000000af210 T std::filesystem::resize_file(std::filesystem::__cxx11::path const&, unsigned long, std::error_code&)
+00000000000b1bb0 T std::filesystem::copy_symlink(std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&)
+00000000000b1b20 T std::filesystem::copy_symlink(std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&, std::error_code&)
+00000000000b1c90 T std::filesystem::current_path[abi:cxx11](std::error_code&)
+00000000000b2180 T std::filesystem::current_path[abi:cxx11]()
+00000000000b0d50 T std::filesystem::current_path(std::filesystem::__cxx11::path const&)
+00000000000ae9f0 T std::filesystem::current_path(std::filesystem::__cxx11::path const&, std::error_code&)
+00000000000b1c20 T std::filesystem::read_symlink(std::filesystem::__cxx11::path const&)
+00000000000b15a0 T std::filesystem::read_symlink(std::filesystem::__cxx11::path const&, std::error_code&)
+00000000000b0ce0 T std::filesystem::create_symlink(std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&)
+00000000000ae990 T std::filesystem::create_symlink(std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&, std::error_code&)
+00000000000b1400 T std::filesystem::symlink_status(std::filesystem::__cxx11::path const&)
+00000000000af5a0 T std::filesystem::symlink_status(std::filesystem::__cxx11::path const&, std::error_code&)
+00000000000b0ea0 T std::filesystem::hard_link_count(std::filesystem::__cxx11::path const&)
+00000000000aedb0 T std::filesystem::hard_link_count(std::filesystem::__cxx11::path const&, std::error_code&)
+00000000000b0f80 T std::filesystem::last_write_time(std::filesystem::__cxx11::path const&)
+00000000000b0ff0 T std::filesystem::last_write_time(std::filesystem::__cxx11::path const&, std::chrono::time_point<std::filesystem::__file_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > >)
+00000000000aef40 T std::filesystem::last_write_time(std::filesystem::__cxx11::path const&, std::chrono::time_point<std::filesystem::__file_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > >, std::error_code&)
+00000000000aee40 T std::filesystem::last_write_time(std::filesystem::__cxx11::path const&, std::error_code&)
+00000000000b0b20 T std::filesystem::create_directory(std::filesystem::__cxx11::path const&)
+00000000000af520 T std::filesystem::create_directory(std::filesystem::__cxx11::path const&, std::error_code&)
+00000000000b0b90 T std::filesystem::create_directory(std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&)
+00000000000af440 T std::filesystem::create_directory(std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&, std::error_code&)
+00000000000b0c70 T std::filesystem::create_hard_link(std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&)
+00000000000ae940 T std::filesystem::create_hard_link(std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&, std::error_code&)
+00000000000b8140 T std::filesystem::weakly_canonical(std::filesystem::__cxx11::path const&)
+00000000000b8d80 T std::filesystem::weakly_canonical(std::filesystem::__cxx11::path const&, std::error_code&)
+00000000000b4aa0 T std::filesystem::create_directories(std::filesystem::__cxx11::path const&)
+00000000000b37e0 T std::filesystem::create_directories(std::filesystem::__cxx11::path const&, std::error_code&)
+00000000000b21f0 T std::filesystem::temp_directory_path[abi:cxx11](std::error_code&)
+00000000000b1460 T std::filesystem::temp_directory_path[abi:cxx11]()
+00000000000b0c00 T std::filesystem::create_directory_symlink(std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&)
+00000000000ae9e0 T std::filesystem::create_directory_symlink(std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&, std::error_code&)
+00000000000b33e0 T std::filesystem::copy(std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&, std::filesystem::copy_options)
+00000000000b28e0 T std::filesystem::copy(std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&, std::filesystem::copy_options, std::error_code&)
+00000000000b1330 T std::filesystem::space(std::filesystem::__cxx11::path const&)
+00000000000af290 T std::filesystem::space(std::filesystem::__cxx11::path const&, std::error_code&)
+00000000000b10d0 T std::filesystem::remove(std::filesystem::__cxx11::path const&)
+00000000000af010 T std::filesystem::remove(std::filesystem::__cxx11::path const&, std::error_code&)
+00000000000b1250 T std::filesystem::rename(std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&)
+00000000000af1c0 T std::filesystem::rename(std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&, std::error_code&)
+00000000000b13a0 T std::filesystem::status(std::filesystem::__cxx11::path const&)
+00000000000af2d0 T std::filesystem::status(std::filesystem::__cxx11::path const&, std::error_code&)
+00000000000954b0 T std::filesystem::__cxx11::hash_value(std::filesystem::__cxx11::path const&)
+000000000009cd00 T std::filesystem::__cxx11::filesystem_error::filesystem_error(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&, std::error_code)
+000000000009cb20 T std::filesystem::__cxx11::filesystem_error::filesystem_error(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::filesystem::__cxx11::path const&, std::error_code)
+000000000009c5d0 T std::filesystem::__cxx11::filesystem_error::filesystem_error(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::error_code)
+000000000009cd00 T std::filesystem::__cxx11::filesystem_error::filesystem_error(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&, std::error_code)
+000000000009cb20 T std::filesystem::__cxx11::filesystem_error::filesystem_error(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::filesystem::__cxx11::path const&, std::error_code)
+000000000009c5d0 T std::filesystem::__cxx11::filesystem_error::filesystem_error(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::error_code)
+0000000000095a20 T std::filesystem::__cxx11::filesystem_error::~filesystem_error()
+0000000000095960 T std::filesystem::__cxx11::filesystem_error::~filesystem_error()
+0000000000095960 T std::filesystem::__cxx11::filesystem_error::~filesystem_error()
+00000000000c1ac0 T std::filesystem::__cxx11::directory_iterator::increment(std::error_code&)
+00000000000c1f70 T std::filesystem::__cxx11::directory_iterator::directory_iterator(std::filesystem::__cxx11::path const&, std::filesystem::directory_options, std::error_code*)
+00000000000c1f70 T std::filesystem::__cxx11::directory_iterator::directory_iterator(std::filesystem::__cxx11::path const&, std::filesystem::directory_options, std::error_code*)
+00000000000c2550 T std::filesystem::__cxx11::directory_iterator::operator++()
+00000000000c0450 T std::filesystem::__cxx11::recursive_directory_iterator::disable_recursion_pending()
+00000000000c1ba0 T std::filesystem::__cxx11::recursive_directory_iterator::pop(std::error_code&)
+00000000000c1f00 T std::filesystem::__cxx11::recursive_directory_iterator::pop()
+00000000000c3500 T std::filesystem::__cxx11::recursive_directory_iterator::increment(std::error_code&)
+00000000000c0600 T std::filesystem::__cxx11::recursive_directory_iterator::operator=(std::filesystem::__cxx11::recursive_directory_iterator&&)
+00000000000c0840 T std::filesystem::__cxx11::recursive_directory_iterator::operator=(std::filesystem::__cxx11::recursive_directory_iterator const&)
+00000000000c2dd0 T std::filesystem::__cxx11::recursive_directory_iterator::recursive_directory_iterator(std::filesystem::__cxx11::path const&, std::filesystem::directory_options, std::error_code*)
+00000000000c2dd0 T std::filesystem::__cxx11::recursive_directory_iterator::recursive_directory_iterator(std::filesystem::__cxx11::path const&, std::filesystem::directory_options, std::error_code*)
+00000000000c0460 T std::filesystem::__cxx11::recursive_directory_iterator::~recursive_directory_iterator()
+00000000000c0460 T std::filesystem::__cxx11::recursive_directory_iterator::~recursive_directory_iterator()
+00000000000c3ad0 T std::filesystem::__cxx11::recursive_directory_iterator::operator++()
+0000000000095dd0 T std::filesystem::__cxx11::path::_M_split_cmpts()
+000000000009d250 T std::filesystem::__cxx11::path::_S_convert_loc(char const*, char const*, std::locale const&)
+0000000000096550 T std::filesystem::__cxx11::path::remove_filename()
+00000000000981a0 T std::filesystem::__cxx11::path::replace_filename(std::filesystem::__cxx11::path const&)
+000000000009c4c0 T std::filesystem::__cxx11::path::replace_extension(std::filesystem::__cxx11::path const&)
+0000000000095d20 T std::filesystem::__cxx11::path::_List::_List(std::filesystem::__cxx11::path::_List const&)
+0000000000094650 T std::filesystem::__cxx11::path::_List::_List()
+000000000009a4e0 T std::filesystem::__cxx11::path::_M_append(std::basic_string_view<char, std::char_traits<char> >)
+000000000009b620 T std::filesystem::__cxx11::path::_M_concat(std::basic_string_view<char, std::char_traits<char> >)
+0000000000096a30 T std::filesystem::__cxx11::path::operator=(std::filesystem::__cxx11::path const&)
+0000000000097b30 T std::filesystem::__cxx11::path::operator/=(std::filesystem::__cxx11::path const&)
+0000000000099670 T std::filesystem::__cxx11::path::operator+=(std::filesystem::__cxx11::path const&)
+00000000000b2110 T std::filesystem::absolute(std::filesystem::__cxx11::path const&)
+00000000000b1ef0 T std::filesystem::absolute(std::filesystem::__cxx11::path const&, std::error_code&)
+00000000000b0f10 T std::filesystem::is_empty(std::filesystem::__cxx11::path const&)
+00000000000af820 T std::filesystem::is_empty(std::filesystem::__cxx11::path const&, std::error_code&)
+00000000000b8c90 T std::filesystem::relative(std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&)
+00000000000b9fe0 T std::filesystem::relative(std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&, std::error_code&)
+00000000000b80d0 T std::filesystem::canonical(std::filesystem::__cxx11::path const&)
+00000000000b66f0 T std::filesystem::canonical(std::filesystem::__cxx11::path const&, std::error_code&)
+00000000000b0aa0 T std::filesystem::copy_file(std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&, std::filesystem::copy_options)
+00000000000b0830 T std::filesystem::copy_file(std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&, std::filesystem::copy_options, std::error_code&)
+00000000000b0e30 T std::filesystem::file_size(std::filesystem::__cxx11::path const&)
+00000000000aecc0 T std::filesystem::file_size(std::filesystem::__cxx11::path const&, std::error_code&)
+00000000000b8ba0 T std::filesystem::proximate(std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&)
+00000000000b9d20 T std::filesystem::proximate(std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&, std::error_code&)
+                 U std::__basic_file<char>::sys_open(int, std::_Ios_Openmode)@GLIBCXX_3.4
+                 U std::__basic_file<char>::~__basic_file()@GLIBCXX_3.4
+00000000000940e0 W std::codecvt_utf8<wchar_t, 1114111ul, (std::codecvt_mode)0>::~codecvt_utf8()
+00000000000940c0 W std::codecvt_utf8<wchar_t, 1114111ul, (std::codecvt_mode)0>::~codecvt_utf8()
+00000000000940c0 W std::codecvt_utf8<wchar_t, 1114111ul, (std::codecvt_mode)0>::~codecvt_utf8()
+00000000000c00b0 W std::__shared_ptr<std::filesystem::__cxx11::recursive_directory_iterator::_Dir_stack, (__gnu_cxx::_Lock_policy)2>::__shared_ptr(std::__shared_ptr<std::filesystem::__cxx11::recursive_directory_iterator::_Dir_stack, (__gnu_cxx::_Lock_policy)2>&&)
+00000000000bfd80 W std::__shared_ptr<std::filesystem::__cxx11::recursive_directory_iterator::_Dir_stack, (__gnu_cxx::_Lock_policy)2>::__shared_ptr()
+00000000000c00b0 W std::__shared_ptr<std::filesystem::__cxx11::recursive_directory_iterator::_Dir_stack, (__gnu_cxx::_Lock_policy)2>::__shared_ptr(std::__shared_ptr<std::filesystem::__cxx11::recursive_directory_iterator::_Dir_stack, (__gnu_cxx::_Lock_policy)2>&&)
+00000000000bfd70 W std::__shared_ptr<std::filesystem::__cxx11::recursive_directory_iterator::_Dir_stack, (__gnu_cxx::_Lock_policy)2>::__shared_ptr()
+00000000000c06c0 W std::__shared_ptr<std::filesystem::__cxx11::_Dir, (__gnu_cxx::_Lock_policy)2>::operator=(std::__shared_ptr<std::filesystem::__cxx11::_Dir, (__gnu_cxx::_Lock_policy)2>&&)
+00000000000bff80 W std::__shared_ptr<std::filesystem::__cxx11::_Dir, (__gnu_cxx::_Lock_policy)2>::__shared_ptr(std::__shared_ptr<std::filesystem::__cxx11::_Dir, (__gnu_cxx::_Lock_policy)2>&&)
+00000000000bfd60 W std::__shared_ptr<std::filesystem::__cxx11::_Dir, (__gnu_cxx::_Lock_policy)2>::__shared_ptr()
+00000000000bff80 W std::__shared_ptr<std::filesystem::__cxx11::_Dir, (__gnu_cxx::_Lock_policy)2>::__shared_ptr(std::__shared_ptr<std::filesystem::__cxx11::_Dir, (__gnu_cxx::_Lock_policy)2>&&)
+00000000000bfd50 W std::__shared_ptr<std::filesystem::__cxx11::_Dir, (__gnu_cxx::_Lock_policy)2>::__shared_ptr()
+                 U std::system_error::~system_error()@GLIBCXX_3.4.11
+                 U std::basic_filebuf<char, std::char_traits<char> >::_M_allocate_internal_buffer()@GLIBCXX_3.4
+                 U std::basic_filebuf<char, std::char_traits<char> >::open(char const*, std::_Ios_Openmode)@GLIBCXX_3.4
+                 U std::basic_filebuf<char, std::char_traits<char> >::sync()@GLIBCXX_3.4
+                 U std::basic_filebuf<char, std::char_traits<char> >::close()@GLIBCXX_3.4
+                 U std::basic_filebuf<char, std::char_traits<char> >::imbue(std::locale const&)@GLIBCXX_3.4
+                 U std::basic_filebuf<char, std::char_traits<char> >::setbuf(char*, long)@GLIBCXX_3.4
+                 U std::basic_filebuf<char, std::char_traits<char> >::xsgetn(char*, long)@GLIBCXX_3.4
+                 U std::basic_filebuf<char, std::char_traits<char> >::xsputn(char const*, long)@GLIBCXX_3.4
+                 U std::basic_filebuf<char, std::char_traits<char> >::seekoff(long, std::_Ios_Seekdir, std::_Ios_Openmode)@GLIBCXX_3.4
+                 U std::basic_filebuf<char, std::char_traits<char> >::seekpos(std::fpos<__mbstate_t>, std::_Ios_Openmode)@GLIBCXX_3.4
+                 U std::basic_filebuf<char, std::char_traits<char> >::overflow(int)@GLIBCXX_3.4
+                 U std::basic_filebuf<char, std::char_traits<char> >::pbackfail(int)@GLIBCXX_3.4
+                 U std::basic_filebuf<char, std::char_traits<char> >::showmanyc()@GLIBCXX_3.4
+                 U std::basic_filebuf<char, std::char_traits<char> >::underflow()@GLIBCXX_3.4
+                 U std::basic_filebuf<char, std::char_traits<char> >::basic_filebuf(std::basic_filebuf<char, std::char_traits<char> >&&)@GLIBCXX_3.4.21
+                 U std::basic_filebuf<char, std::char_traits<char> >::basic_filebuf()@GLIBCXX_3.4
+                 U std::basic_filebuf<char, std::char_traits<char> >::basic_filebuf()@GLIBCXX_3.4
+                 U std::basic_filebuf<char, std::char_traits<char> >::~basic_filebuf()@GLIBCXX_3.4
+                 U std::basic_filebuf<char, std::char_traits<char> >::~basic_filebuf()@GLIBCXX_3.4
+                 U std::runtime_error::runtime_error(char const*)@GLIBCXX_3.4.21
+                 U std::runtime_error::runtime_error(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)@GLIBCXX_3.4.21
+                 U std::runtime_error::runtime_error(char const*)@GLIBCXX_3.4.21
+                 U std::runtime_error::runtime_error(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)@GLIBCXX_3.4.21
+                 U std::runtime_error::~runtime_error()@GLIBCXX_3.4
+                 U std::runtime_error::~runtime_error()@GLIBCXX_3.4
+                 U std::basic_ifstream<char, std::char_traits<char> >::basic_ifstream(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::_Ios_Openmode)@GLIBCXX_3.4.21
+                 U std::basic_ifstream<char, std::char_traits<char> >::~basic_ifstream()@GLIBCXX_3.4
+                 U std::basic_iostream<wchar_t, std::char_traits<wchar_t> >::~basic_iostream()@GLIBCXX_3.4
+                 U std::basic_streambuf<char, std::char_traits<char> >::sync()@GLIBCXX_3.4
+                 U std::basic_streambuf<char, std::char_traits<char> >::imbue(std::locale const&)@GLIBCXX_3.4
+                 U std::basic_streambuf<char, std::char_traits<char> >::uflow()@GLIBCXX_3.4
+                 U std::basic_streambuf<char, std::char_traits<char> >::setbuf(char*, long)@GLIBCXX_3.4
+                 U std::basic_streambuf<char, std::char_traits<char> >::xsgetn(char*, long)@GLIBCXX_3.4
+                 U std::basic_streambuf<char, std::char_traits<char> >::xsputn(char const*, long)@GLIBCXX_3.4
+                 U std::basic_streambuf<char, std::char_traits<char> >::seekoff(long, std::_Ios_Seekdir, std::_Ios_Openmode)@GLIBCXX_3.4
+                 U std::basic_streambuf<char, std::char_traits<char> >::seekpos(std::fpos<__mbstate_t>, std::_Ios_Openmode)@GLIBCXX_3.4
+                 U std::basic_streambuf<char, std::char_traits<char> >::overflow(int)@GLIBCXX_3.4
+                 U std::basic_streambuf<char, std::char_traits<char> >::pbackfail(int)@GLIBCXX_3.4
+                 U std::basic_streambuf<char, std::char_traits<char> >::showmanyc()@GLIBCXX_3.4
+                 U std::basic_streambuf<char, std::char_traits<char> >::underflow()@GLIBCXX_3.4
+                 U std::basic_streambuf<char, std::char_traits<char> >::basic_streambuf(std::basic_streambuf<char, std::char_traits<char> > const&)@GLIBCXX_3.4
+                 U std::basic_streambuf<wchar_t, std::char_traits<wchar_t> >::basic_streambuf(std::basic_streambuf<wchar_t, std::char_traits<wchar_t> > const&)@GLIBCXX_3.4
+0000000000094020 T std::__exception_ptr::exception_ptr::_M_release()
+0000000000094000 T std::__exception_ptr::exception_ptr::_M_addref()
+                 U std::invalid_argument::invalid_argument(char const*)@GLIBCXX_3.4.21
+                 U std::invalid_argument::invalid_argument(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)@GLIBCXX_3.4.21
+                 U std::invalid_argument::~invalid_argument()@GLIBCXX_3.4
+                 U std::__codecvt_utf8_base<wchar_t>::~__codecvt_utf8_base()@GLIBCXX_3.4.21
+                 U std::_V2::system_category()@GLIBCXX_3.4.21
+                 U std::_V2::generic_category()@GLIBCXX_3.4.21
+00000000000ade00 T std::chrono::locate_zone(std::basic_string_view<char, std::char_traits<char> >)
+00000000000aba30 T std::chrono::reload_tzdb()
+00000000000ade90 T std::chrono::current_zone()
+00000000000addc0 T std::chrono::get_tzdb_list()
+00000000000a4490 T std::chrono::remote_version[abi:cxx11]()
+                 U std::chrono::_V2::steady_clock::now()@GLIBCXX_3.4.19
+00000000000adf10 T std::chrono::get_tzdb()
+000000000009f7c0 T std::chrono::tzdb_list::erase_after(std::chrono::tzdb_list::const_iterator)
+000000000009fb80 T std::chrono::tzdb_list::const_iterator::operator++(int)
+000000000009fb10 T std::chrono::tzdb_list::const_iterator::operator++()
+                 U std::locale::locale()@GLIBCXX_3.4
+                 U std::locale::~locale()@GLIBCXX_3.4
+                 U std::thread::_M_start_thread(std::unique_ptr<std::thread::_State, std::default_delete<std::thread::_State> >, void (*)())@GLIBCXX_3.4.22
+0000000000071260 T std::thread::_M_thread_deps_never_run()
+                 U std::thread::join()@GLIBCXX_3.4.11
+                 U std::thread::_State::~_State()@GLIBCXX_3.4.22
+                 U std::codecvt<wchar_t, char, __mbstate_t>::id@GLIBCXX_3.4
+                 U std::codecvt<wchar_t, char, __mbstate_t>::codecvt(unsigned long)@GLIBCXX_3.4
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_replace_aux(unsigned long, unsigned long, unsigned long, char)@GLIBCXX_3.4.21
+0000000000029062 W std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_replace_cold(char*, unsigned long, char const*, unsigned long, unsigned long)
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::append(char const*)@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::insert(unsigned long, char const*)@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_erase(unsigned long, unsigned long)@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_append(char const*, unsigned long)
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_create(unsigned long&, unsigned long)@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::push_back(char)
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::~basic_string()@GLIBCXX_3.4.21
+000000000002d87e W std::__cxx11::basic_string<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::_M_replace_cold(wchar_t*, unsigned long, wchar_t const*, unsigned long, unsigned long)
+                 U std::__cxx11::basic_stringbuf<char, std::char_traits<char>, std::allocator<char> >::__xfer_bufptrs::~__xfer_bufptrs()@GLIBCXX_3.4.21
+00000000000ba6f0 W std::__cxx11::basic_stringbuf<char, std::char_traits<char>, std::allocator<char> >::str(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >&&)
+                 U std::__cxx11::basic_stringbuf<char, std::char_traits<char>, std::allocator<char> >::_M_sync(char*, unsigned long, unsigned long)@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_stringbuf<char, std::char_traits<char>, std::allocator<char> >::_M_pbump(char*, char*, long)@GLIBCXX_3.4.21
+00000000000bc9f0 W std::__cxx11::basic_stringbuf<char, std::char_traits<char>, std::allocator<char> >::basic_stringbuf(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >&&, std::_Ios_Openmode)
+00000000000bb2b0 W std::__cxx11::basic_stringbuf<char, std::char_traits<char>, std::allocator<char> >::basic_stringbuf(std::__cxx11::basic_stringbuf<char, std::char_traits<char>, std::allocator<char> >&&, std::allocator<char> const&)
+00000000000ba560 W std::__cxx11::basic_stringbuf<char, std::char_traits<char>, std::allocator<char> >::basic_stringbuf(std::__cxx11::basic_stringbuf<char, std::char_traits<char>, std::allocator<char> >&&, std::allocator<char> const&, std::__cxx11::basic_stringbuf<char, std::char_traits<char>, std::allocator<char> >::__xfer_bufptrs&&)
+00000000000ba450 W std::__cxx11::basic_stringbuf<char, std::char_traits<char>, std::allocator<char> >::basic_stringbuf(std::allocator<char> const&)
+00000000000ba4d0 W std::__cxx11::basic_stringbuf<char, std::char_traits<char>, std::allocator<char> >::basic_stringbuf(std::_Ios_Openmode, std::allocator<char> const&)
+00000000000bc9f0 W std::__cxx11::basic_stringbuf<char, std::char_traits<char>, std::allocator<char> >::basic_stringbuf(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >&&, std::_Ios_Openmode)
+00000000000bb2b0 W std::__cxx11::basic_stringbuf<char, std::char_traits<char>, std::allocator<char> >::basic_stringbuf(std::__cxx11::basic_stringbuf<char, std::char_traits<char>, std::allocator<char> >&&, std::allocator<char> const&)
+00000000000ba560 W std::__cxx11::basic_stringbuf<char, std::char_traits<char>, std::allocator<char> >::basic_stringbuf(std::__cxx11::basic_stringbuf<char, std::char_traits<char>, std::allocator<char> >&&, std::allocator<char> const&, std::__cxx11::basic_stringbuf<char, std::char_traits<char>, std::allocator<char> >::__xfer_bufptrs&&)
+00000000000ba450 W std::__cxx11::basic_stringbuf<char, std::char_traits<char>, std::allocator<char> >::basic_stringbuf(std::allocator<char> const&)
+00000000000ba4d0 W std::__cxx11::basic_stringbuf<char, std::char_traits<char>, std::allocator<char> >::basic_stringbuf(std::_Ios_Openmode, std::allocator<char> const&)
+00000000000a2780 W std::__cxx11::basic_stringbuf<char, std::char_traits<char>, std::allocator<char> >::~basic_stringbuf()
+00000000000a2730 W std::__cxx11::basic_stringbuf<char, std::char_traits<char>, std::allocator<char> >::~basic_stringbuf()
+00000000000a2730 W std::__cxx11::basic_stringbuf<char, std::char_traits<char>, std::allocator<char> >::~basic_stringbuf()
+                 U std::__cxx11::basic_stringbuf<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::__xfer_bufptrs::~__xfer_bufptrs()@GLIBCXX_3.4.21
+00000000000badb0 W std::__cxx11::basic_stringbuf<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::str(std::__cxx11::basic_string<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >&&)
+                 U std::__cxx11::basic_stringbuf<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::_M_sync(wchar_t*, unsigned long, unsigned long)@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_stringbuf<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::_M_pbump(wchar_t*, wchar_t*, long)@GLIBCXX_3.4.21
+00000000000be0b0 W std::__cxx11::basic_stringbuf<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::basic_stringbuf(std::__cxx11::basic_string<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >&&, std::_Ios_Openmode)
+00000000000bbe70 W std::__cxx11::basic_stringbuf<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::basic_stringbuf(std::__cxx11::basic_stringbuf<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >&&, std::allocator<wchar_t> const&)
+00000000000bacc0 W std::__cxx11::basic_stringbuf<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::basic_stringbuf(std::__cxx11::basic_stringbuf<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >&&, std::allocator<wchar_t> const&, std::__cxx11::basic_stringbuf<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::__xfer_bufptrs&&)
+00000000000babb0 W std::__cxx11::basic_stringbuf<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::basic_stringbuf(std::allocator<wchar_t> const&)
+00000000000bac30 W std::__cxx11::basic_stringbuf<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::basic_stringbuf(std::_Ios_Openmode, std::allocator<wchar_t> const&)
+00000000000be0b0 W std::__cxx11::basic_stringbuf<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::basic_stringbuf(std::__cxx11::basic_string<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >&&, std::_Ios_Openmode)
+00000000000bbe70 W std::__cxx11::basic_stringbuf<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::basic_stringbuf(std::__cxx11::basic_stringbuf<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >&&, std::allocator<wchar_t> const&)
+00000000000bacc0 W std::__cxx11::basic_stringbuf<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::basic_stringbuf(std::__cxx11::basic_stringbuf<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >&&, std::allocator<wchar_t> const&, std::__cxx11::basic_stringbuf<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::__xfer_bufptrs&&)
+00000000000babb0 W std::__cxx11::basic_stringbuf<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::basic_stringbuf(std::allocator<wchar_t> const&)
+00000000000bac30 W std::__cxx11::basic_stringbuf<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::basic_stringbuf(std::_Ios_Openmode, std::allocator<wchar_t> const&)
+00000000000bc990 W std::__cxx11::basic_stringbuf<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::~basic_stringbuf()
+00000000000bbe20 W std::__cxx11::basic_stringbuf<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::~basic_stringbuf()
+00000000000bbe20 W std::__cxx11::basic_stringbuf<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::~basic_stringbuf()
+00000000000baab0 W std::__cxx11::basic_stringstream<char, std::char_traits<char>, std::allocator<char> >::str(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >&&)
+00000000000bddb0 W std::__cxx11::basic_stringstream<char, std::char_traits<char>, std::allocator<char> >::basic_stringstream(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >&&, std::_Ios_Openmode)
+00000000000bbc50 W std::__cxx11::basic_stringstream<char, std::char_traits<char>, std::allocator<char> >::basic_stringstream(std::_Ios_Openmode, std::allocator<char> const&)
+00000000000bdb10 W std::__cxx11::basic_stringstream<char, std::char_traits<char>, std::allocator<char> >::basic_stringstream(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >&&, std::_Ios_Openmode)
+00000000000bbad0 W std::__cxx11::basic_stringstream<char, std::char_traits<char>, std::allocator<char> >::basic_stringstream(std::_Ios_Openmode, std::allocator<char> const&)
+00000000000bb1a0 W std::__cxx11::basic_stringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::str(std::__cxx11::basic_string<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >&&)
+00000000000befb0 W std::__cxx11::basic_stringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::basic_stringstream(std::__cxx11::basic_string<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >&&, std::_Ios_Openmode)
+00000000000bc7b0 W std::__cxx11::basic_stringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::basic_stringstream(std::_Ios_Openmode, std::allocator<wchar_t> const&)
+00000000000bed90 W std::__cxx11::basic_stringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::basic_stringstream(std::__cxx11::basic_string<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >&&, std::_Ios_Openmode)
+00000000000bc630 W std::__cxx11::basic_stringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::basic_stringstream(std::_Ios_Openmode, std::allocator<wchar_t> const&)
+00000000000ba830 W std::__cxx11::basic_istringstream<char, std::char_traits<char>, std::allocator<char> >::str(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >&&)
+00000000000bd840 W std::__cxx11::basic_istringstream<char, std::char_traits<char>, std::allocator<char> >::basic_istringstream(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >&&, std::_Ios_Openmode)
+00000000000bb6e0 W std::__cxx11::basic_istringstream<char, std::char_traits<char>, std::allocator<char> >::basic_istringstream(std::_Ios_Openmode, std::allocator<char> const&)
+00000000000bd350 W std::__cxx11::basic_istringstream<char, std::char_traits<char>, std::allocator<char> >::basic_istringstream(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >&&, std::_Ios_Openmode)
+00000000000bb5c0 W std::__cxx11::basic_istringstream<char, std::char_traits<char>, std::allocator<char> >::basic_istringstream(std::_Ios_Openmode, std::allocator<char> const&)
+                 U std::__cxx11::basic_istringstream<char, std::char_traits<char>, std::allocator<char> >::~basic_istringstream()@GLIBCXX_3.4.21
+00000000000baf00 W std::__cxx11::basic_istringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::str(std::__cxx11::basic_string<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >&&)
+00000000000beb50 W std::__cxx11::basic_istringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::basic_istringstream(std::__cxx11::basic_string<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >&&, std::_Ios_Openmode)
+00000000000bc220 W std::__cxx11::basic_istringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::basic_istringstream(std::_Ios_Openmode, std::allocator<wchar_t> const&)
+00000000000be770 W std::__cxx11::basic_istringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::basic_istringstream(std::__cxx11::basic_string<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >&&, std::_Ios_Openmode)
+00000000000bc100 W std::__cxx11::basic_istringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::basic_istringstream(std::_Ios_Openmode, std::allocator<wchar_t> const&)
+00000000000ba970 W std::__cxx11::basic_ostringstream<char, std::char_traits<char>, std::allocator<char> >::str(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >&&)
+00000000000bd5a0 W std::__cxx11::basic_ostringstream<char, std::char_traits<char>, std::allocator<char> >::basic_ostringstream(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >&&, std::_Ios_Openmode)
+00000000000bb970 W std::__cxx11::basic_ostringstream<char, std::char_traits<char>, std::allocator<char> >::basic_ostringstream(std::_Ios_Openmode, std::allocator<char> const&)
+                 U std::__cxx11::basic_ostringstream<char, std::char_traits<char>, std::allocator<char> >::basic_ostringstream()
+00000000000bd110 W std::__cxx11::basic_ostringstream<char, std::char_traits<char>, std::allocator<char> >::basic_ostringstream(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >&&, std::_Ios_Openmode)
+00000000000bb860 W std::__cxx11::basic_ostringstream<char, std::char_traits<char>, std::allocator<char> >::basic_ostringstream(std::_Ios_Openmode, std::allocator<char> const&)
+                 U std::__cxx11::basic_ostringstream<char, std::char_traits<char>, std::allocator<char> >::~basic_ostringstream()@GLIBCXX_3.4.21
+00000000000bb050 W std::__cxx11::basic_ostringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::str(std::__cxx11::basic_string<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >&&)
+00000000000be930 W std::__cxx11::basic_ostringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::basic_ostringstream(std::__cxx11::basic_string<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >&&, std::_Ios_Openmode)
+00000000000bc4c0 W std::__cxx11::basic_ostringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::basic_ostringstream(std::_Ios_Openmode, std::allocator<wchar_t> const&)
+00000000000be5c0 W std::__cxx11::basic_ostringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::basic_ostringstream(std::__cxx11::basic_string<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >&&, std::_Ios_Openmode)
+00000000000bc3b0 W std::__cxx11::basic_ostringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::basic_ostringstream(std::_Ios_Openmode, std::allocator<wchar_t> const&)
+                 U std::ios_base::failure::failure(std::string const&)@GLIBCXX_3.4
+                 U std::ios_base::ios_base()@GLIBCXX_3.4
+                 U std::ios_base::~ios_base()@GLIBCXX_3.4
+                 U std::bad_alloc::~bad_alloc()@GLIBCXX_3.4
+                 U std::basic_ios<char, std::char_traits<char> >::init(std::basic_streambuf<char, std::char_traits<char> >*)@GLIBCXX_3.4
+                 U std::basic_ios<char, std::char_traits<char> >::clear(std::_Ios_Iostate)@GLIBCXX_3.4
+                 U std::basic_ios<wchar_t, std::char_traits<wchar_t> >::init(std::basic_streambuf<wchar_t, std::char_traits<wchar_t> >*)@GLIBCXX_3.4
+                 U std::exception::~exception()@GLIBCXX_3.4
+                 U operator new(unsigned long)@GLIBCXX_3.4
+                 U operator new(unsigned long, std::nothrow_t const&)@GLIBCXX_3.4
+                 U std::_Hash_bytes(void const*, unsigned long, unsigned long)@CXXABI_1.3.5
+                 U std::__once_call@GLIBCXX_3.4.11
+                 U std::__once_callable@GLIBCXX_3.4.11
+                 U std::basic_ostream<char, std::char_traits<char> >& std::__ostream_insert<char, std::char_traits<char> >(std::basic_ostream<char, std::char_traits<char> >&, char const*, long)@GLIBCXX_3.4.9
+                 U std::__throw_bad_cast()@GLIBCXX_3.4
+                 U std::current_exception()@CXXABI_1.3.3
+                 U std::iostream_category()@GLIBCXX_3.4.21
+                 U std::rethrow_exception(std::__exception_ptr::exception_ptr)@CXXABI_1.3.3
+                 U std::__throw_bad_alloc()@GLIBCXX_3.4
+0000000000028794 T std::__throw_ios_failure(char const*, int)
+                 U std::__throw_logic_error(char const*)@GLIBCXX_3.4
+                 U std::__throw_length_error(char const*)@GLIBCXX_3.4
+                 U std::__throw_system_error(int)@GLIBCXX_3.4.11
+00000000000ae130 T std::__glibcxx_assert_fail(char const*, int, char const*, char const*)
+                 U std::ios_base_library_init()
+                 U std::__throw_runtime_error(char const*)@GLIBCXX_3.4
+                 U std::__throw_out_of_range_fmt(char const*, ...)@GLIBCXX_3.4.20
+                 U std::__throw_bad_array_new_length()
+                 U std::basic_istream<char, std::char_traits<char> >& std::ws<char, std::char_traits<char> >(std::basic_istream<char, std::char_traits<char> >&)@GLIBCXX_3.4
+                 U std::cin@GLIBCXX_3.4
+                 U std::cout@GLIBCXX_3.4
+                 U std::basic_istream<char, std::char_traits<char> >& std::getline<char, std::char_traits<char>, std::allocator<char> >(std::basic_istream<char, std::char_traits<char> >&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >&, char)@GLIBCXX_3.4.21
+                 U std::nothrow@GLIBCXX_3.4
+                 U std::terminate()@GLIBCXX_3.4
+                 U std::basic_ostream<char, std::char_traits<char> >& std::operator<< <std::char_traits<char> >(std::basic_ostream<char, std::char_traits<char> >&, char const*)@GLIBCXX_3.4
+                 U std::basic_istream<char, std::char_traits<char> >& std::operator>><char, std::char_traits<char> >(std::basic_istream<char, std::char_traits<char> >&, char&)@GLIBCXX_3.4
+                 U std::basic_istream<char, std::char_traits<char> >& std::operator>><char, std::char_traits<char>, std::allocator<char> >(std::basic_istream<char, std::char_traits<char> >&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >&)@GLIBCXX_3.4.21
+                 U typeinfo for __cxxabiv1::__forced_unwind@CXXABI_1.3.2
+                 U typeinfo for __cxxabiv1::__si_class_type_info@CXXABI_1.3
+00000000000f1238 D typeinfo for arx::MotorType
+                 U typeinfo for fmt::v6::format_error
+00000000000f11e0 D typeinfo for spdlog::level::level_enum
+00000000000f15d0 V typeinfo for std::filesystem::__cxx11::filesystem_error
+                 U typeinfo for std::thread::_State@GLIBCXX_3.4.22
+                 U typeinfo for std::ios_base::failure@GLIBCXX_3.4
+00000000000f1268 D typeinfo for std::allocator<char>
+                 U typeinfo for std::istream@GLIBCXX_3.4
+                 U typeinfo for std::range_error@GLIBCXX_3.4
+00000000000f15e8 V typeinfo for std::codecvt_utf8<wchar_t, 1114111ul, (std::codecvt_mode)0>
+                 U typeinfo for std::domain_error@GLIBCXX_3.4
+                 U typeinfo for std::length_error@GLIBCXX_3.4
+                 U typeinfo for std::out_of_range@GLIBCXX_3.4
+                 U typeinfo for std::system_error@GLIBCXX_3.4.11
+                 U typeinfo for std::basic_filebuf<char, std::char_traits<char> >@GLIBCXX_3.4
+                 U typeinfo for std::runtime_error@GLIBCXX_3.4
+                 U typeinfo for std::overflow_error@GLIBCXX_3.4
+                 U typeinfo for std::basic_streambuf<char, std::char_traits<char> >@GLIBCXX_3.4
+00000000000f1248 D typeinfo for std::__new_allocator<char>
+                 U typeinfo for std::invalid_argument@GLIBCXX_3.4
+                 U typeinfo for std::nested_exception@CXXABI_1.3.5
+                 U typeinfo for std::__codecvt_utf8_base<wchar_t>@GLIBCXX_3.4.21
+00000000000f12b8 D typeinfo for std::_Sp_make_shared_tag
+                 U typeinfo for std::bad_alloc@GLIBCXX_3.4
+                 U typeinfo for std::exception@GLIBCXX_3.4
+                 U typeinfo for std::type_info@GLIBCXX_3.4
+00000000000c6880 R typeinfo name for arx::MotorType
+00000000000c6840 R typeinfo name for spdlog::level::level_enum
+00000000000c7420 R typeinfo name for std::thread::_State_impl<std::thread::_Invoker<std::tuple<void (arx::Arx5ControllerBase::*)(), arx::Arx5ControllerBase*> > >
+00000000000c693d R typeinfo name for std::allocator<char>
+00000000000cf3a0 V typeinfo name for std::codecvt_utf8<wchar_t, 1114111ul, (std::codecvt_mode)0>
+00000000000c6900 R typeinfo name for std::__new_allocator<char>
+                 U VTT for std::__cxx11::basic_stringstream<char, std::char_traits<char>, std::allocator<char> >@GLIBCXX_3.4.21
+                 U VTT for std::__cxx11::basic_stringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >@GLIBCXX_3.4.21
+                 U VTT for std::__cxx11::basic_istringstream<char, std::char_traits<char>, std::allocator<char> >@GLIBCXX_3.4.21
+                 U VTT for std::__cxx11::basic_istringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >@GLIBCXX_3.4.21
+                 U VTT for std::__cxx11::basic_ostringstream<char, std::char_traits<char>, std::allocator<char> >@GLIBCXX_3.4.21
+                 U VTT for std::__cxx11::basic_ostringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >@GLIBCXX_3.4.21
+                 U VTT for std::basic_ifstream<char, std::char_traits<char> >@GLIBCXX_3.4
+                 U vtable for __cxxabiv1::__enum_type_info@CXXABI_1.3
+                 U vtable for __cxxabiv1::__class_type_info@CXXABI_1.3
+                 U vtable for __cxxabiv1::__pointer_type_info@CXXABI_1.3
+                 U vtable for __cxxabiv1::__function_type_info@CXXABI_1.3
+                 U vtable for __cxxabiv1::__si_class_type_info@CXXABI_1.3
+                 U vtable for __cxxabiv1::__vmi_class_type_info@CXXABI_1.3
+                 U vtable for fmt::v6::format_error
+00000000000f16e0 V vtable for std::filesystem::__cxx11::filesystem_error
+                 U vtable for std::__cxx11::basic_stringbuf<char, std::char_traits<char>, std::allocator<char> >@GLIBCXX_3.4.21
+                 U vtable for std::__cxx11::basic_stringbuf<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >@GLIBCXX_3.4.21
+                 U vtable for std::__cxx11::basic_stringstream<char, std::char_traits<char>, std::allocator<char> >@GLIBCXX_3.4.21
+                 U vtable for std::__cxx11::basic_stringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >@GLIBCXX_3.4.21
+                 U vtable for std::__cxx11::basic_istringstream<char, std::char_traits<char>, std::allocator<char> >@GLIBCXX_3.4.21
+                 U vtable for std::__cxx11::basic_istringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >@GLIBCXX_3.4.21
+                 U vtable for std::__cxx11::basic_ostringstream<char, std::char_traits<char>, std::allocator<char> >@GLIBCXX_3.4.21
+                 U vtable for std::__cxx11::basic_ostringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >@GLIBCXX_3.4.21
+                 U vtable for std::ostream@GLIBCXX_3.4
+00000000000f1630 V vtable for std::codecvt_utf8<wchar_t, 1114111ul, (std::codecvt_mode)0>
+                 U vtable for std::system_error@GLIBCXX_3.4.11
+                 U vtable for std::basic_filebuf<char, std::char_traits<char> >@GLIBCXX_3.4
+                 U vtable for std::basic_ifstream<char, std::char_traits<char> >@GLIBCXX_3.4
+                 U vtable for std::basic_streambuf<char, std::char_traits<char> >@GLIBCXX_3.4
+                 U vtable for std::basic_streambuf<wchar_t, std::char_traits<wchar_t> >@GLIBCXX_3.4
+                 U vtable for std::bad_alloc@GLIBCXX_3.4
+                 U vtable for std::basic_ios<char, std::char_traits<char> >@GLIBCXX_3.4
+                 U vtable for std::basic_ios<wchar_t, std::char_traits<wchar_t> >@GLIBCXX_3.4
+0000000000052830 T std::once_flag::_Prepare_execution::_Prepare_execution<std::call_once<pybind11::gil_safe_call_once_and_store<pybind11::detail::npy_api>::call_once_and_store_result<pybind11::detail::npy_api (&)()>(pybind11::detail::npy_api (&)(), void (*)(pybind11::detail::npy_api&))::{lambda()#1}>(std::once_flag&, pybind11::detail::npy_api (&)())::{lambda()#1}>(pybind11::detail::npy_api (&)())::{lambda()#1}::_FUN()

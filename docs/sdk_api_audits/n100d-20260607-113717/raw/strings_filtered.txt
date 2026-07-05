@@ -1,0 +1,182 @@
+Arx5CartesianController
+Arx5JointController
+calibrate_joint
+Cannot set kp to non-zero when the joint pos cmd is far from current pos.
+Cannot set kp too large when the joint pos cmd is far from current pos.
+cartesian_controller
+cartesian_controller_6
+cartesian_controller_7
+Clearing motor controller states...
+ControllerConfig
+controller_config.background_send_recv should be set to true when running cartesian controller.
+ControllerConfigFactory
+controller_dt
+controller_type
+Current kp is zero. Setting to default kp kd
+Disconnect motors without setting to damping
+EEFState
+EEFState timestamp must be set for all waypoints
+EEFState timestamps must be in ascending order
+Emergency state entered. Please restart the program.
+/etc/sysconfig/clock
+Finish setting zero point for joint {}.
+Finish setting zero point. Please fully open the gripper and press enter to continue
+FRN3arx18RobotConfigFactoryEvE
+FRN3arx23ControllerConfigFactoryEvE
+Fully-open joint position readout: 
+get_config
+get_controller_config
+get_eef_cmd
+get_eef_state
+get_joint_cmd
+get_joint_state
+get_robot_config
+__getstate__
+Gripper pos cmd clipped: {:.3f} to {:.3f}
+Gripper pos cmd clipped from {:.3f} to max: {:.3f}
+Gripper pos cmd clipped from {:.3f} to min: {:.3f}
+Gripper position error: got {:.3f} but should be in 0~{:.3f} (m). Please close the gripper before turning on the arm; change robot_config.gripper_open_readout to a negative number (a common value is -3.4 for some recent robots); or recalibrate gripper home and width.
+Gripper torque cmd clipped from {:.3f} to max {:.3f}
+Gripper torque cmd clipped from {:.3f} to min {:.3f}
+Gripper torque is too large, gripper pos cmd is not updated
+ instance to C++ rvalue: instance has multiple references (#define PYBIND11_DETAILED_ERROR_MESSAGES or compile in debug mode for details)
+joint_controller
+joint_controller_6
+joint_controller_7
+joint_dof
+Joint {} interpolated command data error: {:.3f}. Please restart the program.
+Joint {} pos {:.3f} pos cmd clipped from {:.3f} to max {:.3f}
+Joint {} pos {:.3f} pos cmd clipped from {:.3f} to min {:.3f}
+Joint {} pos data error: {:.3f}. Please restart the program.
+joint_pos_max
+joint_pos_min
+JointState
+Joint state dimension mismatch
+JointStateInterpolator::append_traj: Empty trajectory
+JointState timestamp must be set for all waypoints
+JointState timestamps must be in ascending order
+Joint {} torque cmd clipped from {:.3f} to max {:.3f}
+Joint {} torque cmd clipped from {:.3f} to min {:.3f}
+Joint {} torque data error: {:.3f}. Please restart the program.
+joint_torque_max
+joint_vel_max
+Joint velocity reaches limit: Joint {} pos {:.3f} pos cmd clipped: {:.3f} to {:.3f}
+/models
+N3arx10JointStateE
+N3arx11RobotConfigE
+N3arx16ControllerConfigE
+N3arx18Arx5ControllerBaseE
+N3arx18RobotConfigFactoryE
+N3arx19Arx5JointControllerE
+N3arx23Arx5CartesianControllerE
+N3arx23ControllerConfigFactoryE
+N3arx8EEFStateE
+N8pybind116detail16value_and_holderE
+NSt6thread11_State_implINS_8_InvokerISt5tupleIJMN3arx18Arx5ControllerBaseEFvvEPS4_EEEEEE
+Over current detected once on joint {}, current: {:.3f}
+Over current detected, robot is set to damping. Please restart the program.
+overloading a method with both static and instance methods is not supported; #define PYBIND11_DETAILED_ERROR_MESSAGES or compile in debug mode for more details
+PFRN3arx18RobotConfigFactoryEvE
+PFRN3arx23ControllerConfigFactoryEvE
+  Please update the robot_config_.gripper_open_readout value in config.h to finish gripper calibration.
+pybind11::detail::atomic_get_or_create_in_state_dict() FAILED
+pybind11::detail::get_python_state_dict() FAILED
+pybind11::detail::instance::get_value_and_holder: type is not a pybind11 base of the given instance (#define PYBIND11_DETAILED_ERROR_MESSAGES or compile in debug mode for type details)
+PyGILState_Ensure
+PyGILState_GetThisThreadState
+PyGILState_Release
+PyInterpreterState_Get
+PyInterpreterState_GetDict
+PyInterpreterState_Main
+PyThreadState_Clear
+PyThreadState_DeleteCurrent
+PyThreadState_New
+_PyThreadState_UncheckedGet
+return_value_policy = copy, but type is non-copyable! (#define PYBIND11_DETAILED_ERROR_MESSAGES or compile in debug mode for details)
+return_value_policy = move, but type is neither movable nor copyable! (#define PYBIND11_DETAILED_ERROR_MESSAGES or compile in debug mode for details)
+RobotConfig
+RobotConfigFactory
+robot_model
+set_eef_cmd
+set_joint_cmd
+set_joint_traj
+__setstate__
+set_to_damping
+Set to damping before exit
+St12codecvt_utf8IwLm1114111ELSt12codecvt_mode0EE
+St23_Sp_counted_ptr_inplaceIN3arx11RobotConfigESaIvELN9__gnu_cxx12_Lock_policyE2EE
+St23_Sp_counted_ptr_inplaceIN3arx16ControllerConfigESaIvELN9__gnu_cxx12_Lock_policyE2EE
+Start calibrating joint {}. Please move the joint to the home position and press enter to continue
+Target max kp: {}, kp threshold: {}. Current pos: {}, cmd pos: {}, position error threshold: {}
+ to C++ type '?' (#define PYBIND11_DETAILED_ERROR_MESSAGES or compile in debug mode for details)
+' to Python object (#define PYBIND11_DETAILED_ERROR_MESSAGES or compile in debug mode for details)
+Unknown controller type. Currently available: joint_controller, cartesian_controller
+Unknown robot model. Currently available: 
+URDF models directory: %s
+When shutting down X5 robot arms, the motors have to be set to passive. controller_config_.shutdown_to_passive is set to `true`
+_ZN3fmt2v68internal10basic_dataIvE23zero_or_powers_of_10_32E
+_ZN3fmt2v68internal10basic_dataIvE23zero_or_powers_of_10_64E
+_ZN6ArxCan12can_cmd_initEth
+_ZN6ArxCan15enable_DM_motorEt
+_ZN6ArxCan17send_DM_motor_cmdEtfffff
+_ZN6ArxCan17send_EC_motor_cmdEtfffff
+_ZN6ArxCan18reset_zero_readoutEt
+_ZN6spdlog15stdout_color_mtINS_19synchronous_factoryEEESt10shared_ptrINS_6loggerEERKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS_10color_modeE
+_ZNK6spdlog7details10backtracer7enabledEv
+_ZNKSt19__codecvt_utf8_baseIwE10do_unshiftER11__mbstate_tPcS3_RS3_
+_ZNKSt19__codecvt_utf8_baseIwE5do_inER11__mbstate_tPKcS4_RS4_PwS6_RS6_
+_ZNKSt19__codecvt_utf8_baseIwE6do_outER11__mbstate_tPKwS4_RS4_PcS6_RS6_
+_ZNKSt19__codecvt_utf8_baseIwE9do_lengthER11__mbstate_tPKcS4_m
+_ZNSt10filesystem7__cxx1128recursive_directory_iterator25disable_recursion_pendingEv
+_ZNSt12__basic_fileIcE8sys_openEiSt13_Ios_Openmode
+_ZNSt12codecvt_utf8IwLm1114111ELSt12codecvt_mode0EED0Ev
+_ZNSt12codecvt_utf8IwLm1114111ELSt12codecvt_mode0EED1Ev
+_ZNSt12codecvt_utf8IwLm1114111ELSt12codecvt_mode0EED2Ev
+_ZNSt13basic_filebufIcSt11char_traitsIcEE4openEPKcSt13_Ios_Openmode
+_ZNSt13basic_filebufIcSt11char_traitsIcEE7seekoffElSt12_Ios_SeekdirSt13_Ios_Openmode
+_ZNSt13basic_filebufIcSt11char_traitsIcEE7seekposESt4fposI11__mbstate_tESt13_Ios_Openmode
+_ZNSt14basic_ifstreamIcSt11char_traitsIcEEC1ERKNSt7__cxx1112basic_stringIcS1_SaIcEEESt13_Ios_Openmode
+_ZNSt15basic_streambufIcSt11char_traitsIcEE7seekoffElSt12_Ios_SeekdirSt13_Ios_Openmode
+_ZNSt15basic_streambufIcSt11char_traitsIcEE7seekposESt4fposI11__mbstate_tESt13_Ios_Openmode
+_ZNSt6thread15_M_start_threadESt10unique_ptrINS_6_StateESt14default_deleteIS1_EEPFvvE
+_ZNSt6thread6_StateD2Ev
+_ZNSt7codecvtIwc11__mbstate_tE2idE
+_ZNSt7codecvtIwc11__mbstate_tEC2Em
+_ZNSt7__cxx1115basic_stringbufIcSt11char_traitsIcESaIcEEC1EONS_12basic_stringIcS2_S3_EESt13_Ios_Openmode
+_ZNSt7__cxx1115basic_stringbufIcSt11char_traitsIcESaIcEEC1ESt13_Ios_OpenmodeRKS3_
+_ZNSt7__cxx1115basic_stringbufIcSt11char_traitsIcESaIcEEC2EONS_12basic_stringIcS2_S3_EESt13_Ios_Openmode
+_ZNSt7__cxx1115basic_stringbufIcSt11char_traitsIcESaIcEEC2ESt13_Ios_OpenmodeRKS3_
+_ZNSt7__cxx1115basic_stringbufIwSt11char_traitsIwESaIwEEC1EONS_12basic_stringIwS2_S3_EESt13_Ios_Openmode
+_ZNSt7__cxx1115basic_stringbufIwSt11char_traitsIwESaIwEEC1ESt13_Ios_OpenmodeRKS3_
+_ZNSt7__cxx1115basic_stringbufIwSt11char_traitsIwESaIwEEC2EONS_12basic_stringIwS2_S3_EESt13_Ios_Openmode
+_ZNSt7__cxx1115basic_stringbufIwSt11char_traitsIwESaIwEEC2ESt13_Ios_OpenmodeRKS3_
+_ZNSt7__cxx1118basic_stringstreamIcSt11char_traitsIcESaIcEEC1EONS_12basic_stringIcS2_S3_EESt13_Ios_Openmode
+_ZNSt7__cxx1118basic_stringstreamIcSt11char_traitsIcESaIcEEC1ESt13_Ios_OpenmodeRKS3_
+_ZNSt7__cxx1118basic_stringstreamIcSt11char_traitsIcESaIcEEC2EONS_12basic_stringIcS2_S3_EESt13_Ios_Openmode
+_ZNSt7__cxx1118basic_stringstreamIcSt11char_traitsIcESaIcEEC2ESt13_Ios_OpenmodeRKS3_
+_ZNSt7__cxx1118basic_stringstreamIwSt11char_traitsIwESaIwEEC1EONS_12basic_stringIwS2_S3_EESt13_Ios_Openmode
+_ZNSt7__cxx1118basic_stringstreamIwSt11char_traitsIwESaIwEEC1ESt13_Ios_OpenmodeRKS3_
+_ZNSt7__cxx1118basic_stringstreamIwSt11char_traitsIwESaIwEEC2EONS_12basic_stringIwS2_S3_EESt13_Ios_Openmode
+_ZNSt7__cxx1118basic_stringstreamIwSt11char_traitsIwESaIwEEC2ESt13_Ios_OpenmodeRKS3_
+_ZNSt7__cxx1119basic_istringstreamIcSt11char_traitsIcESaIcEEC1EONS_12basic_stringIcS2_S3_EESt13_Ios_Openmode
+_ZNSt7__cxx1119basic_istringstreamIcSt11char_traitsIcESaIcEEC1ESt13_Ios_OpenmodeRKS3_
+_ZNSt7__cxx1119basic_istringstreamIcSt11char_traitsIcESaIcEEC2EONS_12basic_stringIcS2_S3_EESt13_Ios_Openmode
+_ZNSt7__cxx1119basic_istringstreamIcSt11char_traitsIcESaIcEEC2ESt13_Ios_OpenmodeRKS3_
+_ZNSt7__cxx1119basic_istringstreamIwSt11char_traitsIwESaIwEEC1EONS_12basic_stringIwS2_S3_EESt13_Ios_Openmode
+_ZNSt7__cxx1119basic_istringstreamIwSt11char_traitsIwESaIwEEC1ESt13_Ios_OpenmodeRKS3_
+_ZNSt7__cxx1119basic_istringstreamIwSt11char_traitsIwESaIwEEC2EONS_12basic_stringIwS2_S3_EESt13_Ios_Openmode
+_ZNSt7__cxx1119basic_istringstreamIwSt11char_traitsIwESaIwEEC2ESt13_Ios_OpenmodeRKS3_
+_ZNSt7__cxx1119basic_ostringstreamIcSt11char_traitsIcESaIcEEC1EONS_12basic_stringIcS2_S3_EESt13_Ios_Openmode
+_ZNSt7__cxx1119basic_ostringstreamIcSt11char_traitsIcESaIcEEC1ESt13_Ios_OpenmodeRKS3_
+_ZNSt7__cxx1119basic_ostringstreamIcSt11char_traitsIcESaIcEEC2EONS_12basic_stringIcS2_S3_EESt13_Ios_Openmode
+_ZNSt7__cxx1119basic_ostringstreamIcSt11char_traitsIcESaIcEEC2ESt13_Ios_OpenmodeRKS3_
+_ZNSt7__cxx1119basic_ostringstreamIwSt11char_traitsIwESaIwEEC1EONS_12basic_stringIwS2_S3_EESt13_Ios_Openmode
+_ZNSt7__cxx1119basic_ostringstreamIwSt11char_traitsIwESaIwEEC1ESt13_Ios_OpenmodeRKS3_
+_ZNSt7__cxx1119basic_ostringstreamIwSt11char_traitsIwESaIwEEC2EONS_12basic_stringIwS2_S3_EESt13_Ios_Openmode
+_ZNSt7__cxx1119basic_ostringstreamIwSt11char_traitsIwESaIwEEC2ESt13_Ios_OpenmodeRKS3_
+_ZNSt9basic_iosIcSt11char_traitsIcEE5clearESt12_Ios_Iostate
+_ZTINSt6thread6_StateE
+_ZTISt12codecvt_utf8IwLm1114111ELSt12codecvt_mode0EE
+_ZTSNSt6thread11_State_implINS_8_InvokerISt5tupleIJMN3arx18Arx5ControllerBaseEFvvEPS4_EEEEEE
+_ZTSSt12codecvt_utf8IwLm1114111ELSt12codecvt_mode0EE
+_ZTVSt12codecvt_utf8IwLm1114111ELSt12codecvt_mode0EE

@@ -1,0 +1,85 @@
+{
+  "status": "ok",
+  "schema": "armctrl.arm_runtime_status.v1",
+  "backend": "arx5_sdk",
+  "runtime_session_id": "183e15b3-041b-4bbf-aa45-6760a8841295",
+  "mode": "hold_safe",
+  "owner": null,
+  "q_meas": [
+    0.3168153762817383,
+    0.6410694122314453,
+    0.47283935546875,
+    -0.23136520385742188,
+    0.3103303909301758,
+    0.22373580932617188
+  ],
+  "q_hold": [
+    0.315,
+    0.6375,
+    0.4875,
+    -0.225,
+    0.31500000000000006,
+    0.225
+  ],
+  "safe_center": [
+    0.0,
+    0.3,
+    0.3,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "controller_dt_s": 0.002,
+  "send_hz": 50.0,
+  "hold_hz": 50.0,
+  "hold_tick_count": 20130,
+  "last_hold_wall_time_s": 1780906056.347352,
+  "hold_fresh": true,
+  "fault_flags": [],
+  "heartbeat": {
+    "wall_time_s": 1780906056.3477461,
+    "age_s": 0.015452861785888672,
+    "max_age_s": 1.0,
+    "fresh": true
+  },
+  "runtime_contract": {
+    "state_machine": "passive_safe->recover_to_safe->hold_safe->owner_lease",
+    "single_motion_owner": true,
+    "readiness_requires_live_hold": true
+  },
+  "recovery": {
+    "status": "completed",
+    "producer": "runtime_recovery",
+    "mode": "trajectory_replay",
+    "trajectory_sample_hz": 50.0,
+    "actual_send_hz": 49.99550234227502,
+    "send_jitter_ms_p95": 0.0306499609723683,
+    "send_jitter_ms_p99": 0.03272898495197338,
+    "controller_dt_s": 0.002,
+    "sample_count": 32,
+    "landing_mode": "hold"
+  },
+  "readiness": {
+    "agent_sysid_smoke_allowed": true,
+    "live_hold_allowed": true,
+    "safe_center_allowed": false,
+    "failed_checks": [],
+    "safe_center_failed_checks": [
+      "q_hold_close_to_safe_center"
+    ]
+  },
+  "model": "X5",
+  "interface": "can0",
+  "hardware_motion": true,
+  "sdk_opened": true,
+  "movement_command_sent": true,
+  "requires_confirm": "I UNDERSTAND THIS WILL START THE REAL ARM RUNTIME",
+  "fault_landing_mode": "damping",
+  "artifacts": {
+    "runtime_session": "runs/lab-fourier-sysid-20260608-154946/runtime_session.json",
+    "runtime_status": "runs/lab-fourier-sysid-20260608-154946/runtime_status_after_full_script_fix.json"
+  },
+  "owner_lease": null,
+  "owner_deadman": null,
+  "hold_age_s": 0.015852689743041992
+}

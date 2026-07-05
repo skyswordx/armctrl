@@ -1,8 +1,2 @@
-"""teleop 子包：实时输入设备到控制命令的转换层。
+"""Teleop input adapters for runtime-owned arm control."""
 
-当前重点是 Xbox 手柄，但结构上已经拆成：
-- 滤波；
-- 事件映射；
-- 运行循环；
-- GUI 面板。
-"""

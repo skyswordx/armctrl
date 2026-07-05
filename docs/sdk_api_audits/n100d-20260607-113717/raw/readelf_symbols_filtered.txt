@@ -1,0 +1,76 @@
+    19: 0000000000000000     0 FUNC    GLOBAL DEFAULT  UND _ZN6ArxCan12can_cmd_initEth
+    20: 0000000000000000     0 OBJECT  GLOBAL DEFAULT  UND _ZTINSt6thread6_StateE@GLIBCXX_3.4.22 (7)
+    33: 0000000000000000     0 FUNC    GLOBAL DEFAULT  UND _ZNSt7codecvtIwc11__mbstate_tEC2Em@GLIBCXX_3.4 (2)
+    57: 0000000000000000     0 FUNC    GLOBAL DEFAULT  UND _ZNKSt19__codecvt_utf8_baseIwE6do_outER11__mbstate_tPKwS4_RS4_PcS6_RS6_@GLIBCXX_3.4.21 (9)
+    65: 0000000000000000     0 NOTYPE  GLOBAL DEFAULT  UND PyThreadState_DeleteCurrent
+    66: 0000000000000000     0 NOTYPE  GLOBAL DEFAULT  UND PyGILState_GetThisThreadState
+    87: 0000000000000000     0 FUNC    GLOBAL DEFAULT  UND _ZN6ArxCan15enable_DM_motorEt
+    95: 0000000000000000     0 FUNC    GLOBAL DEFAULT  UND _ZNSt6thread6_StateD2Ev@GLIBCXX_3.4.22 (7)
+   119: 0000000000000000     0 FUNC    GLOBAL DEFAULT  UND _ZN6ArxCan17send_DM_motor_cmdEtfffff
+   124: 0000000000000000     0 NOTYPE  GLOBAL DEFAULT  UND PyInterpreterState_GetDict
+   141: 0000000000000000     0 FUNC    GLOBAL DEFAULT  UND _ZNSt13basic_filebufIcSt11char_traitsIcEE7seekoffElSt12_Ios_SeekdirSt13_Ios_Openmode@GLIBCXX_3.4 (2)
+   188: 0000000000000000     0 FUNC    GLOBAL DEFAULT  UND _ZNSt13basic_filebufIcSt11char_traitsIcEE7seekposESt4fposI11__mbstate_tESt13_Ios_Openmode@GLIBCXX_3.4 (2)
+   200: 0000000000000000     0 FUNC    GLOBAL DEFAULT  UND _ZN6ArxCan18reset_zero_readoutEt
+   222: 0000000000000000     0 FUNC    GLOBAL DEFAULT  UND _ZNK6spdlog7details10backtracer7enabledEv
+   223: 0000000000000000     0 FUNC    GLOBAL DEFAULT  UND _ZNSt13basic_filebufIcSt11char_traitsIcEE4openEPKcSt13_Ios_Openmode@GLIBCXX_3.4 (2)
+   227: 0000000000000000     0 FUNC    GLOBAL DEFAULT  UND _ZNSt6thread15_M_start_threadESt10unique_ptrINS_6_StateESt14default_deleteIS1_EEPFvvE@GLIBCXX_3.4.22 (7)
+   244: 0000000000000000     0 FUNC    GLOBAL DEFAULT  UND _ZNKSt19__codecvt_utf8_baseIwE5do_inER11__mbstate_tPKcS4_RS4_PwS6_RS6_@GLIBCXX_3.4.21 (9)
+   266: 0000000000000000     0 OBJECT  GLOBAL DEFAULT  UND _ZN3fmt2v68internal10basic_dataIvE23zero_or_powers_of_10_32E
+   306: 0000000000000000     0 OBJECT  GLOBAL DEFAULT  UND _ZN3fmt2v68internal10basic_dataIvE23zero_or_powers_of_10_64E
+   312: 0000000000000000     0 NOTYPE  GLOBAL DEFAULT  UND PyGILState_Release
+   356: 0000000000000000     0 FUNC    GLOBAL DEFAULT  UND _ZNSt12__basic_fileIcE8sys_openEiSt13_Ios_Openmode@GLIBCXX_3.4 (2)
+   357: 0000000000000000     0 FUNC    GLOBAL DEFAULT  UND _ZN6spdlog15stdout_color_mtINS_19synchronous_factoryEEESt10shared_ptrINS_6loggerEERKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS_10color_modeE
+   359: 0000000000000000     0 OBJECT  GLOBAL DEFAULT  UND _ZNSt7codecvtIwc11__mbstate_tE2idE@GLIBCXX_3.4 (2)
+   360: 0000000000000000     0 FUNC    GLOBAL DEFAULT  UND _ZNSt15basic_streambufIcSt11char_traitsIcEE7seekposESt4fposI11__mbstate_tESt13_Ios_Openmode@GLIBCXX_3.4 (2)
+   366: 0000000000000000     0 FUNC    GLOBAL DEFAULT  UND _ZNSt15basic_streambufIcSt11char_traitsIcEE7seekoffElSt12_Ios_SeekdirSt13_Ios_Openmode@GLIBCXX_3.4 (2)
+   375: 0000000000000000     0 FUNC    GLOBAL DEFAULT  UND _ZNKSt19__codecvt_utf8_baseIwE10do_unshiftER11__mbstate_tPcS3_RS3_@GLIBCXX_3.4.21 (9)
+   389: 0000000000000000     0 FUNC    GLOBAL DEFAULT  UND _ZNSt14basic_ifstreamIcSt11char_traitsIcEEC1ERKNSt7__cxx1112basic_stringIcS1_SaIcEEESt13_Ios_Openmode@GLIBCXX_3.4.21 (9)
+   396: 0000000000000000     0 FUNC    GLOBAL DEFAULT  UND _ZNKSt19__codecvt_utf8_baseIwE9do_lengthER11__mbstate_tPKcS4_m@GLIBCXX_3.4.21 (9)
+   404: 0000000000000000     0 NOTYPE  GLOBAL DEFAULT  UND PyThreadState_New
+   408: 0000000000000000     0 FUNC    GLOBAL DEFAULT  UND _ZNSt9basic_iosIcSt11char_traitsIcEE5clearESt12_Ios_Iostate@GLIBCXX_3.4 (2)
+   409: 0000000000000000     0 NOTYPE  GLOBAL DEFAULT  UND _PyThreadState_UncheckedGet
+   434: 0000000000000000     0 NOTYPE  GLOBAL DEFAULT  UND PyInterpreterState_Main
+   440: 0000000000000000     0 NOTYPE  GLOBAL DEFAULT  UND PyThreadState_Clear
+   441: 0000000000000000     0 NOTYPE  GLOBAL DEFAULT  UND PyInterpreterState_Get
+   446: 0000000000000000     0 FUNC    GLOBAL DEFAULT  UND _ZN6ArxCan17send_EC_motor_cmdEtfffff
+   459: 0000000000000000     0 NOTYPE  GLOBAL DEFAULT  UND PyGILState_Ensure
+   492: 00000000000bc220   387 FUNC    WEAK   DEFAULT    8 _ZNSt7__cxx1119basic_istringstreamIwSt11char_traitsIwESaIwEEC1ESt13_Ios_OpenmodeRKS3_
+   493: 00000000000bb5c0   279 FUNC    WEAK   DEFAULT    8 _ZNSt7__cxx1119basic_istringstreamIcSt11char_traitsIcESaIcEEC2ESt13_Ios_OpenmodeRKS3_
+   503: 00000000000940c0    23 FUNC    WEAK   DEFAULT    8 _ZNSt12codecvt_utf8IwLm1114111ELSt12codecvt_mode0EED1Ev
+   508: 00000000000be770   442 FUNC    WEAK   DEFAULT    8 _ZNSt7__cxx1119basic_istringstreamIwSt11char_traitsIwESaIwEEC2EONS_12basic_stringIwS2_S3_EESt13_Ios_Openmode
+   511: 00000000000bc630   372 FUNC    WEAK   DEFAULT    8 _ZNSt7__cxx1118basic_stringstreamIwSt11char_traitsIwESaIwEEC2ESt13_Ios_OpenmodeRKS3_
+   519: 00000000000bd350   584 FUNC    WEAK   DEFAULT    8 _ZNSt7__cxx1119basic_istringstreamIcSt11char_traitsIcESaIcEEC2EONS_12basic_stringIcS2_S3_EESt13_Ios_Openmode
+   538: 00000000000ba4d0   131 FUNC    WEAK   DEFAULT    8 _ZNSt7__cxx1115basic_stringbufIcSt11char_traitsIcESaIcEEC2ESt13_Ios_OpenmodeRKS3_
+   543: 00000000000940c0    23 FUNC    WEAK   DEFAULT    8 _ZNSt12codecvt_utf8IwLm1114111ELSt12codecvt_mode0EED2Ev
+   554: 00000000000bc3b0   263 FUNC    WEAK   DEFAULT    8 _ZNSt7__cxx1119basic_ostringstreamIwSt11char_traitsIwESaIwEEC2ESt13_Ios_OpenmodeRKS3_
+   578: 00000000000c7420    89 OBJECT  GLOBAL DEFAULT   10 _ZTSNSt6thread11_State_implINS_8_InvokerISt5tupleIJMN3arx18Arx5ControllerBaseEFvvEPS4_EEEEEE
+   583: 00000000000be930   530 FUNC    WEAK   DEFAULT    8 _ZNSt7__cxx1119basic_ostringstreamIwSt11char_traitsIwESaIwEEC1EONS_12basic_stringIwS2_S3_EESt13_Ios_Openmode
+   590: 00000000000bac30   134 FUNC    WEAK   DEFAULT    8 _ZNSt7__cxx1115basic_stringbufIwSt11char_traitsIwESaIwEEC1ESt13_Ios_OpenmodeRKS3_
+   591: 00000000000c0450    12 FUNC    GLOBAL DEFAULT    8 _ZNSt10filesystem7__cxx1128recursive_directory_iterator25disable_recursion_pendingEv
+   593: 00000000000bc100   282 FUNC    WEAK   DEFAULT    8 _ZNSt7__cxx1119basic_istringstreamIwSt11char_traitsIwESaIwEEC2ESt13_Ios_OpenmodeRKS3_
+   594: 00000000000bd5a0   671 FUNC    WEAK   DEFAULT    8 _ZNSt7__cxx1119basic_ostringstreamIcSt11char_traitsIcESaIcEEC1EONS_12basic_stringIcS2_S3_EESt13_Ios_Openmode
+   605: 00000000000befb0   635 FUNC    WEAK   DEFAULT    8 _ZNSt7__cxx1118basic_stringstreamIwSt11char_traitsIwESaIwEEC1EONS_12basic_stringIwS2_S3_EESt13_Ios_Openmode
+   613: 00000000000be0b0   280 FUNC    WEAK   DEFAULT    8 _ZNSt7__cxx1115basic_stringbufIwSt11char_traitsIwESaIwEEC1EONS_12basic_stringIwS2_S3_EESt13_Ios_Openmode
+   615: 00000000000bddb0   764 FUNC    WEAK   DEFAULT    8 _ZNSt7__cxx1118basic_stringstreamIcSt11char_traitsIcESaIcEEC1EONS_12basic_stringIcS2_S3_EESt13_Ios_Openmode
+   619: 00000000000bc9f0   421 FUNC    WEAK   DEFAULT    8 _ZNSt7__cxx1115basic_stringbufIcSt11char_traitsIcESaIcEEC1EONS_12basic_stringIcS2_S3_EESt13_Ios_Openmode
+   620: 00000000000bb970   343 FUNC    WEAK   DEFAULT    8 _ZNSt7__cxx1119basic_ostringstreamIcSt11char_traitsIcESaIcEEC1ESt13_Ios_OpenmodeRKS3_
+   622: 00000000000bbc50   459 FUNC    WEAK   DEFAULT    8 _ZNSt7__cxx1118basic_stringstreamIcSt11char_traitsIcESaIcEEC1ESt13_Ios_OpenmodeRKS3_
+   624: 00000000000f15e8    24 OBJECT  WEAK   DEFAULT   17 _ZTISt12codecvt_utf8IwLm1114111ELSt12codecvt_mode0EE
+   646: 00000000000bb6e0   376 FUNC    WEAK   DEFAULT    8 _ZNSt7__cxx1119basic_istringstreamIcSt11char_traitsIcESaIcEEC1ESt13_Ios_OpenmodeRKS3_
+   650: 00000000000bd110   562 FUNC    WEAK   DEFAULT    8 _ZNSt7__cxx1119basic_ostringstreamIcSt11char_traitsIcESaIcEEC2EONS_12basic_stringIcS2_S3_EESt13_Ios_Openmode
+   665: 00000000000f1630    88 OBJECT  WEAK   DEFAULT   17 _ZTVSt12codecvt_utf8IwLm1114111ELSt12codecvt_mode0EE
+   666: 00000000000cf3a0    49 OBJECT  WEAK   DEFAULT   10 _ZTSSt12codecvt_utf8IwLm1114111ELSt12codecvt_mode0EE
+   667: 00000000000bdb10   664 FUNC    WEAK   DEFAULT    8 _ZNSt7__cxx1118basic_stringstreamIcSt11char_traitsIcESaIcEEC2EONS_12basic_stringIcS2_S3_EESt13_Ios_Openmode
+   671: 00000000000bac30   134 FUNC    WEAK   DEFAULT    8 _ZNSt7__cxx1115basic_stringbufIwSt11char_traitsIwESaIwEEC2ESt13_Ios_OpenmodeRKS3_
+   672: 00000000000be5c0   428 FUNC    WEAK   DEFAULT    8 _ZNSt7__cxx1119basic_ostringstreamIwSt11char_traitsIwESaIwEEC2EONS_12basic_stringIwS2_S3_EESt13_Ios_Openmode
+   673: 00000000000bc9f0   421 FUNC    WEAK   DEFAULT    8 _ZNSt7__cxx1115basic_stringbufIcSt11char_traitsIcESaIcEEC2EONS_12basic_stringIcS2_S3_EESt13_Ios_Openmode
+   694: 00000000000bed90   531 FUNC    WEAK   DEFAULT    8 _ZNSt7__cxx1118basic_stringstreamIwSt11char_traitsIwESaIwEEC2EONS_12basic_stringIwS2_S3_EESt13_Ios_Openmode
+   698: 00000000000be0b0   280 FUNC    WEAK   DEFAULT    8 _ZNSt7__cxx1115basic_stringbufIwSt11char_traitsIwESaIwEEC2EONS_12basic_stringIwS2_S3_EESt13_Ios_Openmode
+   701: 00000000000bc7b0   470 FUNC    WEAK   DEFAULT    8 _ZNSt7__cxx1118basic_stringstreamIwSt11char_traitsIwESaIwEEC1ESt13_Ios_OpenmodeRKS3_
+   703: 00000000000bb860   260 FUNC    WEAK   DEFAULT    8 _ZNSt7__cxx1119basic_ostringstreamIcSt11char_traitsIcESaIcEEC2ESt13_Ios_OpenmodeRKS3_
+   704: 00000000000bbad0   369 FUNC    WEAK   DEFAULT    8 _ZNSt7__cxx1118basic_stringstreamIcSt11char_traitsIcESaIcEEC2ESt13_Ios_OpenmodeRKS3_
+   724: 00000000000ba4d0   131 FUNC    WEAK   DEFAULT    8 _ZNSt7__cxx1115basic_stringbufIcSt11char_traitsIcESaIcEEC1ESt13_Ios_OpenmodeRKS3_
+   736: 00000000000beb50   567 FUNC    WEAK   DEFAULT    8 _ZNSt7__cxx1119basic_istringstreamIwSt11char_traitsIwESaIwEEC1EONS_12basic_stringIwS2_S3_EESt13_Ios_Openmode
+   742: 00000000000bc4c0   354 FUNC    WEAK   DEFAULT    8 _ZNSt7__cxx1119basic_ostringstreamIwSt11char_traitsIwESaIwEEC1ESt13_Ios_OpenmodeRKS3_
+   743: 00000000000bd840   718 FUNC    WEAK   DEFAULT    8 _ZNSt7__cxx1119basic_istringstreamIcSt11char_traitsIcESaIcEEC1EONS_12basic_stringIcS2_S3_EESt13_Ios_Openmode
+   746: 00000000000940e0    41 FUNC    WEAK   DEFAULT    8 _ZNSt12codecvt_utf8IwLm1114111ELSt12codecvt_mode0EED0Ev

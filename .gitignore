@@ -29,3 +29,10 @@ cmake-build-*/
 # OS
 .DS_Store
 Thumbs.db
+
+tmp*
+
+.omx
+
+runs/*
+!runs/sysid_fourier_simulation/  

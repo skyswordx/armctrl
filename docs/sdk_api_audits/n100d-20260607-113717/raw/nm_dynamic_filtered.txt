@@ -1,0 +1,76 @@
+                 U PyGILState_Ensure
+                 U PyGILState_GetThisThreadState
+                 U PyGILState_Release
+                 U PyInterpreterState_Get
+                 U PyInterpreterState_GetDict
+                 U PyInterpreterState_Main
+                 U PyThreadState_Clear
+                 U PyThreadState_DeleteCurrent
+                 U PyThreadState_New
+                 U _PyThreadState_UncheckedGet
+                 U fmt::v6::internal::basic_data<void>::zero_or_powers_of_10_32
+                 U fmt::v6::internal::basic_data<void>::zero_or_powers_of_10_64
+                 U ArxCan::can_cmd_init(unsigned short, unsigned char)
+                 U ArxCan::enable_DM_motor(unsigned short)
+                 U ArxCan::send_DM_motor_cmd(unsigned short, float, float, float, float, float)
+                 U ArxCan::send_EC_motor_cmd(unsigned short, float, float, float, float, float)
+                 U ArxCan::reset_zero_readout(unsigned short)
+                 U std::shared_ptr<spdlog::logger> spdlog::stdout_color_mt<spdlog::synchronous_factory>(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, spdlog::color_mode)
+                 U spdlog::details::backtracer::enabled() const
+                 U std::__codecvt_utf8_base<wchar_t>::do_unshift(__mbstate_t&, char*, char*, char*&) const@GLIBCXX_3.4.21
+                 U std::__codecvt_utf8_base<wchar_t>::do_in(__mbstate_t&, char const*, char const*, char const*&, wchar_t*, wchar_t*, wchar_t*&) const@GLIBCXX_3.4.21
+                 U std::__codecvt_utf8_base<wchar_t>::do_out(__mbstate_t&, wchar_t const*, wchar_t const*, wchar_t const*&, char*, char*, char*&) const@GLIBCXX_3.4.21
+                 U std::__codecvt_utf8_base<wchar_t>::do_length(__mbstate_t&, char const*, char const*, unsigned long) const@GLIBCXX_3.4.21
+00000000000c0450 T std::filesystem::__cxx11::recursive_directory_iterator::disable_recursion_pending()
+                 U std::__basic_file<char>::sys_open(int, std::_Ios_Openmode)@GLIBCXX_3.4
+00000000000940e0 W std::codecvt_utf8<wchar_t, 1114111ul, (std::codecvt_mode)0>::~codecvt_utf8()
+00000000000940c0 W std::codecvt_utf8<wchar_t, 1114111ul, (std::codecvt_mode)0>::~codecvt_utf8()
+00000000000940c0 W std::codecvt_utf8<wchar_t, 1114111ul, (std::codecvt_mode)0>::~codecvt_utf8()
+                 U std::basic_filebuf<char, std::char_traits<char> >::open(char const*, std::_Ios_Openmode)@GLIBCXX_3.4
+                 U std::basic_filebuf<char, std::char_traits<char> >::seekoff(long, std::_Ios_Seekdir, std::_Ios_Openmode)@GLIBCXX_3.4
+                 U std::basic_filebuf<char, std::char_traits<char> >::seekpos(std::fpos<__mbstate_t>, std::_Ios_Openmode)@GLIBCXX_3.4
+                 U std::basic_ifstream<char, std::char_traits<char> >::basic_ifstream(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::_Ios_Openmode)@GLIBCXX_3.4.21
+                 U std::basic_streambuf<char, std::char_traits<char> >::seekoff(long, std::_Ios_Seekdir, std::_Ios_Openmode)@GLIBCXX_3.4
+                 U std::basic_streambuf<char, std::char_traits<char> >::seekpos(std::fpos<__mbstate_t>, std::_Ios_Openmode)@GLIBCXX_3.4
+                 U std::thread::_M_start_thread(std::unique_ptr<std::thread::_State, std::default_delete<std::thread::_State> >, void (*)())@GLIBCXX_3.4.22
+                 U std::thread::_State::~_State()@GLIBCXX_3.4.22
+                 U std::codecvt<wchar_t, char, __mbstate_t>::id@GLIBCXX_3.4
+                 U std::codecvt<wchar_t, char, __mbstate_t>::codecvt(unsigned long)@GLIBCXX_3.4
+00000000000bc9f0 W std::__cxx11::basic_stringbuf<char, std::char_traits<char>, std::allocator<char> >::basic_stringbuf(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >&&, std::_Ios_Openmode)
+00000000000ba4d0 W std::__cxx11::basic_stringbuf<char, std::char_traits<char>, std::allocator<char> >::basic_stringbuf(std::_Ios_Openmode, std::allocator<char> const&)
+00000000000bc9f0 W std::__cxx11::basic_stringbuf<char, std::char_traits<char>, std::allocator<char> >::basic_stringbuf(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >&&, std::_Ios_Openmode)
+00000000000ba4d0 W std::__cxx11::basic_stringbuf<char, std::char_traits<char>, std::allocator<char> >::basic_stringbuf(std::_Ios_Openmode, std::allocator<char> const&)
+00000000000be0b0 W std::__cxx11::basic_stringbuf<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::basic_stringbuf(std::__cxx11::basic_string<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >&&, std::_Ios_Openmode)
+00000000000bac30 W std::__cxx11::basic_stringbuf<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::basic_stringbuf(std::_Ios_Openmode, std::allocator<wchar_t> const&)
+00000000000be0b0 W std::__cxx11::basic_stringbuf<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::basic_stringbuf(std::__cxx11::basic_string<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >&&, std::_Ios_Openmode)
+00000000000bac30 W std::__cxx11::basic_stringbuf<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::basic_stringbuf(std::_Ios_Openmode, std::allocator<wchar_t> const&)
+00000000000bddb0 W std::__cxx11::basic_stringstream<char, std::char_traits<char>, std::allocator<char> >::basic_stringstream(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >&&, std::_Ios_Openmode)
+00000000000bbc50 W std::__cxx11::basic_stringstream<char, std::char_traits<char>, std::allocator<char> >::basic_stringstream(std::_Ios_Openmode, std::allocator<char> const&)
+00000000000bdb10 W std::__cxx11::basic_stringstream<char, std::char_traits<char>, std::allocator<char> >::basic_stringstream(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >&&, std::_Ios_Openmode)
+00000000000bbad0 W std::__cxx11::basic_stringstream<char, std::char_traits<char>, std::allocator<char> >::basic_stringstream(std::_Ios_Openmode, std::allocator<char> const&)
+00000000000befb0 W std::__cxx11::basic_stringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::basic_stringstream(std::__cxx11::basic_string<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >&&, std::_Ios_Openmode)
+00000000000bc7b0 W std::__cxx11::basic_stringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::basic_stringstream(std::_Ios_Openmode, std::allocator<wchar_t> const&)
+00000000000bed90 W std::__cxx11::basic_stringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::basic_stringstream(std::__cxx11::basic_string<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >&&, std::_Ios_Openmode)
+00000000000bc630 W std::__cxx11::basic_stringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::basic_stringstream(std::_Ios_Openmode, std::allocator<wchar_t> const&)
+00000000000bd840 W std::__cxx11::basic_istringstream<char, std::char_traits<char>, std::allocator<char> >::basic_istringstream(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >&&, std::_Ios_Openmode)
+00000000000bb6e0 W std::__cxx11::basic_istringstream<char, std::char_traits<char>, std::allocator<char> >::basic_istringstream(std::_Ios_Openmode, std::allocator<char> const&)
+00000000000bd350 W std::__cxx11::basic_istringstream<char, std::char_traits<char>, std::allocator<char> >::basic_istringstream(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >&&, std::_Ios_Openmode)
+00000000000bb5c0 W std::__cxx11::basic_istringstream<char, std::char_traits<char>, std::allocator<char> >::basic_istringstream(std::_Ios_Openmode, std::allocator<char> const&)
+00000000000beb50 W std::__cxx11::basic_istringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::basic_istringstream(std::__cxx11::basic_string<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >&&, std::_Ios_Openmode)
+00000000000bc220 W std::__cxx11::basic_istringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::basic_istringstream(std::_Ios_Openmode, std::allocator<wchar_t> const&)
+00000000000be770 W std::__cxx11::basic_istringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::basic_istringstream(std::__cxx11::basic_string<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >&&, std::_Ios_Openmode)
+00000000000bc100 W std::__cxx11::basic_istringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::basic_istringstream(std::_Ios_Openmode, std::allocator<wchar_t> const&)
+00000000000bd5a0 W std::__cxx11::basic_ostringstream<char, std::char_traits<char>, std::allocator<char> >::basic_ostringstream(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >&&, std::_Ios_Openmode)
+00000000000bb970 W std::__cxx11::basic_ostringstream<char, std::char_traits<char>, std::allocator<char> >::basic_ostringstream(std::_Ios_Openmode, std::allocator<char> const&)
+00000000000bd110 W std::__cxx11::basic_ostringstream<char, std::char_traits<char>, std::allocator<char> >::basic_ostringstream(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >&&, std::_Ios_Openmode)
+00000000000bb860 W std::__cxx11::basic_ostringstream<char, std::char_traits<char>, std::allocator<char> >::basic_ostringstream(std::_Ios_Openmode, std::allocator<char> const&)
+00000000000be930 W std::__cxx11::basic_ostringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::basic_ostringstream(std::__cxx11::basic_string<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >&&, std::_Ios_Openmode)
+00000000000bc4c0 W std::__cxx11::basic_ostringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::basic_ostringstream(std::_Ios_Openmode, std::allocator<wchar_t> const&)
+00000000000be5c0 W std::__cxx11::basic_ostringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::basic_ostringstream(std::__cxx11::basic_string<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >&&, std::_Ios_Openmode)
+00000000000bc3b0 W std::__cxx11::basic_ostringstream<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >::basic_ostringstream(std::_Ios_Openmode, std::allocator<wchar_t> const&)
+                 U std::basic_ios<char, std::char_traits<char> >::clear(std::_Ios_Iostate)@GLIBCXX_3.4
+                 U typeinfo for std::thread::_State@GLIBCXX_3.4.22
+00000000000f15e8 V typeinfo for std::codecvt_utf8<wchar_t, 1114111ul, (std::codecvt_mode)0>
+00000000000c7420 R typeinfo name for std::thread::_State_impl<std::thread::_Invoker<std::tuple<void (arx::Arx5ControllerBase::*)(), arx::Arx5ControllerBase*> > >
+00000000000cf3a0 V typeinfo name for std::codecvt_utf8<wchar_t, 1114111ul, (std::codecvt_mode)0>
+00000000000f1630 V vtable for std::codecvt_utf8<wchar_t, 1114111ul, (std::codecvt_mode)0>

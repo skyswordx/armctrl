@@ -5,7 +5,10 @@
 ## 文件说明
 
 - `X5_camera.urdf`：从当前运行时 `arx5_interface` 的 `X5.urdf` 复制而来，已写入一版“D435i 位于末端正上方”的起步 payload 近似参数。
+- `meshes/`：项目侧保存的 X5 STL 几何资产，复制自官方/Stanford ARX5 SDK vendor 模型，用于 Pinocchio/coal、MuJoCo、MoveIt 等成熟后端做几何加载、碰撞检查和仿真预览。
 - `reference/realsense2_description/`：从 Intel RealSense `realsense-ros` 的 `ros2-master` 分支下载的 D435i 参考描述文件。
+
+`armctrl` 只维护这些资产的路径和版本入口，不在仓库里重写碰撞检测器、运动规划器或物理仿真器。凡是会动机械臂的 Agent recipe、SysID trajectory、LeRobot rollout bridge，都应该先把轨迹和本目录模型交给成熟后端检查，再由 `armctrl` 汇总 gate 结果。
 
 当前 `X5_camera.urdf` 已把 D435i 等效 payload 合并进 `link6` 的 `<inertial>`：
 

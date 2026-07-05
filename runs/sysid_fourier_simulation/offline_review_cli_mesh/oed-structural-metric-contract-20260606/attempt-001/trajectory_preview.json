@@ -1,0 +1,99 @@
+{
+  "schema": "armctrl.trajectory_preview.v1",
+  "movement_allowed": false,
+  "trajectory_path": "runs/oed-structural-metric-contract-20260606/attempt-001/execution_trajectory.csv",
+  "urdf_path": "configs/models/X5_camera.urdf",
+  "safe_config_path": "runs/oed-structural-metric-contract-20260606/attempt-001/x5.safe.yaml",
+  "backend": {
+    "requested": "auto",
+    "selected": "pinocchio_coal",
+    "result": {
+      "status": "pass",
+      "method": "pinocchio_coal",
+      "checked_samples": 196,
+      "ignored_allowed_collision_pairs": [
+        {
+          "first": "base_link",
+          "second": "link1"
+        },
+        {
+          "first": "link1",
+          "second": "link2"
+        },
+        {
+          "first": "link5",
+          "second": "link6"
+        }
+      ]
+    },
+    "attempts": [
+      {
+        "backend": "pinocchio_coal",
+        "result": {
+          "status": "pass",
+          "method": "pinocchio_coal",
+          "checked_samples": 196,
+          "ignored_allowed_collision_pairs": [
+            {
+              "first": "base_link",
+              "second": "link1"
+            },
+            {
+              "first": "link1",
+              "second": "link2"
+            },
+            {
+              "first": "link5",
+              "second": "link6"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "safety": {
+    "allowed": true,
+    "clearance_check": {
+      "status": "pass",
+      "method": "urdf_fk_frame_clearance",
+      "violations": []
+    },
+    "zone_check": {
+      "status": "pass",
+      "method": "workspace_box_zones",
+      "violations": []
+    }
+  },
+  "trajectory_metrics": {
+    "sample_count": 196,
+    "joint_ranges_rad": {
+      "joint_1": 0.633335,
+      "joint_2": 0.49560299999999996,
+      "joint_3": 0.5046360000000001,
+      "joint_4": 0.647218,
+      "joint_5": 0.5731200000000001,
+      "joint_6": 0.47027299999999994
+    }
+  },
+  "workspace_metrics": {
+    "link_frame_z_range_m": {
+      "link5": {
+        "min": 0.2574320225744512,
+        "max": 0.4272935354063642
+      },
+      "link6": {
+        "min": 0.17126867676585025,
+        "max": 0.35584548681659084
+      },
+      "eef_link": {
+        "min": 0.11210931930410017,
+        "max": 0.39905028336970355
+      }
+    }
+  },
+  "render": {
+    "status": "written",
+    "path": "runs/oed-structural-metric-contract-20260606/attempt-001/preview.html",
+    "format": "html"
+  }
+}

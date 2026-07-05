@@ -1,0 +1,135 @@
+{
+  "status": "queued",
+  "schema": "armctrl.sysid_run.v1",
+  "adapter": "sdk",
+  "profile": "fourier_multisine",
+  "movement_allowed": true,
+  "hardware_motion": true,
+  "movement_command_sent": false,
+  "safety": {
+    "allowed": true,
+    "reason": "plan-only sysid preview"
+  },
+  "runtime": {
+    "single_owner_runtime_session": true,
+    "runtime_session_artifact": "runs/lab-fourier-sysid-20260608-154946/runtime_session.json",
+    "owner": "sysid",
+    "mode": "trajectory_replay",
+    "queue": "runs/lab-fourier-sysid-20260608-154946/runtime_session_commands"
+  },
+  "runtime_start_pose": {
+    "policy": "live_hold",
+    "q_start": [
+      0.315,
+      0.6375,
+      0.4875,
+      -0.22499999999999998,
+      0.31500000000000006,
+      0.22499999999999998
+    ],
+    "q_hold": [
+      0.315,
+      0.6375,
+      0.4875,
+      -0.22499999999999998,
+      0.31500000000000006,
+      0.22499999999999998
+    ],
+    "q_meas": [
+      0.3168153762817383,
+      0.6410694122314453,
+      0.478179931640625,
+      -0.23136520385742188,
+      0.3103303909301758,
+      0.22373580932617188
+    ],
+    "q_start_error_rad": [
+      0.001815376281738279,
+      0.003569412231445357,
+      -0.009320068359374989,
+      -0.006365203857421897,
+      -0.0046696090698242765,
+      -0.0012641906738281028
+    ],
+    "q_start_error_max_abs_rad": 0.009320068359374989,
+    "max_start_error_rad": 0.02
+  },
+  "start_pose_policy": "live_hold",
+  "start_pose_guard": {
+    "status": "pass",
+    "policy": "live_hold",
+    "expected_q_start": [
+      0.315,
+      0.6375,
+      0.4875,
+      -0.22499999999999998,
+      0.31500000000000006,
+      0.22499999999999998
+    ],
+    "q_hold": [
+      0.315,
+      0.6375,
+      0.4875,
+      -0.22499999999999998,
+      0.31500000000000006,
+      0.22499999999999998
+    ],
+    "q_meas": [
+      0.3168153762817383,
+      0.6410694122314453,
+      0.478179931640625,
+      -0.23136520385742188,
+      0.3103303909301758,
+      0.22373580932617188
+    ],
+    "safe_center": [
+      0.0,
+      0.3,
+      0.3,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "max_start_error_rad": 0.02,
+    "q_meas_to_q_hold_max_abs_rad": 0.009320068359374989,
+    "q_hold_to_expected_start_max_abs_rad": 0.0,
+    "q_hold_to_safe_center_max_abs_rad": 0.33749999999999997,
+    "failed_checks": []
+  },
+  "requested_q_center": [
+    0.0,
+    0.3,
+    0.3,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "effective_q_center": [
+    0.315,
+    0.6375,
+    0.4875,
+    -0.22499999999999998,
+    0.31500000000000006,
+    0.22499999999999998
+  ],
+  "runtime_command": {
+    "command_id": "385f291a-c1df-4689-a14b-624c0e224bd1",
+    "status": "queued",
+    "artifacts": {
+      "command": "runs/lab-fourier-sysid-20260608-154946/runtime_session_commands/pending/385f291a-c1df-4689-a14b-624c0e224bd1.json",
+      "result": "runs/lab-fourier-sysid-20260608-154946/runtime_session_commands/results/385f291a-c1df-4689-a14b-624c0e224bd1.json"
+    },
+    "sample_count": 196,
+    "send_hz": 100.0
+  },
+  "artifacts": {
+    "planned_trajectory": "runs/lab-fourier-sysid-20260608-154946/ident-fourier-full/planned_trajectory.csv",
+    "execution_trajectory": "runs/lab-fourier-sysid-20260608-154946/ident-fourier-full/execution_trajectory.csv",
+    "trajectory_preview": "runs/lab-fourier-sysid-20260608-154946/ident-fourier-full/trajectory_preview.json",
+    "preview_html": "runs/lab-fourier-sysid-20260608-154946/ident-fourier-full/preview.html",
+    "manifest": "runs/lab-fourier-sysid-20260608-154946/ident-fourier-full/manifest.json"
+  },
+  "fault_landing_mode": "damping",
+  "recording_starts_after_safe_state": true,
+  "next_gate": "wait for live runtime command result artifact"
+}

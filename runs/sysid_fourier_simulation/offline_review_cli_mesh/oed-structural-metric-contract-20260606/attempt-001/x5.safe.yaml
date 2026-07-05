@@ -1,0 +1,144 @@
+robot:
+  model: X5
+  default_interface: can0
+safety:
+  workspace_min_m:
+  - 0.05
+  - -0.45
+  - 0.02
+  workspace_max_m:
+  - 0.75
+  - 0.45
+  - 0.65
+  allowed_workspace_boxes:
+  - name: main_body_sweep_volume
+    min_m:
+    - -0.35
+    - -0.45
+    - 0.02
+    max_m:
+    - 0.75
+    - 0.45
+    - 0.65
+  forbidden_workspace_boxes:
+  - name: table_surface
+    min_m:
+    - -1.0
+    - -1.0
+    - -0.2
+    max_m:
+    - 1.0
+    - 1.0
+    - 0.02
+  - name: base_keepout
+    min_m:
+    - -0.08
+    - -0.08
+    - -0.05
+    max_m:
+    - 0.08
+    - 0.08
+    - 0.15
+  simulation:
+    backend_preference:
+    - pinocchio_coal
+    - mujoco
+    - moveit
+    - urdf_fk_fallback
+    link_frames:
+    - link5
+    - link6
+    - eef_link
+    min_clearance_m: 0.02
+    allowed_collision_pairs:
+    - first: base_link
+      second: link1
+    - first: link1
+      second: link2
+    - first: link5
+      second: link6
+  max_sysid_duration_s: 60.0
+  max_sysid_sample_hz: 100.0
+  max_sysid_amplitude_rad: 0.25
+  max_joint_step_rad: 0.01
+  sysid:
+    profile_overrides:
+      fourier_multisine:
+        max_sysid_amplitude_rad: 0.8
+        max_joint_step_rad: 0.02
+        oed_velocity_limits_rad_s:
+        - 2.0
+        - 1.4
+        - 1.4
+        - 2.0
+        - 2.0
+        - 2.0
+        oed_acceleration_limits_rad_s2:
+        - 30.0
+        - 30.0
+        - 30.0
+        - 30.0
+        - 30.0
+        - 30.0
+      friction_sweep:
+        max_sysid_amplitude_rad: 0.45
+        max_joint_step_rad: 0.018
+        oed_velocity_limits_rad_s:
+        - 1.8
+        - 1.2
+        - 1.2
+        - 2.0
+        - 2.0
+        - 2.0
+        oed_acceleration_limits_rad_s2:
+        - 25.0
+        - 25.0
+        - 25.0
+        - 25.0
+        - 25.0
+        - 25.0
+      gravity_sweep:
+        max_sysid_amplitude_rad: 0.3
+        max_joint_step_rad: 0.015
+        oed_velocity_limits_rad_s:
+        - 1.0
+        - 0.8
+        - 0.8
+        - 1.0
+        - 1.0
+        - 1.0
+        oed_acceleration_limits_rad_s2:
+        - 2.0
+        - 1.5
+        - 1.5
+        - 2.0
+        - 2.0
+        - 2.0
+    oed:
+      n_wps: 7
+      stack_reps: 1
+      random_seed: 2
+      ipopt_max_iterations: 60
+      ipopt_print_level: 5
+      condition_number_threshold: 500.0
+    joint_relation_constraints:
+    - name: x5_joint2_joint3_parallel_band
+      applies_to_profiles:
+      - gravity_sweep
+      left_joint: 2
+      right_joint: 3
+      min_delta_rad: -0.08
+      max_delta_rad: 0.08
+  settle_before_record_s: 0.5
+  max_translation_step_m: 0.005
+  max_rotation_step_rad: 0.05
+  min_gripper_pos_m: 0.0
+  max_gripper_pos_m: 0.12
+  max_gripper_step_m: 0.003
+xbox:
+  deadman_button: BTN_TR
+  damping_button: BTN_X
+  reset_home_button: BTN_Y
+  max_translation_step_m: 0.002
+  max_rotation_step_rad: 0.02
+  max_gripper_step_m: 0.0015

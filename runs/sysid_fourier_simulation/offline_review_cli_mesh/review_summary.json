@@ -1,0 +1,200 @@
+{
+  "schema": "armctrl.sysid_offline_review.v1",
+  "movement_allowed": false,
+  "hardware_execution_eligible": false,
+  "hardware_smoke_plan_allowed": true,
+  "gate_state": "hardware_smoke_plan_ready",
+  "gate_reasons": [
+    "requires_gravity_and_friction_smoke_before_full_fourier"
+  ],
+  "plan_dir": "runs/x5-fourier-best-candidate-metric-contract-safe-freeze-20260606",
+  "trajectory_path": "/home/circlemoon/armctrl-clean-oed-structural-code-ed9ce27/runs/oed-structural-metric-contract-20260606/attempt-001/execution_trajectory.csv",
+  "profile": "fourier_multisine",
+  "condition": {
+    "metric": "figaroh_base_regressor",
+    "condition_number": 68.43362806845255,
+    "figaroh_base_condition_number": 68.43362806845255,
+    "pinocchio_effective_condition_number": 77.56547530743994,
+    "rank": 36,
+    "target_condition_number": 100.0,
+    "target_status": "pass"
+  },
+  "optimizer": {
+    "status": "fail",
+    "reason": "review_optimizer_convergence_offline",
+    "constraint_violation_unscaled": 0.0,
+    "diagnostics": {},
+    "oed_quality_gate": {
+      "status": "fail",
+      "reasons": [
+        "review_optimizer_convergence_offline"
+      ],
+      "primary_metric": "figaroh_base_regressor"
+    }
+  },
+  "smoothness": {
+    "status": "pass",
+    "sample_count": 196,
+    "max_joint_step_rad": 0.01847600000000002,
+    "max_velocity_rad_s": 1.842749999999998,
+    "max_acceleration_rad_s2": 17.812500000000036,
+    "acceleration_review_limit_rad_s2": 30.0
+  },
+  "clearance": {
+    "status": "pass",
+    "min_clearance_m": 0.09210931930410017,
+    "link_frame_z_range_m": {
+      "link5": {
+        "min_z_m": 0.2574320225744512,
+        "max_z_m": 0.4272935354063642,
+        "min_clearance_to_workspace_min_m": 0.2374320225744512
+      },
+      "link6": {
+        "min_z_m": 0.17126867676585025,
+        "max_z_m": 0.35584548681659084,
+        "min_clearance_to_workspace_min_m": 0.15126867676585026
+      },
+      "eef_link": {
+        "min_z_m": 0.11210931930410017,
+        "max_z_m": 0.39905028336970355,
+        "min_clearance_to_workspace_min_m": 0.09210931930410017
+      }
+    },
+    "clearance_check": {
+      "status": "pass",
+      "method": "urdf_fk_frame_clearance",
+      "violations": []
+    },
+    "zone_check": {
+      "status": "pass",
+      "method": "workspace_box_zones",
+      "violations": []
+    }
+  },
+  "execution_gate": {
+    "status": "pass",
+    "manifest_safety_allowed": true,
+    "trajectory_step_check": {
+      "status": "pass",
+      "violations": []
+    },
+    "trajectory_velocity_check": {
+      "status": "pass",
+      "violations": []
+    },
+    "trajectory_acceleration_check": {
+      "status": "pass",
+      "violations": []
+    }
+  },
+  "simulation_preview": {
+    "schema": "armctrl.trajectory_preview.v1",
+    "movement_allowed": false,
+    "trajectory_path": "/home/circlemoon/armctrl-clean-oed-structural-code-ed9ce27/runs/oed-structural-metric-contract-20260606/attempt-001/execution_trajectory.csv",
+    "urdf_path": "configs/models/X5_camera.urdf",
+    "safe_config_path": "configs/x5.safe.yaml",
+    "backend": {
+      "requested": "auto",
+      "selected": "pinocchio_coal",
+      "result": {
+        "status": "pass",
+        "method": "pinocchio_coal",
+        "checked_samples": 196,
+        "ignored_allowed_collision_pairs": [
+          {
+            "first": "base_link",
+            "second": "link1"
+          },
+          {
+            "first": "link1",
+            "second": "link2"
+          },
+          {
+            "first": "link5",
+            "second": "link6"
+          }
+        ]
+      },
+      "attempts": [
+        {
+          "backend": "pinocchio_coal",
+          "result": {
+            "status": "pass",
+            "method": "pinocchio_coal",
+            "checked_samples": 196,
+            "ignored_allowed_collision_pairs": [
+              {
+                "first": "base_link",
+                "second": "link1"
+              },
+              {
+                "first": "link1",
+                "second": "link2"
+              },
+              {
+                "first": "link5",
+                "second": "link6"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "safety": {
+      "allowed": true,
+      "clearance_check": {
+        "status": "pass",
+        "method": "urdf_fk_frame_clearance",
+        "violations": []
+      },
+      "zone_check": {
+        "status": "pass",
+        "method": "workspace_box_zones",
+        "violations": []
+      }
+    },
+    "trajectory_metrics": {
+      "sample_count": 196,
+      "joint_ranges_rad": {
+        "joint_1": 0.633335,
+        "joint_2": 0.49560299999999996,
+        "joint_3": 0.5046360000000001,
+        "joint_4": 0.647218,
+        "joint_5": 0.5731200000000001,
+        "joint_6": 0.47027299999999994
+      }
+    },
+    "workspace_metrics": {
+      "link_frame_z_range_m": {
+        "link5": {
+          "min": 0.2574320225744512,
+          "max": 0.4272935354063642
+        },
+        "link6": {
+          "min": 0.17126867676585025,
+          "max": 0.35584548681659084
+        },
+        "eef_link": {
+          "min": 0.11210931930410017,
+          "max": 0.39905028336970355
+        }
+      }
+    },
+    "render": {
+      "status": "written",
+      "path": "runs/x5-fourier-best-candidate-metric-contract-safe-freeze-20260606/offline_review_cli_mesh/trajectory_preview.html",
+      "format": "html"
+    }
+  },
+  "artifacts": {
+    "review_summary": "runs/x5-fourier-best-candidate-metric-contract-safe-freeze-20260606/offline_review_cli_mesh/review_summary.json",
+    "review_report": "runs/x5-fourier-best-candidate-metric-contract-safe-freeze-20260606/offline_review_cli_mesh/review_report.md",
+    "hardware_smoke_plan": "runs/x5-fourier-best-candidate-metric-contract-safe-freeze-20260606/offline_review_cli_mesh/hardware_smoke_plan.md",
+    "q_plot": "runs/x5-fourier-best-candidate-metric-contract-safe-freeze-20260606/offline_review_cli_mesh/joint_q.svg",
+    "dq_plot": "runs/x5-fourier-best-candidate-metric-contract-safe-freeze-20260606/offline_review_cli_mesh/joint_dq.svg",
+    "ddq_plot": "runs/x5-fourier-best-candidate-metric-contract-safe-freeze-20260606/offline_review_cli_mesh/joint_ddq.svg",
+    "preview_json": "runs/x5-fourier-best-candidate-metric-contract-safe-freeze-20260606/offline_review_cli_mesh/trajectory_preview.json",
+    "preview_html": "runs/x5-fourier-best-candidate-metric-contract-safe-freeze-20260606/offline_review_cli_mesh/trajectory_preview.html"
+  },
+  "next_gate": "review hardware_smoke_plan.md and run gravity/friction smoke first"
+}

@@ -5,6 +5,99 @@ robot:
 safety:
   workspace_min_m: [0.05, -0.45, 0.02]
   workspace_max_m: [0.75, 0.45, 0.65]
+  allowed_workspace_boxes:
+    - name: main_body_sweep_volume
+      min_m: [-0.35, -0.45, 0.02]
+      max_m: [0.75, 0.45, 0.65]
+  forbidden_workspace_boxes:
+    - name: table_surface
+      min_m: [-1.0, -1.0, -0.20]
+      max_m: [1.0, 1.0, 0.02]
+    - name: base_keepout
+      min_m: [-0.08, -0.08, -0.05]
+      max_m: [0.08, 0.08, 0.15]
+  simulation:
+    backend_preference:
+      - pinocchio_coal
+      - mujoco
+      - moveit
+      - urdf_fk_fallback
+    # Shoulder/elbow frame points naturally sit near the base. Until a mature
+    # body-collision backend is active, frame-level keepout gates focus on the
+    # distal wrist/end-effector sweep that can hit the table or operator space.
+    link_frames: [link5, link6, eef_link]
+    min_clearance_m: 0.02
+    # Known fixed/adjacent mesh overlaps observed by Pinocchio/coal on n100d.
+    # This mirrors MoveIt-style Allowed Collision Matrix usage: only named
+    # assembly pairs are ignored; every other collision remains a hard gate.
+    allowed_collision_pairs:
+      - first: base_link
+        second: link1
+      - first: link1
+        second: link2
+      - first: link5
+        second: link6
+  max_sysid_duration_s: 60.0
+  max_sysid_sample_hz: 100.0
+  max_sysid_amplitude_rad: 0.25
+  max_joint_step_rad: 0.01
+  sysid:
+    profile_overrides:
+      fourier_multisine:
+        # Full-body OED needs enough posture freedom to reduce the base
+        # regressor condition number. This wider range is still plan/sim/OED
+        # only; SDK execution remains gated by URDF/workspace/simulation checks.
+        max_sysid_amplitude_rad: 0.8
+        # At the 100 Hz execution layer this permits about 2 rad/s inter-sample
+        # motion, matching the low-condition OED candidates observed offline.
+        max_joint_step_rad: 0.02
+        oed_velocity_limits_rad_s: [2.0, 1.4, 1.4, 2.0, 2.0, 2.0]
+        # Fourier/OED is a dynamic excitation profile: a 0.5 rad, 1 Hz
+        # sinusoidal component already implies about 20 rad/s^2. Keep this
+        # high enough for offline identifiability candidates, while execution
+        # remains bounded by step, velocity, workspace, table, and sim gates.
+        oed_acceleration_limits_rad_s2: [30.0, 30.0, 30.0, 30.0, 30.0, 30.0]
+      friction_sweep:
+        max_sysid_amplitude_rad: 0.45
+        max_joint_step_rad: 0.018
+        oed_velocity_limits_rad_s: [1.8, 1.2, 1.2, 2.0, 2.0, 2.0]
+        # Friction probes need deliberate velocity reversals. Keep this below
+        # the Fourier dynamic envelope but above quasi-static gravity limits.
+        oed_acceleration_limits_rad_s2: [25.0, 25.0, 25.0, 25.0, 25.0, 25.0]
+      gravity_sweep:
+        max_sysid_amplitude_rad: 0.30
+        max_joint_step_rad: 0.015
+        oed_velocity_limits_rad_s: [1.0, 0.8, 0.8, 1.0, 1.0, 1.0]
+        oed_acceleration_limits_rad_s2: [2.0, 1.5, 1.5, 2.0, 2.0, 2.0]
+    oed:
+      execution_sample_hz: 100.0
+      # FIGAROH waypoint count for one cubic-spline segment. A larger value can
+      # improve excitation shape freedom, but it increases IPOPT dimension.
+      n_wps: 5
+      # Number of optimized segments stacked for regressor conditioning. Raise
+      # this on WSL/workstation OED searches before using larger hardware motion.
+      stack_reps: 1
+      # Armctrl passes this into the X5 FIGAROH IPOPT problem instead of relying
+      # on FIGAROH's library default, so convergence evidence is reproducible.
+      ipopt_max_iterations: 200
+      # FIGAROH waypoint initialization is stochastic; keep a default seed so
+      # WSL OED scans can be reproduced and compared across commits.
+      random_seed: 1
+      # Offline OED quality gate. This is intentionally stricter than the
+      # simulation safety gate and does not by itself allow SDK execution.
+      condition_number_threshold: 1000.0
+    joint_relation_constraints:
+      # X5 hardware bringup showed that keeping joint2 and joint3 close helps
+      # preserve the safe horizontal torso posture around q_center=(0, 0.30,
+      # 0.30, 0, 0, 0). The optimizer may still move both joints, but any
+      # planned SysID trajectory must keep this relative band before SDK use.
+      - name: x5_joint2_joint3_parallel_band
+        applies_to_profiles: [gravity_sweep]
+        left_joint: 2
+        right_joint: 3
+        min_delta_rad: -0.08
+        max_delta_rad: 0.08
+  settle_before_record_s: 0.5
   max_translation_step_m: 0.005
   max_rotation_step_rad: 0.05
   min_gripper_pos_m: 0.0
