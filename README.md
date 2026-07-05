@@ -79,6 +79,13 @@ Read-only backend check:
 uv run armctrl sim doctor --json
 ```
 
+On WSL hosts with the project simulation environment prepared, use the WSL
+virtualenv directly:
+
+```bash
+.venv-wsl/bin/python -m armctrl.cli sim doctor --json
+```
+
 The doctor reports importability for:
 
 - `pinocchio_coal`: lightweight URDF geometry collision checks;
@@ -143,6 +150,19 @@ from the configured simulation gate; the HTML is an operator/Agent preview
 artifact, not a replacement for MoveIt, MuJoCo, or Pinocchio/coal checks.
 Dangerous trajectories are rendered too, with `WARNING` and the first gate
 reasons shown in the page header.
+
+Run the non-hardware Agent interface smoke from WSL:
+
+```bash
+.venv-wsl/bin/python -m armctrl.cli sim agent-smoke \
+  --output runs/wsl-agent-sim-smoke \
+  --json
+```
+
+This exercises the current Agent EEF review, Recipe recenter preview, LeRobot
+processor contract, Agent-flow review, and fake-runtime Agent joint intent /
+joint trajectory submit surfaces. It writes artifacts under the output
+directory and never opens CAN, the SDK, or a hardware runtime.
 
 ## Recipe Preview
 

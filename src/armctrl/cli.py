@@ -22,6 +22,10 @@ from armctrl.agent_flow import (
     AgentFlowRuntimeSmokeRequest,
     AgentFlowRuntimeSmoker,
 )
+from armctrl.agent_simulation import (
+    AgentCliSimulationExperiment,
+    AgentCliSimulationExperimentRequest,
+)
 from armctrl.arx5_sdk_cartesian_runtime import Arx5SdkCartesianRuntimeBackend
 from armctrl.recipes import RecipeCatalog
 from armctrl.recipe_executor import RecipeExecutor
@@ -1814,6 +1818,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     sim_preview_parser.add_argument("--backend", default="auto")
     sim_preview_parser.add_argument("--render")
     sim_preview_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    sim_agent_smoke_parser = sim_subparsers.add_parser("agent-smoke")
+    sim_agent_smoke_parser.add_argument(
+        "--output", default="runs/agent-cli-sim-experiment"
+    )
+    sim_agent_smoke_parser.add_argument(
+        "--json", action="store_true", dest="as_json"
+    )
 
     sysid_plan_parser = sysid_subparsers.add_parser("plan")
     sysid_plan_parser.add_argument("profile")
@@ -4023,6 +4035,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             safe_config_path=Path(args.safe_config),
             backend=args.backend,
             render_path=Path(args.render) if args.render else None,
+        )
+        payload = {"status": "ok", **result}
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "sim" and args.sim_command == "agent-smoke":
+        result = AgentCliSimulationExperiment().run(
+            AgentCliSimulationExperimentRequest(output_dir=Path(args.output))
         )
         payload = {"status": "ok", **result}
         return _emit(payload, as_json=args.as_json)
