@@ -22,6 +22,10 @@ from armctrl.agent_flow import (
     AgentFlowRuntimeSmokeRequest,
     AgentFlowRuntimeSmoker,
 )
+from armctrl.agent_demo_simulation import (
+    AgentDemoSimulation,
+    AgentDemoSimulationRequest,
+)
 from armctrl.agent_simulation import (
     AgentCliSimulationExperiment,
     AgentCliSimulationExperimentRequest,
@@ -1824,6 +1828,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--output", default="runs/agent-cli-sim-experiment"
     )
     sim_agent_smoke_parser.add_argument(
+        "--json", action="store_true", dest="as_json"
+    )
+
+    sim_agent_demo_parser = sim_subparsers.add_parser("agent-demo")
+    sim_agent_demo_parser.add_argument(
+        "--instruction", default="pick the red cup"
+    )
+    sim_agent_demo_parser.add_argument("--object", default="red_cup")
+    sim_agent_demo_parser.add_argument(
+        "--output", default="runs/agent-demo-simulation"
+    )
+    sim_agent_demo_parser.add_argument(
+        "--urdf-path", default="configs/models/X5_camera.urdf"
+    )
+    sim_agent_demo_parser.add_argument(
+        "--safe-config", default="configs/x5.safe.yaml"
+    )
+    sim_agent_demo_parser.add_argument("--backend", default="auto")
+    sim_agent_demo_parser.add_argument("--render", default="agent_demo.html")
+    sim_agent_demo_parser.add_argument("--sample-hz", type=float, default=50.0)
+    sim_agent_demo_parser.add_argument(
         "--json", action="store_true", dest="as_json"
     )
 
@@ -4042,6 +4067,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "sim" and args.sim_command == "agent-smoke":
         result = AgentCliSimulationExperiment().run(
             AgentCliSimulationExperimentRequest(output_dir=Path(args.output))
+        )
+        payload = {"status": "ok", **result}
+        return _emit(payload, as_json=args.as_json)
+
+    if args.command == "sim" and args.sim_command == "agent-demo":
+        result = AgentDemoSimulation().run(
+            AgentDemoSimulationRequest(
+                instruction=args.instruction,
+                object_id=args.object,
+                output_dir=Path(args.output),
+                urdf_path=Path(args.urdf_path),
+                safe_config_path=Path(args.safe_config),
+                backend=args.backend,
+                render_name=args.render,
+                sample_hz=args.sample_hz,
+            )
         )
         payload = {"status": "ok", **result}
         return _emit(payload, as_json=args.as_json)

@@ -164,6 +164,39 @@ processor contract, Agent-flow review, and fake-runtime Agent joint intent /
 joint trajectory submit surfaces. It writes artifacts under the output
 directory and never opens CAN, the SDK, or a hardware runtime.
 
+For a short现场演示 that maps an Agent/debug instruction to a visible arm
+animation and safety evidence, use `sim agent-demo`. This path is simulation
+only: it never opens CAN, the SDK, or a hardware runtime.
+
+```bash
+.venv-wsl/bin/python -m armctrl.cli sim agent-demo \
+  --instruction "pick the red cup" \
+  --object red_cup \
+  --output runs/demo-red-cup \
+  --backend auto \
+  --json
+```
+
+Open `runs/demo-red-cup/agent_demo.html` to show the arm moving in the
+browser. The same command writes `agent_demo.json` and
+`agent_demo_trajectory.csv` for audit.
+
+Danger handling can be demonstrated without hardware as well:
+
+```bash
+.venv-wsl/bin/python -m armctrl.cli sim agent-demo \
+  --instruction "pick the knife" \
+  --object knife \
+  --output runs/demo-knife \
+  --backend auto \
+  --json
+```
+
+The dangerous-object case still renders a preview HTML, but the JSON marks the
+action as blocked for hardware and records the selected handling policy. This
+covers the demo flow for object recognition, command-to-motion preview,
+dangerous-operation recognition, and differentiated danger handling.
+
 ## Recipe Preview
 
 The clean rebuild starts with plan-only Agent recipes. These commands do not
